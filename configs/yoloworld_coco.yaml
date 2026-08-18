@@ -1,0 +1,33 @@
+# 모든 실험 설정을 여기 한 곳에 모은다. 스크립트는 이 파일을 읽어 동작.
+
+model:
+  name: yolov8s-worldv2.pt   # s/m/l/x-worldv2 중 선택. 발판은 s 권장(가볍다).
+  imgsz: 640
+
+data:
+  # COCO val2017. Ultralytics 기본 coco.yaml을 그대로 쓰면 자동 다운로드.
+  # 이미 로컬에 있으면 그 coco.yaml 절대경로로 교체.
+  coco_data_yaml: coco.yaml
+  split: val
+
+# region–prompt 유사도 실험용 vocabulary 설정.
+# baseline(1단계)에서는 COCO 80 클래스를 그대로 쓴다(offline vocab 내장).
+# Sec 3.3(prompt-axis shift)에서 semantic hard negatives를 추가할 때 여기서 확장.
+prompts:
+  mode: coco80          # coco80 | custom | hard_negatives
+  custom_classes: []    # mode=custom일 때 사용
+
+# 양자화 설정 — 1단계에서는 미사용. 3단계부터 활성화.
+quant:
+  enabled: false
+  scheme: w8a8          # w8a8 main setting
+  init: naive_minmax    # naive_minmax(N=1) | adaround | qdrop
+  calib_size: 128       # calibration 이미지 수
+  # 어떤 연산을 양자화할지 범위. text encoder는 offline 임베딩이면 제외 가능.
+  operator_scope: vision_backbone_neck_head
+
+eval:
+  # size-stratified AP를 볼지 여부(OVOD에서는 보조 지표, ScaleGuard에선 핵심).
+  per_size_ap: false
+  device: 0
+  batch: 16
