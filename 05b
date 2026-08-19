@@ -1,0 +1,54 @@
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+[calib] 64장...
+[eval] 1000장...
+  [400/1000]
+  [800/1000]
+
+======================================================================
+ C-2 진단: seed별 target 구성
+======================================================================
+
+[seed 0] targets=13646  (person∉H, person 비중 0.0%)
+            class |  targets |  %tot | seen-flip | avg maxprob
+              car |     1571 | 11.5% |     0.06% |       0.525
+           bottle |     1441 | 10.6% |     0.07% |       0.464
+     dining table |      924 |  6.8% |     0.00% |       0.532
+         broccoli |      564 |  4.1% |     0.00% |       0.425
+               tv |      520 |  3.8% |     0.96% |       0.670
+
+[seed 1] targets=14134  (person∉H, person 비중 0.0%)
+            class |  targets |  %tot | seen-flip | avg maxprob
+            chair |     1664 | 11.8% |     1.20% |       0.510
+           bottle |     1441 | 10.2% |     0.07% |       0.464
+     dining table |      924 |  6.5% |     0.00% |       0.532
+             bowl |      784 |  5.5% |     0.13% |       0.522
+            zebra |      656 |  4.6% |     0.15% |       0.741
+
+[seed 2] targets=11740  (person∉H, person 비중 0.0%)
+            class |  targets |  %tot | seen-flip | avg maxprob
+     dining table |      924 |  7.9% |     0.00% |       0.532
+             bowl |      784 |  6.7% |     0.13% |       0.522
+          handbag |      536 |  4.6% |     2.05% |       0.386
+               tv |      520 |  4.4% |     0.96% |       0.670
+           laptop |      511 |  4.4% |     0.20% |       0.696
+
+[seed 3] targets=30481  (person∈H, person 비중 58.2%)
+            class |  targets |  %tot | seen-flip | avg maxprob
+           person |    17739 | 58.2% |     0.01% |       0.606
+            chair |     1664 |  5.5% |     1.20% |       0.510
+              car |     1571 |  5.2% |     0.06% |       0.525
+              cup |     1255 |  4.1% |     1.51% |       0.558
+            zebra |      656 |  2.2% |     0.15% |       0.741
+
+[seed 4] targets=30746  (person∈H, person 비중 57.7%)
+            class |  targets |  %tot | seen-flip | avg maxprob
+           person |    17739 | 57.7% |     0.01% |       0.606
+            chair |     1664 |  5.4% |     1.20% |       0.510
+              car |     1571 |  5.1% |     0.06% |       0.525
+             bowl |      784 |  2.5% |     0.13% |       0.522
+         broccoli |      564 |  1.8% |     0.00% |       0.425
+
+======================================================================
+확인 포인트: seed 3,4에서 person 등 고빈도·고확신(seen-flip 낮음) 클래스가
+target을 지배하면, 분모(seen)가 작아져 악화배수가 부풀려진 것 = 배수 지표의 한계.

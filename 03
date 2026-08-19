@@ -1,0 +1,27 @@
+[info] prompts=80  device=cuda:0
+[load] FP32 model
+[load] quant model (copy)
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+[quant] wrapped 68 Conv2d as QuantConv2d (W8A8)
+[data] calib=64  eval=200
+[calib] running...
+[calib] done, quant mode ON
+  [50/200] flip_conf=0.51%
+  [100/200] flip_conf=1.32%
+  [150/200] flip_conf=1.07%
+  [200/200] flip_conf=0.86%
+
+====================================================
+ NAIVE W8A8 — REGION-PROMPT SEMANTIC DAMAGE
+====================================================
+ eval images            : 200
+ confident regions/img  : 44.7 (FP maxprob > 0.25)
+ Top-1 flip (all anchors): 30.06%
+ Top-1 flip (confident)  : 0.86%   <- 핵심 지표
+ Boundary inversion      : 46.48%  (margin=0.5 logit)
+====================================================
+
+해석: confident region에서의 Top-1 flip이 높을수록, 양자화가 실제로 탐지에
+영향을 주는 지점들의 region-prompt 의사결정을 뒤집었다는 뜻. AP 하락(별도 측정)과
+대비하면 'AP는 조금 떨어지는데 의미적 의사결정은 크게 손상' 주장을 입증.

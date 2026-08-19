@@ -1,0 +1,23 @@
+==================================================================
+ COCO 80 → LVIS 1203 이름 매핑
+==================================================================
+           person → ['person/baby/child/boy/girl/man/woman/human']
+              car → ['cabin car/caboose', 'car/car automobile/auto/auto automobile/automobile', 'railcar/railcar part of a train/railway car/railway car part of a train/railroad car/railroad car part of a train']
+              cat → ['cat']
+              dog → ['dog', 'dog collar', 'shepherd dog/sheepdog']
+           bottle → ['beer bottle', 'bottle', 'bottle opener']
+            chair → ['chair', 'deck chair/beach chair', 'electric chair']
+------------------------------------------------------------------
+ 매칭됨: 79/80,  매칭 실패: 1
+ 실패 목록: ['skis']
+
+==================================================================
+ 앵커 수: 프롬프트 집합과 무관한가
+==================================================================
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+      COCO-80: 유사도 행렬 (8400, 80)  (앵커=8400)
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 32.6 GFLOPs
+    LVIS-1203: 유사도 행렬 (8400, 1203)  (앵커=8400)
+------------------------------------------------------------------
+ 앵커 수 동일: OK ✅ (같은 region, 프롬프트만 다름 → 공정 비교)
+==================================================================

@@ -1,0 +1,24 @@
+[names] LVIS 클래스 수: 1203
+[names] 샘플(앞 10): ['aerosol can/spray can', 'air conditioner', 'airplane/aeroplane', 'alarm clock', 'alcohol/alcoholic beverage', 'alligator/gator', 'almond', 'ambulance', 'amplifier', 'anklet/ankle bracelet']
+[names] 샘플(무작위): ['birdbath', 'sofa bed', 'kayak', 'saddlebag', 'yoke/yoke animal equipment']
+[load] model + set_classes(1203) ...
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 32.6 GFLOPs
+[load] set_classes 완료 (15.0s)
+
+[neigh] 샘플 클래스의 의미적 top-5 이웃(LVIS는 촘촘해야 정상):
+        dog → ['pet', 'puppy', 'cat', 'cow', 'toy']
+        car → (LVIS에 정확히 없음)
+     person → (LVIS에 정확히 없음)
+        cat → ['dog', 'pet', 'kitten/kitty', 'cow', 'owl']
+     bottle → ['wine bottle', 'water bottle', 'beer bottle', 'cup', 'water jug']
+
+[fwd] image: /data/taeho/coco_datasets/val2017/000000000139.jpg
+[fwd] 유사도 행렬 shape: (8400, 1203) (기대 [anchors, 1203])
+[fwd] value range: min=-47.811 max=3.859 (pre-sigmoid logit)
+[fwd] forward 시간: 236 ms/img
+
+==================================================
+ LVIS SANITY: OK ✅
+ 최고 confident region → 'heater/warmer' (p=0.979)
+ 500장 예상 소요: ~118s (본 측정 eval 규모 참고)
+==================================================

@@ -1,0 +1,29 @@
+[load] FP32 + quant models
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+[neigh] k=5 이웃 구조 구축. 샘플(sanity check):
+          dog → ['car', 'cat', 'horse', 'cow', 'bear']
+          car → ['bus', 'train', 'truck', 'boat', 'dog']
+        apple → ['bird', 'pizza', 'cake', 'laptop', 'mouse']
+[calib] 64장...
+[eval] 200장...
+  [50/200] flips=12 →이웃 100.0%
+  [100/200] flips=33 →이웃 78.8%
+  [150/200] flips=35 →이웃 80.0%
+  [200/200] flips=43 →이웃 76.7%
+
+========================================================
+ SEMANTIC CLASS SUBSTITUTION (confident regions)
+========================================================
+ confident regions      : 8940
+ 그중 top-1 flip        : 43 (0.5%)
+ flip → 의미적 이웃(top-5) : 76.7%
+ 우연 기대치            : 6.3%
+ 편향 배수 (관측/우연)  : 12.1x
+--------------------------------------------------------
+ [대조] confident region의 top-2가 이웃인 비율: 48.7%
+========================================================
+
+해석: flip→이웃 비율이 우연 기대치보다 크게 높으면(편향 배수 >> 1),
+양자화가 random이 아니라 '의미적으로 가까운 프롬프트'로 의사결정을 밀어냄
+= semantic class substitution. 프롬프트 축이 논문 손상의 본질임을 입증.
