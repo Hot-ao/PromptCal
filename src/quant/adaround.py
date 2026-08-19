@@ -93,16 +93,19 @@ def _capture_layer_input(fp_module, target_conv_weight_id, calib_tensors, device
 
 
 def optimize_adaround(quant_module, fp_module, calib_tensors, device,
-                      iters=2000, lr=1e-2, reg_weight=1e-3, batch=1, verbose=True):
+                      iters=2000, lr=1e-2, reg_weight=1e-3, batch=1,
+                      qdrop_prob=0.0, verbose=True):
     """
     layer-wise AdaRound 최적화. 각 AdaRound conv를 독립적으로 최적화.
       target = fp_conv(fp_input)  (FP 출력)
-      pred   = adaround_conv(act_quant(fp_input))  (양자화 weight+activation)
+      pred   = adaround_conv(act_input)  (양자화 weight)
       loss   = MSE(pred, target) + reg_weight * reg(alpha)
-    메모리 안전: 한 layer씩 입력을 streaming 캐시(fp16, CPU).
 
-    주의: 계산 무거움. calib 이미지 수 x layer 수만큼 fp forward. 큰 초기 layer는
-    입력 메모리가 크니 calib 수를 보수적으로(예: 16~32).
+    qdrop_prob > 0 이면 QDrop: 최적화 중 activation을 원소별로 확률 qdrop_prob로만
+    양자화(나머지는 FP)해서 activation 양자화 노이즈에 강건한 반올림을 학습.
+    추론(AdaRoundQuantConv2d.forward)은 항상 양자화 → drop 없음.
+
+    주의: 계산 무거움. calib 이미지 수 x layer 수만큼 fp forward.
     """
     import torch.nn as nn
 
@@ -149,6 +152,10 @@ def optimize_adaround(quant_module, fp_module, calib_tensors, device,
             with torch.no_grad():
                 target = F.conv2d(xin, fp_w, bias, stride, pad, dil, grp)
                 xq = ac.a_obs.quantize(xin) if ac.a_obs.ready else xin
+                if qdrop_prob > 0:
+                    # QDrop: 원소별 확률 qdrop_prob로 양자화, 나머지는 FP
+                    m = (torch.rand_like(xin) < qdrop_prob)
+                    xq = torch.where(m, xq, xin)
             opt.zero_grad()
             wq = ac.quant_weight()
             pred = F.conv2d(xq, wq, bias, stride, pad, dil, grp)
