@@ -1,0 +1,100 @@
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+[v1] 전체 Conv2d 72개, 래핑 대상(DFL 제외) 71개
+     이 중 cv4/ContrastiveHead 관련: 18개
+       model.23.cv2.0.0.conv  (parent=Conv)
+       model.23.cv2.0.1.conv  (parent=Conv)
+       model.23.cv2.0.2  (parent=Sequential)
+       model.23.cv2.1.0.conv  (parent=Conv)
+       model.23.cv2.1.1.conv  (parent=Conv)
+       model.23.cv2.1.2  (parent=Sequential)
+       model.23.cv2.2.0.conv  (parent=Conv)
+       model.23.cv2.2.1.conv  (parent=Conv)
+       model.23.cv2.2.2  (parent=Sequential)
+       model.23.cv3.0.0.conv  (parent=Conv)
+       model.23.cv3.0.1.conv  (parent=Conv)
+       model.23.cv3.0.2  (parent=Sequential)
+       model.23.cv3.1.0.conv  (parent=Conv)
+       model.23.cv3.1.1.conv  (parent=Conv)
+       model.23.cv3.1.2  (parent=Sequential)
+       model.23.cv3.2.0.conv  (parent=Conv)
+       model.23.cv3.2.1.conv  (parent=Conv)
+       model.23.cv3.2.2  (parent=Sequential)
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+
+[v2] 전체 Conv2d 69개, 래핑 대상(DFL 제외) 68개
+     이 중 cv4/ContrastiveHead 관련: 0개
+
+============================================================
+ v1에만 있는 래핑 conv (33개):
+   model.16.projections.0  (parent=ModuleList)
+   model.16.projections.1  (parent=ModuleList)
+   model.16.projections.2  (parent=ModuleList)
+   model.17.conv  (parent=Conv)
+   model.19.attn.proj_conv.conv  (parent=Conv)
+   model.19.cv1.conv  (parent=Conv)
+   model.19.cv2.conv  (parent=Conv)
+   model.19.m.0.cv1.conv  (parent=Conv)
+   model.19.m.0.cv2.conv  (parent=Conv)
+   model.20.conv  (parent=Conv)
+   model.22.attn.proj_conv.conv  (parent=Conv)
+   model.22.cv1.conv  (parent=Conv)
+   model.22.cv2.conv  (parent=Conv)
+   model.22.m.0.cv1.conv  (parent=Conv)
+   model.22.m.0.cv2.conv  (parent=Conv)
+   model.23.cv2.0.0.conv  (parent=Conv)
+   model.23.cv2.0.1.conv  (parent=Conv)
+   model.23.cv2.0.2  (parent=Sequential)
+   model.23.cv2.1.0.conv  (parent=Conv)
+   model.23.cv2.1.1.conv  (parent=Conv)
+   model.23.cv2.1.2  (parent=Sequential)
+   model.23.cv2.2.0.conv  (parent=Conv)
+   model.23.cv2.2.1.conv  (parent=Conv)
+   model.23.cv2.2.2  (parent=Sequential)
+   model.23.cv3.0.0.conv  (parent=Conv)
+   model.23.cv3.0.1.conv  (parent=Conv)
+   model.23.cv3.0.2  (parent=Sequential)
+   model.23.cv3.1.0.conv  (parent=Conv)
+   model.23.cv3.1.1.conv  (parent=Conv)
+   model.23.cv3.1.2  (parent=Sequential)
+   model.23.cv3.2.0.conv  (parent=Conv)
+   model.23.cv3.2.1.conv  (parent=Conv)
+   model.23.cv3.2.2  (parent=Sequential)
+
+ v2에만 있는 래핑 conv (30개):
+   model.16.conv
+   model.18.attn.proj_conv.conv
+   model.18.cv1.conv
+   model.18.cv2.conv
+   model.18.m.0.cv1.conv
+   model.18.m.0.cv2.conv
+   model.19.conv
+   model.21.attn.proj_conv.conv
+   model.21.cv1.conv
+   model.21.cv2.conv
+   model.21.m.0.cv1.conv
+   model.21.m.0.cv2.conv
+   model.22.cv2.0.0.conv
+   model.22.cv2.0.1.conv
+   model.22.cv2.0.2
+   model.22.cv2.1.0.conv
+   model.22.cv2.1.1.conv
+   model.22.cv2.1.2
+   model.22.cv2.2.0.conv
+   model.22.cv2.2.1.conv
+   model.22.cv2.2.2
+   model.22.cv3.0.0.conv
+   model.22.cv3.0.1.conv
+   model.22.cv3.0.2
+   model.22.cv3.1.0.conv
+   model.22.cv3.1.1.conv
+   model.22.cv3.1.2
+   model.22.cv3.2.0.conv
+   model.22.cv3.2.1.conv
+   model.22.cv3.2.2
+============================================================
+
+판정:
+ - v1 추가 conv가 cv4/ContrastiveHead면 → 유사도 계산이 양자화됨 =
+   AP 대폭 하락의 원인. v2처럼 제외하면 공정 비교 가능.
+ - 추가 conv가 일반 backbone/neck이면 → v1 본질적 취약성. 프레이밍 조정 필요.

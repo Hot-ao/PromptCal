@@ -55,6 +55,14 @@ class ActObserver(nn.Module):
         xq = torch.clamp(torch.round(x / self.scale) + self.zero_point, qmin, qmax)
         return (xq - self.zero_point) * self.scale
 
+    def quantize_ste(self, x: torch.Tensor) -> torch.Tensor:
+        """STE 버전: forward는 양자화값, backward는 항등(gradient 통과).
+        PD-Quant end-to-end 최적화에서 cv4→초기 layer로 grad를 흘리기 위함."""
+        qmin, qmax = 0, 2 ** self.bits - 1
+        xq = torch.clamp(torch.round(x / self.scale) + self.zero_point, qmin, qmax)
+        xdq = (xq - self.zero_point) * self.scale
+        return x + (xdq - x).detach()
+
 
 class QuantConv2d(nn.Module):
     """기존 Conv2d를 감싸 weight+input activation을 fake-quant한다."""

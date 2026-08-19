@@ -1,0 +1,67 @@
+[load] FP model
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive-quant
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] BRECQ (block 재구성)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[brecq] 재구성 대상: block단위 17개(joint), head conv단위 18개
+  [1/35] block0 (1 conv) done, h→0/1 100%
+  [2/35] block1 (1 conv) done, h→0/1 100%
+  [3/35] block2 (4 conv) done, h→0/1 100%
+  [4/35] block3 (1 conv) done, h→0/1 100%
+  [5/35] block4 (6 conv) done, h→0/1 100%
+  [6/35] block5 (1 conv) done, h→0/1 100%
+  [7/35] block6 (6 conv) done, h→0/1 100%
+  [8/35] block7 (1 conv) done, h→0/1 100%
+  [9/35] block8 (4 conv) done, h→0/1 100%
+  [10/35] block9 (2 conv) done, h→0/1 100%
+  [11/35] block12 (5 conv) done, h→0/1 100%
+  [12/35] block15 (5 conv) done, h→0/1 100%
+  [13/35] block16 (3 conv) done, h→0/1 100%
+  [14/35] block17 (1 conv) done, h→0/1 100%
+  [15/35] block19 (5 conv) done, h→0/1 100%
+  [16/35] block20 (1 conv) done, h→0/1 100%
+  [17/35] block22 (5 conv) done, h→0/1 100%
+  [18/35] head.conv (1 conv) done, h→0/1 100%
+  [19/35] head.conv (1 conv) done, h→0/1 100%
+  [20/35] head.conv (1 conv) done, h→0/1 100%
+  [21/35] head.conv (1 conv) done, h→0/1 100%
+  [22/35] head.conv (1 conv) done, h→0/1 100%
+  [23/35] head.conv (1 conv) done, h→0/1 100%
+  [24/35] head.conv (1 conv) done, h→0/1 100%
+  [25/35] head.conv (1 conv) done, h→0/1 100%
+  [26/35] head.conv (1 conv) done, h→0/1 100%
+  [27/35] head.conv (1 conv) done, h→0/1 100%
+  [28/35] head.conv (1 conv) done, h→0/1 100%
+  [29/35] head.conv (1 conv) done, h→0/1 100%
+  [30/35] head.conv (1 conv) done, h→0/1 100%
+  [31/35] head.conv (1 conv) done, h→0/1 100%
+  [32/35] head.conv (1 conv) done, h→0/1 100%
+  [33/35] head.conv (1 conv) done, h→0/1 100%
+  [34/35] head.conv (1 conv) done, h→0/1 100%
+  [35/35] head.conv (1 conv) done, h→0/1 100%
+[brecq] 전체 재구성 완료 (hard 반올림 모드)
+[build] BRECQ 완료 609s
+[eval] 1000장 x 3 seeds...
+   [200/1000]
+   [400/1000]
+   [600/1000]
+   [800/1000]
+   [1000/1000]
+
+========================================================================
+ HELD-OUT: naive vs BRECQ
+========================================================================
+ seed |  target | seen_nv | seen_bq |  ho_nv |  ho_bq |   ho 감소
+------------------------------------------------------------------------
+    0 |   15410 |   1.06% |   1.16% |  9.01% |  8.16% |    9.4%
+    1 |   16345 |   1.27% |   1.06% |  9.31% |  8.49% |    8.7%
+    2 |   13332 |   1.19% |   1.00% |  9.67% |  8.83% |    8.7%
+------------------------------------------------------------------------
+ mean |         |         |         |  9.33% |  8.49% |    8.9%
+========================================================================
+
+해석:
+ - BRECQ ho가 naive/AdaRound와 비슷하면 → block 재구성으로도 held-out 못 지킴 = 논지 보강.
+   (block이 layer 간 상관을 잡아도 held-out엔 무의미하면 우리 논지 성립)
+ - BRECQ는 detection PTQ 표준 baseline(필수). held-out 실패 시 reconstruction 계열 공통 한계 확정.

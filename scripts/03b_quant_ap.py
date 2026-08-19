@@ -69,6 +69,8 @@ def main():
     ap.add_argument("--quantize", action="store_true", default=True,
                     help="양자화 적용(기본). --no-quantize로 FP 대조군 가능")
     ap.add_argument("--no-quantize", dest="quantize", action="store_false")
+    ap.add_argument("--skip-projections", action="store_true",
+                    help="v1의 vision-text projection 레이어를 양자화에서 제외(공정 비교)")
     args = ap.parse_args()
 
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
@@ -82,9 +84,12 @@ def main():
         # 양자화 전에 conv+BN을 fuse: (1) 실제 배포 weight를 양자화(올바른 PTQ),
         # (2) 이미 fused라 val이 다시 fuse 시도 안 함(크래시 방지). cv4는 안 건드림.
         model.fuse()
-        n = wrap_convs(model.model, w_bits=8, a_bits=8)
+        skip = {"projections"} if args.skip_projections else None
+        n = wrap_convs(model.model, w_bits=8, a_bits=8, skip_names=skip)
         model.model.to(device).eval()
-        print(f"[quant] wrapped {n} Conv2d, calibrating on {args.calib} images...")
+        print(f"[quant] wrapped {n} Conv2d"
+              f"{' (projections 제외)' if args.skip_projections else ''}, "
+              f"calibrating on {args.calib} images...")
         calib_imgs = sorted(glob.glob(os.path.join(args.coco_root, "val2017", "*.jpg")))[:args.calib]
         calibrate(model.model, (preprocess(p, args.imgsz, device) for p in calib_imgs),
                   device=device)

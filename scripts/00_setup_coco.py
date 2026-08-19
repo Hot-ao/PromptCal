@@ -118,10 +118,10 @@ def main():
     import yaml
     names = load_coco80_names()
     data = {"path": str(out_root)}
-    if "val" in args.splits:
-        data["val"] = "val2017.txt"
-    if "train" in args.splits:
-        data["train"] = "train2017.txt"
+    # Ultralytics는 val만 평가할 때도 yaml에 train/val 키가 둘 다 있어야 한다(형식 검사).
+    # train split을 안 만들었으면 train 키는 val을 가리키는 더미로 채운다(평가엔 미사용).
+    data["train"] = "train2017.txt" if "train" in args.splits else "val2017.txt"
+    data["val"] = "val2017.txt" if "val" in args.splits else "train2017.txt"
     data["names"] = names
 
     yaml_out = Path(args.yaml_out)

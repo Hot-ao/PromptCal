@@ -1,0 +1,112 @@
+[load] FP model
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+[build] naive-quant
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+[build] PD-Quant (end-to-end 예측차 최소화, 무거움)
+YOLOv8s-worldv2 summary: 236 layers, 164,026,601 parameters, 151,277,313 gradients, 31.9 GFLOPs
+[adaround] 68 conv 최적화 시작 (트리 나란히 매칭)
+  [1/68] layer opt done, h→0/1 수렴 100%
+  [2/68] layer opt done, h→0/1 수렴 100%
+  [3/68] layer opt done, h→0/1 수렴 100%
+  [4/68] layer opt done, h→0/1 수렴 100%
+  [5/68] layer opt done, h→0/1 수렴 100%
+  [6/68] layer opt done, h→0/1 수렴 100%
+  [7/68] layer opt done, h→0/1 수렴 100%
+  [8/68] layer opt done, h→0/1 수렴 100%
+  [9/68] layer opt done, h→0/1 수렴 100%
+  [10/68] layer opt done, h→0/1 수렴 100%
+  [11/68] layer opt done, h→0/1 수렴 100%
+  [12/68] layer opt done, h→0/1 수렴 100%
+  [13/68] layer opt done, h→0/1 수렴 100%
+  [14/68] layer opt done, h→0/1 수렴 100%
+  [15/68] layer opt done, h→0/1 수렴 100%
+  [16/68] layer opt done, h→0/1 수렴 100%
+  [17/68] layer opt done, h→0/1 수렴 100%
+  [18/68] layer opt done, h→0/1 수렴 100%
+  [19/68] layer opt done, h→0/1 수렴 100%
+  [20/68] layer opt done, h→0/1 수렴 100%
+  [21/68] layer opt done, h→0/1 수렴 100%
+  [22/68] layer opt done, h→0/1 수렴 100%
+  [23/68] layer opt done, h→0/1 수렴 100%
+  [24/68] layer opt done, h→0/1 수렴 100%
+  [25/68] layer opt done, h→0/1 수렴 100%
+  [26/68] layer opt done, h→0/1 수렴 100%
+  [27/68] layer opt done, h→0/1 수렴 100%
+  [28/68] layer opt done, h→0/1 수렴 100%
+  [29/68] layer opt done, h→0/1 수렴 100%
+  [30/68] layer opt done, h→0/1 수렴 100%
+  [31/68] layer opt done, h→0/1 수렴 100%
+  [32/68] layer opt done, h→0/1 수렴 100%
+  [33/68] layer opt done, h→0/1 수렴 100%
+  [34/68] layer opt done, h→0/1 수렴 100%
+  [35/68] layer opt done, h→0/1 수렴 100%
+  [36/68] layer opt done, h→0/1 수렴 100%
+  [37/68] layer opt done, h→0/1 수렴 100%
+  [38/68] layer opt done, h→0/1 수렴 100%
+  [39/68] layer opt done, h→0/1 수렴 100%
+  [40/68] layer opt done, h→0/1 수렴 100%
+  [41/68] layer opt done, h→0/1 수렴 100%
+  [42/68] layer opt done, h→0/1 수렴 100%
+  [43/68] layer opt done, h→0/1 수렴 100%
+  [44/68] layer opt done, h→0/1 수렴 100%
+  [45/68] layer opt done, h→0/1 수렴 100%
+  [46/68] layer opt done, h→0/1 수렴 100%
+  [47/68] layer opt done, h→0/1 수렴 100%
+  [48/68] layer opt done, h→0/1 수렴 100%
+  [49/68] layer opt done, h→0/1 수렴 100%
+  [50/68] layer opt done, h→0/1 수렴 100%
+  [51/68] layer opt done, h→0/1 수렴 100%
+  [52/68] layer opt done, h→0/1 수렴 100%
+  [53/68] layer opt done, h→0/1 수렴 100%
+  [54/68] layer opt done, h→0/1 수렴 100%
+  [55/68] layer opt done, h→0/1 수렴 100%
+  [56/68] layer opt done, h→0/1 수렴 100%
+  [57/68] layer opt done, h→0/1 수렴 100%
+  [58/68] layer opt done, h→0/1 수렴 100%
+  [59/68] layer opt done, h→0/1 수렴 100%
+  [60/68] layer opt done, h→0/1 수렴 100%
+  [61/68] layer opt done, h→0/1 수렴 100%
+  [62/68] layer opt done, h→0/1 수렴 100%
+  [63/68] layer opt done, h→0/1 수렴 100%
+  [64/68] layer opt done, h→0/1 수렴 100%
+  [65/68] layer opt done, h→0/1 수렴 100%
+  [66/68] layer opt done, h→0/1 수렴 100%
+  [67/68] layer opt done, h→0/1 수렴 100%
+  [68/68] 입력 미포착 스킵 (hard 유지)
+[adaround] 전체 layer 최적화 완료 (hard 반올림 모드)
+[pdquant] FP 타깃 캐시 32장, alpha 68개 동시 최적화 (end-to-end)
+  [100/1000] pd=0.8338 h→0/1 99%
+  [200/1000] pd=0.0485 h→0/1 99%
+  [300/1000] pd=0.9232 h→0/1 99%
+  [400/1000] pd=0.3405 h→0/1 99%
+  [500/1000] pd=1.5964 h→0/1 99%
+  [600/1000] pd=0.5439 h→0/1 99%
+  [700/1000] pd=0.9738 h→0/1 99%
+  [800/1000] pd=0.8864 h→0/1 99%
+  [900/1000] pd=0.8338 h→0/1 99%
+  [1000/1000] pd=0.0485 h→0/1 99%
+[pdquant] 최적화 완료 (hard 반올림 모드)
+[build] PD-Quant 완료 811s
+[eval] 1000장 x 3 seeds...
+   [200/1000]
+   [400/1000]
+   [600/1000]
+   [800/1000]
+   [1000/1000]
+
+========================================================================
+ HELD-OUT: naive vs PD-Quant (AdaRound=5.24%, QDrop=4.92% 참고)
+========================================================================
+ seed |  target | seen_nv | seen_pd |  ho_nv |  ho_pd |   ho 감소
+------------------------------------------------------------------------
+    0 |   13692 |   0.61% |   0.46% |  5.65% |  5.16% |    8.7%
+    1 |   14089 |   0.94% |   0.70% |  6.79% |  5.59% |   17.7%
+    2 |   11679 |   0.68% |   0.57% |  5.97% |  4.96% |   16.9%
+------------------------------------------------------------------------
+ mean |         |         |         |  6.14% |  5.24% |   14.7%
+========================================================================
+
+해석:
+ - PD-Quant ho가 naive/AdaRound/QDrop과 비슷하면 → '예측을 맞춰도' held-out 못 지킴 = 논지 결정적 보강.
+   (PD-Quant가 held-out을 유의미하게 낮추면 위협: '예측 정합이 held-out에도 도움'. 비슷하면 보강)
+ - PD-Quant의 예측 정합은 calib vocab 내 예측. held-out 실패 시 '예측을 봐도 vocab에 갇힌다' 확정.

@@ -53,6 +53,7 @@ def main():
         imgsz=args.imgsz,
         device=args.device,
         batch=args.batch,
+        save_json=True,   # is_coco면 pycocotools 공식 mAP도 함께 출력
         verbose=True,
     )
 

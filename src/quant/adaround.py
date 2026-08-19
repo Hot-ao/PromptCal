@@ -30,6 +30,7 @@ class AdaRoundQuantConv2d(nn.Module):
         self.a_obs = qconv.a_obs             # 보정된 activation observer 재사용
         self.quantized = True
         self.soft = True                     # 최적화 중 soft, 추론 시 hard
+        self.ste = False                     # PD-Quant end-to-end 시 activation STE
 
         w = self.conv.weight.detach()
         qmax = 2 ** (self.w_bits - 1) - 1
@@ -53,13 +54,14 @@ class AdaRoundQuantConv2d(nn.Module):
 
     def forward(self, x):
         if self.quantized and self.a_obs.ready:
-            x = self.a_obs.quantize(x)
+            x = self.a_obs.quantize_ste(x) if self.ste else self.a_obs.quantize(x)
         wq = self.quant_weight()
         return F.conv2d(x, wq, self.conv.bias, self.conv.stride,
                         self.conv.padding, self.conv.dilation, self.conv.groups)
 
-    def reg_loss(self, beta):
-        return (1 - (2 * h_alpha(self.alpha) - 1).abs() ** beta).sum()
+    def reg_loss(self, beta, reduction="sum"):
+        r = 1 - (2 * h_alpha(self.alpha) - 1).abs() ** beta
+        return r.mean() if reduction == "mean" else r.sum()
 
 
 def convert_to_adaround(model_module):

@@ -46,12 +46,14 @@ class _CV4Capture:
 
 
 def optimize_pdquant(quant_model, fp_model, calib_tensors, device,
-                     iters=2000, lr=1e-3, reg_weight=1e-3, verbose=True):
+                     iters=1000, lr=1e-4, reg_weight=1.0, verbose=True):
     """
-    end-to-end PD 최적화. 모든 AdaRound conv의 alpha를 동시에 최적화하여
-    양자화 유사도 행렬이 FP 유사도 행렬에 가까워지도록 함.
+    end-to-end PD 정제(refinement). AdaRound로 초기화된 rounding을, 양자화 유사도 행렬이
+    FP 유사도 행렬에 가까워지도록 global하게 미세조정. 모든 alpha 동시 최적화.
 
-    주의: layer-wise AdaRound보다 훨씬 무거움 — 매 iter 전체 모델 forward+backward.
+    ★ 반드시 AdaRound(optimize_adaround)로 먼저 초기화된 모델에 적용할 것.
+      from-scratch end-to-end는 68 layer 결합으로 불안정 → warm-start가 안정적이고
+      "reconstruction 초기화 + prediction-difference 정제"라는 PD-Quant 정신에도 부합.
     """
     ada_convs = list_adaround_convs(quant_model)
     for ac in ada_convs:
@@ -77,7 +79,11 @@ def optimize_pdquant(quant_model, fp_model, calib_tensors, device,
     alphas = [ac.alpha for ac in ada_convs]
     opt = torch.optim.Adam(alphas, lr=lr)
 
+    # 정제(refinement) 모드: AdaRound로 초기화된 상태에서 시작하므로 h는 이미 ~0/1.
+    # reg는 "hard 유지" 역할(reg≈0에서 시작), pd는 global 예측차를 살짝 다듬음.
     n = len(calib_tensors)
+    eps = 1e-6
+    beta = 2.0
     for it in range(iters):
         idx = it % n
         t = calib_tensors[idx].to(device)
@@ -85,23 +91,22 @@ def optimize_pdquant(quant_model, fp_model, calib_tensors, device,
 
         q_cap.clear()
         opt.zero_grad()
-        quant_model(t)                                  # grad 흐르는 forward
-        # PD loss: 레벨별 유사도 맵 MSE 합
+        quant_model(t)
+        # PD loss: 레벨별 정규화 MSE (logit 스케일 무관하게)
         pd = 0.0
         for i in q_cap.buf:
-            pd = pd + (q_cap.buf[i] - tgt[i]).pow(2).mean()
-        # 반올림 정규화 (h를 0/1로)
-        beta = max(2.0, 20.0 * (1 - it / iters))
-        reg = sum(ac.reg_loss(beta) for ac in ada_convs)
+            pd = pd + (q_cap.buf[i] - tgt[i]).pow(2).mean() / (tgt[i].var() + eps)
+        reg = sum(ac.reg_loss(beta, reduction="mean") for ac in ada_convs) / len(ada_convs)
         loss = pd + reg_weight * reg
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(alphas, max_norm=1.0)
         opt.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
             hconv = sum(float(((h_alpha(ac.alpha) < 0.05) |
                                (h_alpha(ac.alpha) > 0.95)).float().mean())
                         for ac in ada_convs) / len(ada_convs) * 100
-            print(f"  [{it+1}/{iters}] pd={float(pd.detach()):.5f} h→0/1 {hconv:.0f}%")
+            print(f"  [{it+1}/{iters}] pd={float(pd.detach()):.4f} h→0/1 {hconv:.0f}%")
 
     q_cap.close()
     for ac in ada_convs:

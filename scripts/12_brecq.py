@@ -1,5 +1,5 @@
 """
-D-4: held-out 조건에서 naive vs PD-Quant 비교 (AdaRound 5.24%, QDrop 4.92% 대비).
+D-2: held-out 조건에서 naive vs BRECQ 비교 (block 재구성).
 
 질문: AdaRound(강한 reconstruction)가 seen에선 flip을 줄였는데(0.73→0.40),
 held-out(안 본 프롬프트)에서도 줄이는가?
@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.harness import SimilarityHarness
 from src.quant.quant_model import wrap_convs, calibrate
 from src.quant.adaround import convert_to_adaround, optimize_adaround
-from src.quant.pdquant import optimize_pdquant
+from src.quant.brecq import optimize_brecq
 
 
 def load_coco_names():
@@ -46,18 +46,15 @@ def preprocess(path, imgsz, device):
 
 
 def build_quant(model_cls, weights, names, device, calib_tensors, adaround=False,
-                fp_module=None, iters=2000, qdrop_prob=0.0, pdquant=False):
+                fp_module=None, iters=2000, qdrop_prob=0.0, brecq=False):
     m = model_cls(weights); m.set_classes(names); m.fuse()
     wrap_convs(m.model, w_bits=8, a_bits=8)
     m.model.to(device).eval()
     calibrate(m.model, calib_tensors, device=device)
     if adaround:
         convert_to_adaround(m.model)
-        if pdquant:
-            # PD-Quant = AdaRound 초기화 + end-to-end 예측차 정제 (안정적)
-            optimize_adaround(m.model, fp_module, calib_tensors, device, iters=iters, verbose=True)
-            optimize_pdquant(m.model, fp_module, calib_tensors, device,
-                             iters=1000, lr=1e-4, reg_weight=1.0, verbose=True)
+        if brecq:
+            optimize_brecq(m.model, fp_module, calib_tensors, device, iters=iters, verbose=True)
         else:
             optimize_adaround(m.model, fp_module, calib_tensors, device, iters=iters,
                               qdrop_prob=qdrop_prob, verbose=True)
@@ -94,11 +91,11 @@ def main():
     print("[build] naive-quant")
     model_naive=build_quant(YOLOWorld,args.model,names,device,calib_tensors,adaround=False)
 
-    print("[build] PD-Quant (end-to-end 예측차 최소화, 무거움)")
+    print("[build] BRECQ (block 재구성)")
     t0=time.time()
     model_ada=build_quant(YOLOWorld,args.model,names,device,calib_tensors,adaround=True,
-                          fp_module=model_fp.model, iters=args.iters, pdquant=True)
-    print(f"[build] PD-Quant 완료 {time.time()-t0:.0f}s")
+                          fp_module=model_fp.model, iters=args.iters, brecq=True)
+    print(f"[build] BRECQ 완료 {time.time()-t0:.0f}s")
 
     # held-out 마스크
     H_masks={}
@@ -135,10 +132,10 @@ def main():
     h_fp.close(); h_nv.close(); h_ad.close()
 
     print("\n"+"="*72)
-    print(" HELD-OUT: naive vs PD-Quant (AdaRound=5.24%, QDrop=4.92% 참고)")
+    print(" HELD-OUT: naive vs BRECQ")
     print("="*72)
-    print(f"{'seed':>5} | {'target':>7} | {'seen_nv':>7} | {'seen_pd':>7} | "
-          f"{'ho_nv':>6} | {'ho_pd':>6} | {'ho 감소':>7}")
+    print(f"{'seed':>5} | {'target':>7} | {'seen_nv':>7} | {'seen_bq':>7} | "
+          f"{'ho_nv':>6} | {'ho_bq':>6} | {'ho 감소':>7}")
     print("-"*72)
     hn_l,ha_l=[],[]
     for s in args.seeds:
@@ -155,9 +152,9 @@ def main():
           f"{(np.mean(hn_l)-np.mean(ha_l))/max(np.mean(hn_l),1e-9)*100:>6.1f}%")
     print("="*72)
     print("\n해석:")
-    print(" - PD-Quant ho가 naive/AdaRound/QDrop과 비슷하면 → '예측을 맞춰도' held-out 못 지킴 = 논지 결정적 보강.")
-    print("   (PD-Quant가 held-out을 유의미하게 낮추면 위협: '예측 정합이 held-out에도 도움'. 비슷하면 보강)")
-    print(" - PD-Quant의 예측 정합은 calib vocab 내 예측. held-out 실패 시 '예측을 봐도 vocab에 갇힌다' 확정.")
+    print(" - BRECQ ho가 naive/AdaRound와 비슷하면 → block 재구성으로도 held-out 못 지킴 = 논지 보강.")
+    print("   (block이 layer 간 상관을 잡아도 held-out엔 무의미하면 우리 논지 성립)")
+    print(" - BRECQ는 detection PTQ 표준 baseline(필수). held-out 실패 시 reconstruction 계열 공통 한계 확정.")
 
 
 if __name__ == "__main__":
