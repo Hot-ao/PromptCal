@@ -70,8 +70,6 @@ def main():
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf-thres", type=float, default=0.25)
     ap.add_argument("--device", default="0")
-    ap.add_argument("--data", default="configs/coco_local.yaml")
-    ap.add_argument("--with-ap", action="store_true")
     args=ap.parse_args()
 
     device=f"cuda:{args.device}" if args.device!="cpu" else "cpu"
@@ -94,15 +92,6 @@ def main():
     model_ada=build_quant(YOLOWorld,args.model,names,device,calib_tensors,adaround=True,
                           fp_module=model_fp.model, iters=args.iters, qdrop_prob=args.qdrop_prob)
     print(f"[build] QDrop 완료 {time.time()-t0:.0f}s")
-    
-    if args.with_ap:
-        print("[ap] AP 측정 (full val2017, calib 32)")
-        m_nv = model_naive.val(data=args.data, imgsz=args.imgsz,
-                            device=args.device, save_json=True, verbose=False)
-        m_qd = model_ada.val(data=args.data, imgsz=args.imgsz,
-                            device=args.device, save_json=True, verbose=False)
-        print(f"[ap] naive mAP={float(m_nv.box.map)*100:.2f}")
-        print(f"[ap] QDrop mAP={float(m_qd.box.map)*100:.2f}")
 
     # held-out 마스크
     H_masks={}

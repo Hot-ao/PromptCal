@@ -68,8 +68,6 @@ def main():
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf-thres", type=float, default=0.25)
     ap.add_argument("--device", default="0")
-    ap.add_argument("--data", default="configs/coco_local.yaml")
-    ap.add_argument("--with-ap", action="store_true", help="val로 AP도 측정")
     args=ap.parse_args()
 
     device=f"cuda:{args.device}" if args.device!="cpu" else "cpu"
@@ -92,17 +90,7 @@ def main():
     model_ada=build_quant(YOLOWorld,args.model,names,device,calib_tensors,adaround=True,
                           fp_module=model_fp.model, iters=args.iters)
     print(f"[build] AdaRound 완료 {time.time()-t0:.0f}s")
-    # AP 측정
-    if args.with_ap:
-        print("[ap] AP 측정 (full val2017) — 08과 동일 경로")
-        m_nv = model_naive.val(data=args.data, imgsz=args.imgsz,
-                            device=args.device, save_json=True, verbose=False)
-        m_ad = model_ada.val(data=args.data, imgsz=args.imgsz,
-                            device=args.device, save_json=True, verbose=False)
-        print(f"[ap] naive   mAP={float(m_nv.box.map)*100:.2f}")
-        print(f"[ap] AdaRound mAP={float(m_ad.box.map)*100:.2f}")
-        print(f"[ap] (참고: pycocotools AP는 각 val 로그의 AP@[.50:.95|all])")
-    
+
     # held-out 마스크
     H_masks={}
     for s in args.seeds:

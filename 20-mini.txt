@@ -1,0 +1,33 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+======================================================================
+ E 최소 실험: held-out margin 보존 vs baseline
+======================================================================
+ seed |   naive | AdaRound | PromptCal |  vs Ada
+----------------------------------------------------------------------
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 60개, alpha 71개, margin 보존(k=5)
+  [150/1500] margin_loss=0.0970 h→0/1 16%
+  [300/1500] margin_loss=0.2761 h→0/1 20%
+  [450/1500] margin_loss=0.8442 h→0/1 22%
+  [600/1500] margin_loss=0.1197 h→0/1 23%
+  [750/1500] margin_loss=0.4143 h→0/1 24%
+  [900/1500] margin_loss=0.1376 h→0/1 24%
+  [1050/1500] margin_loss=0.0694 h→0/1 25%
+  [1200/1500] margin_loss=0.0644 h→0/1 26%
+  [1350/1500] margin_loss=0.0514 h→0/1 26%
+  [1500/1500] margin_loss=0.0322 h→0/1 26%
+[promptcal] 최적화 완료
+    0 |   7.42% |    7.99% |    13.20% |  -65.3%
+----------------------------------------------------------------------
+ mean |   7.42% |    7.99% |    13.20% |  -65.3%
+======================================================================
+
+판정:
+ - PromptCal H_eval flip < AdaRound이고 seed 일관 → 방향 성공(baseline 넘음).
+ - AdaRound와 비슷/높음 → 09_phase1처럼 held-out 전이 실패. 재설계 필요.

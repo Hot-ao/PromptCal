@@ -1,0 +1,61 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+======================================================================
+ E 최소 실험: held-out margin 보존 vs baseline
+======================================================================
+ seed |   naive | AdaRound | PromptCal |  vs Ada
+----------------------------------------------------------------------
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 60개, alpha 71개, margin 보존(k=5)
+  [150/1500] margin_loss=0.1191 h→0/1 16%
+  [300/1500] margin_loss=0.0685 h→0/1 20%
+  [450/1500] margin_loss=1.4494 h→0/1 22%
+  [600/1500] margin_loss=0.2600 h→0/1 23%
+  [750/1500] margin_loss=0.5118 h→0/1 24%
+  [900/1500] margin_loss=0.2250 h→0/1 24%
+  [1050/1500] margin_loss=0.0864 h→0/1 25%
+  [1200/1500] margin_loss=0.0383 h→0/1 25%
+  [1350/1500] margin_loss=0.0574 h→0/1 26%
+  [1500/1500] margin_loss=0.0299 h→0/1 26%
+[promptcal] 최적화 완료
+    0 |   8.59% |    8.55% |    13.66% |  -59.7%
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 60개, alpha 71개, margin 보존(k=5)
+  [150/1500] margin_loss=0.3221 h→0/1 16%
+  [300/1500] margin_loss=0.0800 h→0/1 20%
+  [450/1500] margin_loss=0.5522 h→0/1 22%
+  [600/1500] margin_loss=0.1639 h→0/1 23%
+  [750/1500] margin_loss=0.2755 h→0/1 24%
+  [900/1500] margin_loss=0.1054 h→0/1 24%
+  [1050/1500] margin_loss=0.0756 h→0/1 25%
+  [1200/1500] margin_loss=0.0523 h→0/1 25%
+  [1350/1500] margin_loss=0.0379 h→0/1 26%
+  [1500/1500] margin_loss=0.0267 h→0/1 26%
+[promptcal] 최적화 완료
+    1 |   9.72% |    9.40% |    12.72% |  -35.4%
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 60개, alpha 71개, margin 보존(k=5)
+  [150/1500] margin_loss=0.1004 h→0/1 16%
+  [300/1500] margin_loss=0.1507 h→0/1 20%
+  [450/1500] margin_loss=0.1809 h→0/1 22%
+  [600/1500] margin_loss=0.1287 h→0/1 23%
+  [750/1500] margin_loss=0.1526 h→0/1 24%
+  [900/1500] margin_loss=0.0656 h→0/1 24%
+  [1050/1500] margin_loss=0.0683 h→0/1 25%
+  [1200/1500] margin_loss=0.0700 h→0/1 25%
+  [1350/1500] margin_loss=0.0453 h→0/1 26%
+  [1500/1500] margin_loss=0.2114 h→0/1 26%
+[promptcal] 최적화 완료
+    2 |   9.91% |    9.76% |    18.03% |  -84.7%
+----------------------------------------------------------------------
+ mean |   9.41% |    9.24% |    14.80% |  -60.3%
+======================================================================
+
+판정:
+ - PromptCal H_eval flip < AdaRound이고 seed 일관 → 방향 성공(baseline 넘음).
+ - AdaRound와 비슷/높음 → 09_phase1처럼 held-out 전이 실패. 재설계 필요.
