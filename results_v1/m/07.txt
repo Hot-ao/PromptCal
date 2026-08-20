@@ -1,0 +1,32 @@
+[load] FP32 + quant models
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+[calib] 64장 (vision-only, 프롬프트 무관)...
+[measure] COCO-80 ...
+   [COCO] [100/500] flips=54
+   [COCO] [200/500] flips=108
+   [COCO] [300/500] flips=146
+   [COCO] [400/500] flips=185
+   [COCO] [500/500] flips=261
+[measure] LVIS-1203 ...
+   [LVIS] [100/500] flips=981
+   [LVIS] [200/500] flips=1965
+   [LVIS] [300/500] flips=3061
+   [LVIS] [400/500] flips=3972
+   [LVIS] [500/500] flips=4924
+
+==============================================================================
+ COCO vs LVIS — vocabulary 규모별 손상 (같은 이미지·region·양자화)
+==============================================================================
+     vocab |     P |    conf |   flip |    →이웃 |     편향 |  margin |  small
+------------------------------------------------------------------------------
+   COCO-80 |    80 |   27020 |   0.97% |   77.0% |    3.0x |    6.52 |    1.4%
+ LVIS-1203 |  1203 |   30359 |  16.22% |   52.2% |   31.3x |    1.38 |   28.2%
+==============================================================================
+
+해석:
+ - flip: 0.97% → 16.22% (LVIS에서 증가)
+ - mean margin: 6.52 → 1.38 (작을수록 경쟁↑)
+ - small-margin 비율: 1.4% → 28.2%
+ LVIS에서 margin↓·small↑와 함께 flip↑이면, 촘촘한 vocabulary가 경쟁을 심화시켜
+ 손상을 증폭 = OVOD 규모에서 우리 주장이 성립. 이웃 편향 유지 시 substitution도 견고.

@@ -1,0 +1,133 @@
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+[진단] yolov8m-world.pt: wrap 대상 conv 91개
+[진단] 레이어 하나씩만 양자화 → confident flip 프록시 측정 (100 probe)
+
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+[기준] 전체 양자화 시 confident flip: 0.95%
+
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [10/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [20/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [30/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [40/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [50/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [60/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [70/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [80/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+  [90/91] 진행...
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+
+==================================================================
+ 레이어별 단독 양자화 민감도 (confident flip %, 높을수록 치명적)
+==================================================================
+ 전체 양자화 기준선: 0.95%
+------------------------------------------------------------------
+   0.32%  ██████████████████████████████ model.23.cv3.0.2
+   0.26%  █████████████████████████ model.23.cv3.1.2
+   0.18%  ████████████████ model.15.cv2.conv
+   0.16%  ███████████████ model.4.cv2.conv
+   0.09%  ████████ model.1.conv
+   0.09%  ████████ model.12.cv2.conv
+   0.07%  ██████ model.2.cv1.conv
+   0.07%  ██████ model.4.cv1.conv
+   0.05%  █████ model.2.cv2.conv
+   0.05%  █████ model.4.m.1.cv2.conv
+   0.05%  █████ model.5.conv
+   0.05%  █████ model.6.cv1.conv
+   0.04%  ███ model.6.cv2.conv
+   0.04%  ███ model.8.cv2.conv
+   0.04%  ███ model.8.m.0.cv1.conv
+==================================================================
+
+판정:
+ - 소수 레이어가 압도적으로 높으면 → 그 레이어가 outlier(범인). 제외/per-channel로 해결.
+ - 다수 레이어가 고루 높으면 → m 본질적 취약성. per-tensor W8A8 부적합.

@@ -1,0 +1,123 @@
+[load] FP model
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+[build] naive-quant
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+[build] QDrop-quant (activation drop, 최적화 ~12min)
+YOLOv8m-world summary: 269 layers, 180,325,295 parameters, 151,277,313 gradients, 86.1 GFLOPs
+[adaround] 91 conv 최적화 시작 (트리 나란히 매칭)
+  [1/91] layer opt done, h→0/1 수렴 100%
+  [2/91] layer opt done, h→0/1 수렴 100%
+  [3/91] layer opt done, h→0/1 수렴 100%
+  [4/91] layer opt done, h→0/1 수렴 100%
+  [5/91] layer opt done, h→0/1 수렴 100%
+  [6/91] layer opt done, h→0/1 수렴 100%
+  [7/91] layer opt done, h→0/1 수렴 100%
+  [8/91] layer opt done, h→0/1 수렴 100%
+  [9/91] layer opt done, h→0/1 수렴 100%
+  [10/91] layer opt done, h→0/1 수렴 100%
+  [11/91] layer opt done, h→0/1 수렴 100%
+  [12/91] layer opt done, h→0/1 수렴 100%
+  [13/91] layer opt done, h→0/1 수렴 100%
+  [14/91] layer opt done, h→0/1 수렴 100%
+  [15/91] layer opt done, h→0/1 수렴 100%
+  [16/91] layer opt done, h→0/1 수렴 100%
+  [17/91] layer opt done, h→0/1 수렴 100%
+  [18/91] layer opt done, h→0/1 수렴 100%
+  [19/91] layer opt done, h→0/1 수렴 100%
+  [20/91] layer opt done, h→0/1 수렴 100%
+  [21/91] layer opt done, h→0/1 수렴 100%
+  [22/91] layer opt done, h→0/1 수렴 100%
+  [23/91] layer opt done, h→0/1 수렴 100%
+  [24/91] layer opt done, h→0/1 수렴 100%
+  [25/91] layer opt done, h→0/1 수렴 100%
+  [26/91] layer opt done, h→0/1 수렴 100%
+  [27/91] layer opt done, h→0/1 수렴 100%
+  [28/91] layer opt done, h→0/1 수렴 100%
+  [29/91] layer opt done, h→0/1 수렴 100%
+  [30/91] layer opt done, h→0/1 수렴 100%
+  [31/91] layer opt done, h→0/1 수렴 100%
+  [32/91] layer opt done, h→0/1 수렴 100%
+  [33/91] layer opt done, h→0/1 수렴 100%
+  [34/91] layer opt done, h→0/1 수렴 100%
+  [35/91] layer opt done, h→0/1 수렴 100%
+  [36/91] layer opt done, h→0/1 수렴 100%
+  [37/91] layer opt done, h→0/1 수렴 100%
+  [38/91] layer opt done, h→0/1 수렴 100%
+  [39/91] layer opt done, h→0/1 수렴 100%
+  [40/91] layer opt done, h→0/1 수렴 100%
+  [41/91] layer opt done, h→0/1 수렴 100%
+  [42/91] layer opt done, h→0/1 수렴 100%
+  [43/91] layer opt done, h→0/1 수렴 100%
+  [44/91] layer opt done, h→0/1 수렴 100%
+  [45/91] layer opt done, h→0/1 수렴 100%
+  [46/91] layer opt done, h→0/1 수렴 100%
+  [47/91] layer opt done, h→0/1 수렴 100%
+  [48/91] layer opt done, h→0/1 수렴 100%
+  [49/91] layer opt done, h→0/1 수렴 100%
+  [50/91] layer opt done, h→0/1 수렴 100%
+  [51/91] layer opt done, h→0/1 수렴 100%
+  [52/91] layer opt done, h→0/1 수렴 100%
+  [53/91] layer opt done, h→0/1 수렴 100%
+  [54/91] layer opt done, h→0/1 수렴 100%
+  [55/91] layer opt done, h→0/1 수렴 100%
+  [56/91] layer opt done, h→0/1 수렴 100%
+  [57/91] layer opt done, h→0/1 수렴 100%
+  [58/91] layer opt done, h→0/1 수렴 100%
+  [59/91] layer opt done, h→0/1 수렴 100%
+  [60/91] layer opt done, h→0/1 수렴 100%
+  [61/91] layer opt done, h→0/1 수렴 100%
+  [62/91] layer opt done, h→0/1 수렴 100%
+  [63/91] layer opt done, h→0/1 수렴 100%
+  [64/91] layer opt done, h→0/1 수렴 100%
+  [65/91] layer opt done, h→0/1 수렴 100%
+  [66/91] layer opt done, h→0/1 수렴 100%
+  [67/91] layer opt done, h→0/1 수렴 100%
+  [68/91] layer opt done, h→0/1 수렴 100%
+  [69/91] layer opt done, h→0/1 수렴 100%
+  [70/91] layer opt done, h→0/1 수렴 100%
+  [71/91] layer opt done, h→0/1 수렴 100%
+  [72/91] layer opt done, h→0/1 수렴 100%
+  [73/91] layer opt done, h→0/1 수렴 100%
+  [74/91] layer opt done, h→0/1 수렴 100%
+  [75/91] layer opt done, h→0/1 수렴 100%
+  [76/91] layer opt done, h→0/1 수렴 100%
+  [77/91] layer opt done, h→0/1 수렴 100%
+  [78/91] layer opt done, h→0/1 수렴 100%
+  [79/91] layer opt done, h→0/1 수렴 100%
+  [80/91] layer opt done, h→0/1 수렴 100%
+  [81/91] layer opt done, h→0/1 수렴 100%
+  [82/91] layer opt done, h→0/1 수렴 100%
+  [83/91] layer opt done, h→0/1 수렴 100%
+  [84/91] layer opt done, h→0/1 수렴 100%
+  [85/91] layer opt done, h→0/1 수렴 100%
+  [86/91] layer opt done, h→0/1 수렴 100%
+  [87/91] layer opt done, h→0/1 수렴 100%
+  [88/91] layer opt done, h→0/1 수렴 100%
+  [89/91] layer opt done, h→0/1 수렴 100%
+  [90/91] layer opt done, h→0/1 수렴 100%
+  [91/91] 입력 미포착 스킵 (hard 유지)
+[adaround] 전체 layer 최적화 완료 (hard 반올림 모드)
+[build] QDrop 완료 980s
+[eval] 1000장 x 3 seeds...
+   [200/1000]
+   [400/1000]
+   [600/1000]
+   [800/1000]
+   [1000/1000]
+
+========================================================================
+ HELD-OUT: naive vs QDrop (AdaRound held-out=5.24% 참고)
+========================================================================
+ seed |  target | seen_nv | seen_qd |  ho_nv |  ho_qd |   ho 감소
+------------------------------------------------------------------------
+    0 |   17013 |   1.01% |   1.05% | 14.75% | 15.99% |   -8.4%
+    1 |   17659 |   1.22% |   1.21% | 13.53% | 14.88% |  -10.0%
+    2 |   14381 |   1.49% |   1.56% | 14.71% | 15.89% |   -8.0%
+------------------------------------------------------------------------
+ mean |         |         |         | 14.33% | 15.59% |   -8.8%
+========================================================================
+
+해석:
+ - QDrop ho가 naive/AdaRound와 비슷하면 → activation 강건화로도 held-out 못 지킴 = 논지 강력 보강.
+   (AdaRound held-out 5.24% 대비 QDrop이 더 낮추면 위협, 비슷/높으면 보강)
+ - weight 축(AdaRound)과 activation 축(QDrop) 모두 held-out 실패 시, reconstruction 계열 전체가 실패.
