@@ -1,0 +1,30 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+[1] cv2 기전 확인: cv2-FP가 유사도 행렬을 실제로 바꾸는가
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+    naive vs cv2-FP  : max|Δsim|≈8.4715  mean|Δsim|≈0.54032
+    (참조) FP vs naive: max|Δsim|≈14.7845  mean|Δsim|≈1.36445
+    → cv2-FP가 유사도를 바꿈(참조 대비 57%). cv2가 결정에 실제 영향 → 조사.
+
+[2] cv3 activation bit knee (W8 고정, A만 스윕)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+config           | seed 0 | seed 1 | seed 2 |   mean | Δ vs naive
+----------------------------------------------------------------------------
+naive (cv3 A8)   |  7.42% |  9.94% |  9.12% |  8.83% |      +0.0%
+cv3 @ W8A9       |  4.99% |  7.63% |  7.23% |  6.62% |     -25.1%
+cv3 @ W8A10      |  4.80% |  6.09% |  6.02% |  5.64% |     -36.2%
+cv3 @ W8A11      |  4.27% |  5.98% |  5.43% |  5.23% |     -40.8%
+cv3 @ W8A12      |  4.39% |  5.98% |  5.77% |  5.38% |     -39.1%
+cv3 @ W8A13      |  4.57% |  6.02% |  5.48% |  5.36% |     -39.3%
+cv3-FP (상한)      |  4.42% |  6.09% |  5.82% |  5.45% |     -38.3%
+----------------------------------------------------------------------------
+
+판독: A가 낮아질수록 회복이 언제 무너지는지 = 최소 여유 bit. 포화 지점이 method의 cv3 bit.

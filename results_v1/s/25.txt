@@ -1,0 +1,47 @@
+[0] head 구조 (이 checkpoint에서 cv2/cv3/cv4가 무엇인가)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+    head type: WorldDetect
+    - cv2: ModuleList (len=3, elem0=Sequential)
+    - cv3: ModuleList (len=3, elem0=Sequential)
+    - dfl: DFL
+    - cv4: ModuleList (len=3, elem0=ContrastiveHead)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+    quantConv: naive=71, cv2-FP=43
+    cv3 quantConv 유지: naive=9, cv2-FP=9
+
+[1] cv3 activation scale 최대차(naive vs cv2-FP): 0.000e+00  → 동일 
+
+[2] 같은 이미지 계단식 max|Δ| (naive vs cv2-FP):
+    cv3 입력 x[i] : 1.2629e+00
+    cv3 출력      : 9.3990e-01
+    cv4 출력(sim) : 7.6173e+00
+
+[판정]
+ cv3 '입력'이 다름 → 상류(neck)가 바뀜. cv2 skip이 공유/다른 모듈을 건드렸는지 확인.
+
+(주의: 이 스크립트가 cv3 전부 동일을 보이면, 23의 cv2-FP 개선은 method 근거가 못 됨 → cv3-only 확정.)
+[build] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] Ours (cv3@A11)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+    (Ours: cv3 convs=9개 activation A11, 나머지 W8A8)
+
+========================================================================
+ 메인 평가: held-out flip(↓) + AP(→ 유지)
+========================================================================
+config                 |  held-out flip |  mAP50-95 |   mAP50
+------------------------------------------------------------------------
+FP32                   |              - |         - |       -
+Naive W8A8             |          9.41% |         - |       -
+Ours (cv3@A11)         |          6.22% |         - |       -
+------------------------------------------------------------------------
+held-out: Ours vs naive = -33.9%  (seeds naive [8.592745047594546, 9.723784526934134, 9.905728788977521], ours [5.852842809364549, 6.349206349206349, 6.453952139231327])
+
+메인표에 baseline 행(기존 결과) 배치:
+  AdaRound / BRECQ / QDrop / PD-Quant : held-out ~8.5% (전부 실패, AP는 naive급)
+  PromptCal v1(margin) / v2(decision) : held-out ≥ naive (anti-transfer)
+  → Ours만 held-out을 유의미하게 낮추면서 AP 유지 = method 성립.

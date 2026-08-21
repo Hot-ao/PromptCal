@@ -1,0 +1,17 @@
+[build] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] Ours (cv3@A11)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+============================================================================
+ 결합 검증: cv3@A11 위에 decision loss를 얹으면 held-out이 유지되나 붕괴하나
+============================================================================
+ seed |   naive | Ours(cv3@A11) | Ours+decision |  combine효과
+----------------------------------------------------------------------------
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+    0 |   8.06% |         5.34% |         9.06% |     +69.6%
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+    1 |  10.05% |         6.35% |        14.66% |    +130.9%
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs

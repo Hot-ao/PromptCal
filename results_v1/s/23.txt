@@ -1,0 +1,36 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive (all W8A8) quantConv=71 (cv3 convs=9)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] cv3-FP           quantConv=62 (cv3 convs=0)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] cv2-FP           quantConv=43 (cv3 convs=9)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] cv3 @ W8A16      quantConv=71 (cv3 convs=9)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] cv3 @ W8A12      quantConv=71 (cv3 convs=9)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] cv3 @ W8A10      quantConv=71 (cv3 convs=9)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] cv3 @ W16A16     quantConv=71 (cv3 convs=9)
+
+================================================================================
+ cv3 격리 + bit sweep vs held-out flip (낮을수록 손상 적음)
+================================================================================
+config           | seed 0 | seed 1 | seed 2 |   mean | Δ vs naive
+--------------------------------------------------------------------------------
+naive (all W8A8) |  7.42% |  9.94% |  9.12% |  8.83% |      +0.0%
+cv3-FP           |  4.42% |  6.09% |  5.82% |  5.45% |     -38.3%
+cv2-FP           |  6.19% |  9.39% |  7.81% |  7.80% |     -11.7%
+cv3 @ W8A16      |  4.46% |  6.13% |  5.58% |  5.39% |     -39.0%
+cv3 @ W8A12      |  4.39% |  5.98% |  5.77% |  5.38% |     -39.1%
+cv3 @ W8A10      |  4.80% |  6.09% |  6.02% |  5.64% |     -36.2%
+cv3 @ W16A16     |  4.42% |  6.09% |  5.82% |  5.45% |     -38.3%
+--------------------------------------------------------------------------------
+
+판독:
+ (A) 격리: cv3-FP ≈ head-FP(-55%)이고 cv2-FP ≈ naive면 → lever는 cv3 단독으로 확정.
+ (B) method: cv3 @ W8A16/A12/A10에서 회복이 어디까지 유지되나 → 최소 여유 bit 결정.
+     예) cv3 @ A10에서도 held-out이 크게 낮으면, 효율 손해 거의 없이 손상 복구.
+ 다음: 이 표 + baseline(AdaRound/BRECQ/QDrop/PD-Quant/v1/v2) 표로 method 대비 완성.

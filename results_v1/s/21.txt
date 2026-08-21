@@ -1,0 +1,90 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+==========================================================================
+ E v2: decision 보존 + scale 최적화 vs baseline
+==========================================================================
+ seed |   naive |   PC-v2 | vs naive
+--------------------------------------------------------------------------
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal_v2] scale conv 71개, removed(H_cal) 20, keep(S) 40, 목적=decision CE(temp=1.0, gate=0.0)
+  [60/600] decision_loss=1.5602 m∈[0.806,1.277] mean=1.003
+  [120/600] decision_loss=-0.0000 m∈[0.718,1.391] mean=1.002
+  [180/600] decision_loss=-0.0000 m∈[0.681,1.372] mean=0.996
+  [240/600] decision_loss=-0.0000 m∈[0.644,1.374] mean=0.992
+  [300/600] decision_loss=0.9159 m∈[0.605,1.353] mean=0.997
+  [360/600] decision_loss=1.0910 m∈[0.570,1.350] mean=0.998
+  [420/600] decision_loss=-0.0000 m∈[0.534,1.377] mean=0.992
+  [480/600] decision_loss=-0.0000 m∈[0.469,1.369] mean=0.995
+  [540/600] decision_loss=1.6585 m∈[0.424,1.397] mean=0.997
+  [600/600] decision_loss=-0.0000 m∈[0.368,1.376] mean=0.999
+[promptcal_v2] 완료 (log_m 총 이동량=7.728 — 0이면 scale이 안 움직인 것)
+    0 |   7.04% |   7.04% |     0.0%
+--------------------------------------------------------------------------
+ mean |   7.04% |   7.04% |     0.0%
+==========================================================================
+
+판정:
+ - PC-v2 H_eval flip < naive & < AdaRound 이고 seed 일관 → v2 방향 성공.
+ - naive와 비슷/높음 → scale+decision으로도 전이 실패. 설계 문서의 대안(§9)로.
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+==========================================================================
+ E v2: decision 보존 + scale 최적화 vs baseline
+==========================================================================
+ seed |   naive |   PC-v2 | vs naive
+--------------------------------------------------------------------------
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal_v2] scale conv 71개, removed(H_cal) 20, keep(S) 40, 목적=decision CE(temp=1.0, gate=0.0)
+  [60/600] decision_loss=1.6508 m∈[0.804,1.279] mean=1.015
+  [120/600] decision_loss=-0.0000 m∈[0.725,1.384] mean=1.015
+  [180/600] decision_loss=-0.0000 m∈[0.671,1.367] mean=1.005
+  [240/600] decision_loss=-0.0000 m∈[0.633,1.381] mean=1.003
+  [300/600] decision_loss=0.8370 m∈[0.633,1.362] mean=1.007
+  [360/600] decision_loss=1.0560 m∈[0.630,1.375] mean=1.014
+  [420/600] decision_loss=-0.0000 m∈[0.630,1.361] mean=1.014
+  [480/600] decision_loss=-0.0000 m∈[0.619,1.623] mean=1.019
+  [540/600] decision_loss=1.6467 m∈[0.619,1.712] mean=1.024
+  [600/600] decision_loss=-0.0000 m∈[0.632,1.692] mean=1.017
+[promptcal_v2] 완료 (log_m 총 이동량=8.363 — 0이면 scale이 안 움직인 것)
+    0 |   8.99% |   8.99% |     0.0%
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal_v2] scale conv 71개, removed(H_cal) 20, keep(S) 40, 목적=decision CE(temp=1.0, gate=0.0)
+  [60/600] decision_loss=0.6934 m∈[0.814,1.187] mean=1.001
+  [120/600] decision_loss=-0.0000 m∈[0.736,1.213] mean=0.998
+  [180/600] decision_loss=0.4409 m∈[0.687,1.223] mean=0.994
+  [240/600] decision_loss=0.7399 m∈[0.669,1.228] mean=0.988
+  [300/600] decision_loss=1.2667 m∈[0.641,1.328] mean=0.991
+  [360/600] decision_loss=1.3529 m∈[0.621,1.283] mean=0.992
+  [420/600] decision_loss=0.7787 m∈[0.617,1.297] mean=0.993
+  [480/600] decision_loss=-0.0000 m∈[0.562,1.418] mean=0.997
+  [540/600] decision_loss=0.6340 m∈[0.481,1.717] mean=0.998
+  [600/600] decision_loss=-0.0000 m∈[0.436,1.761] mean=0.994
+[promptcal_v2] 완료 (log_m 총 이동량=8.364 — 0이면 scale이 안 움직인 것)
+    1 |   9.81% |   9.81% |     0.0%
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal_v2] scale conv 71개, removed(H_cal) 20, keep(S) 40, 목적=decision CE(temp=1.0, gate=0.0)
+  [60/600] decision_loss=0.3851 m∈[0.741,1.183] mean=0.987
+  [120/600] decision_loss=0.3447 m∈[0.650,1.265] mean=0.987
+  [180/600] decision_loss=0.5843 m∈[0.567,1.342] mean=0.988
+  [240/600] decision_loss=0.6049 m∈[0.499,1.344] mean=0.989
+  [300/600] decision_loss=0.4631 m∈[0.444,1.368] mean=0.989
+  [360/600] decision_loss=0.1790 m∈[0.402,1.334] mean=0.994
+  [420/600] decision_loss=-0.0000 m∈[0.363,1.422] mean=0.995
+  [480/600] decision_loss=-0.0000 m∈[0.327,1.347] mean=0.991
+  [540/600] decision_loss=0.3468 m∈[0.290,1.442] mean=0.995
+  [600/600] decision_loss=0.3737 m∈[0.263,1.428] mean=0.992
+[promptcal_v2] 완료 (log_m 총 이동량=9.674 — 0이면 scale이 안 움직인 것)
+    2 |   9.92% |   9.92% |     0.0%
+--------------------------------------------------------------------------
+ mean |   9.57% |   9.57% |     0.0%
+==========================================================================
+
+판정:
+ - PC-v2 H_eval flip < naive & < AdaRound 이고 seed 일관 → v2 방향 성공.
+ - naive와 비슷/높음 → scale+decision으로도 전이 실패. 설계 문서의 대안(§9)로.

@@ -1,0 +1,30 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] P0 naive         wrapped(quant)=71  skip=[]
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] P1 cv4-FP        wrapped(quant)=71  skip=['cv4']
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] P2 head-FP       wrapped(quant)=34  skip=['cv2', 'cv3', 'cv4']
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] P3 head+last1    wrapped(quant)=31  skip=['22', '23', 'cv2', 'cv3', 'cv4']
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] P4 head+last2    wrapped(quant)=31  skip=['21', '22', '23', 'cv2', 'cv3', 'cv4']
+
+==============================================================================
+ 손상 위치 진단: skip 사다리 vs held-out flip (낮을수록 손상 적음)
+==============================================================================
+config           | quantConv | seed 0 | seed 1 | seed 2 |   mean | Δ vs naive
+------------------------------------------------------------------------------
+P0 naive         |        71 |  7.42% |  9.94% |  9.12% |  8.83% |      +0.0%
+P1 cv4-FP        |        71 |  7.42% |  9.94% |  9.12% |  8.83% |      +0.0%
+P2 head-FP       |        34 |  3.04% |  4.04% |  4.85% |  3.98% |     -55.0%
+P3 head+last1    |        31 |  3.19% |  4.00% |  4.85% |  4.01% |     -54.6%
+P4 head+last2    |        31 |  3.19% |  4.00% |  4.85% |  4.01% |     -54.6%
+------------------------------------------------------------------------------
+
+판독:
+ - P1/P2에서 held-out이 크게 ↓ → 손상은 head(결정 지점). cv4/head mixed-precision이 방법.
+ - P1/P2 미미, P3/P4에서 ↓ → 손상은 상류(neck). 00d 민감도로 타깃.
+ - 어디서도 안 ↓ → 손상 광범위 분산. mixed-precision 단독 부족 → 재설계.
+ (주의: skip=FP는 '상한'. 실제 방법은 해당 지점을 A16 등 높은 bit로 두는 것.)

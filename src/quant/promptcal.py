@@ -125,3 +125,78 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
     if verbose:
         tot_change = sum(float((a.detach()-b).abs().sum()) for a,b in zip(alphas, alpha_before))
         print(f"[promptcal] 최적화 완료 (alpha 총 변화량={tot_change:.2f} — 0이면 안 움직인 것)")
+
+
+def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
+                             prompt_idx, iters=1000, lr=1e-2, k=5,
+                             conf_thres=0.25, verbose=True):
+    """
+    방향 C: rounding(alpha) 대신 learnable activation scale(s_mult)을 최적화.
+
+    동기: alpha는 이산적(0/1로 굳어야)이라 연속 목적함수(margin)와 미스매치 →
+    세 번 실패(h가 중간에 껴서 hard 전환 오류). activation scale은 연속값이라
+    margin과 결이 맞고, '굳혀야 하는' 문제가 없음.
+
+    - rounding은 round-to-nearest로 고정(soft=False, alpha 최적화 안 함).
+    - use_smult=True로 각 conv의 s_mult(초기 1.0)만 최적화.
+    - 목적: S+H_cal 프롬프트의 top-k margin을 FP와 맞춤(margin_loss).
+    """
+    ada = list_adaround_convs(quant_model)
+    for ac in ada:
+        ac.soft = False          # rounding 고정(round-to-nearest)
+        ac.ste = False
+        ac.use_smult = True      # learnable scale 모드
+        ac.alpha.requires_grad_(False)
+
+    fp_head = _find_head(fp_model); fp_cap = _CV4Capture(fp_head)
+    fp_sims = []
+    with torch.no_grad():
+        for t in calib_tensors:
+            fp_cap.clear(); fp_model(t.to(device))
+            parts = []
+            for i in sorted(fp_cap.buf):
+                B, P, H, W = fp_cap.buf[i].shape
+                parts.append(fp_cap.buf[i].reshape(B, P, H*W))
+            fp_sims.append(torch.cat(parts, dim=2)[0].transpose(0, 1).detach())
+    fp_cap.close()
+
+    q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head)
+    smults = [ac.s_mult for ac in ada]
+    s0 = [s.detach().clone() for s in smults]
+    opt = torch.optim.Adam(smults, lr=lr)
+    pidx = torch.tensor(prompt_idx, device=device)
+
+    if verbose:
+        print(f"[promptcal-C] {len(fp_sims)} calib, prompt subset {len(prompt_idx)}개, "
+              f"s_mult {len(ada)}개 최적화(scale), margin(k={k})")
+
+    n = len(calib_tensors)
+    for it in range(iters):
+        j = it % n
+        t = calib_tensors[j].to(device); sim_fp = fp_sims[j]
+        prob = sim_fp.sigmoid(); mp, _ = prob.max(-1); conf = mp > conf_thres
+        if conf.sum() == 0:
+            continue
+        aidx = conf.nonzero(as_tuple=True)[0]
+        q_cap.clear(); opt.zero_grad()
+        quant_model(t)
+        parts = []
+        for i in sorted(q_cap.buf):
+            B, P, H, W = q_cap.buf[i].shape
+            parts.append(q_cap.buf[i].reshape(B, P, H*W))
+        sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
+        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k)
+        ml.backward()
+        torch.nn.utils.clip_grad_norm_(smults, max_norm=1.0)
+        opt.step()
+
+        if verbose and (it + 1) % max(1, iters // 10) == 0:
+            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
+                  f"s_mult 평균={smean:.3f} 변화={sd:.4f}")
+
+    q_cap.close()
+    if verbose:
+        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        print(f"[promptcal-C] 완료 (s_mult 총 변화={tot:.3f})")

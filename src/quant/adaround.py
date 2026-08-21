@@ -31,6 +31,9 @@ class AdaRoundQuantConv2d(nn.Module):
         self.quantized = True
         self.soft = True                     # 최적화 중 soft, 추론 시 hard
         self.ste = False                     # PD-Quant end-to-end 시 activation STE
+        # 방향 C: learnable activation scale multiplier (초기 1.0, 연속 최적화용)
+        self.s_mult = nn.Parameter(torch.tensor(1.0))
+        self.use_smult = False               # True일 때만 s_mult 적용(scale 학습 모드)
 
         w = self.conv.weight.detach()
         qmax = 2 ** (self.w_bits - 1) - 1
@@ -54,10 +57,27 @@ class AdaRoundQuantConv2d(nn.Module):
 
     def forward(self, x):
         if self.quantized and self.a_obs.ready:
-            x = self.a_obs.quantize_ste(x) if self.ste else self.a_obs.quantize(x)
+            if self.use_smult:
+                x = self._quantize_smult(x)          # 방향 C: learnable scale로 STE 양자화
+            elif self.ste:
+                x = self.a_obs.quantize_ste(x)
+            else:
+                x = self.a_obs.quantize(x)
         wq = self.quant_weight()
         return F.conv2d(x, wq, self.conv.bias, self.conv.stride,
                         self.conv.padding, self.conv.dilation, self.conv.groups)
+
+    def _quantize_smult(self, x):
+        """learnable scale multiplier로 activation 양자화. s_mult에 grad가 흐르도록,
+        round만 STE로 통과시키고 scale 곱셈은 graph에 유지."""
+        qmin, qmax = 0, 2 ** self.a_obs.bits - 1
+        scale = self.a_obs.scale * self.s_mult.clamp(min=0.1, max=10.0)
+        zp = self.a_obs.zero_point
+        x_s = x / scale
+        # round를 STE로: forward=round, backward=identity (scale 경로는 유지)
+        x_r = x_s + (torch.round(x_s) - x_s).detach()
+        x_c = torch.clamp(x_r + zp, qmin, qmax)
+        return (x_c - zp) * scale                     # scale이 graph에 남아 s_mult grad 흐름
 
     def reg_loss(self, beta, reduction="sum"):
         r = 1 - (2 * h_alpha(self.alpha) - 1).abs() ** beta
