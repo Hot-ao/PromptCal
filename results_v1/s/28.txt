@@ -1,0 +1,21 @@
+[build] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] Ours(cv3@A11)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+    scale conv 총 71개 중 head 18개 → backbone/neck 53개만 학습
+
+==========================================================================================
+ head 보호 + PromptCal(backbone만) vs 현재 method
+==========================================================================================
+ seed |          naive |  Ours(cv3@A11) |  +PC(backbone) |       +PC(all) |     PC효과
+------------------------------------------------------------------------------------------
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+    0 |          8.06% |          5.34% |          9.35% |          9.09% |   +75.0%
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+    1 |         10.05% |          6.35% |         13.77% |         14.78% |  +117.0%
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs

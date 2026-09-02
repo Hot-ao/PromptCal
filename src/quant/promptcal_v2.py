@@ -211,12 +211,19 @@ def _assemble_sim_from_cap(cap):
 
 def optimize_promptcal_v2(quant_model, fp_model, calib_tensors, device,
                           removed_cols, keep_cols, iters=150, lr=3e-3,
-                          conf_thres=0.25, temp=1.0, margin_gate=0.0, verbose=True):
+                          conf_thres=0.25, temp=1.0, margin_gate=0.0,
+                          train_convs=None, verbose=True):
     """
     결정 보존 목적함수로 activation scale(m)만 최적화.
 
     removed_cols : H_cal (학습에서 제거할 held-out). keep_cols : S (겨루는 남은 집합).
     ★ H_eval은 여기 어디에도 넣지 않는다(정직성). 최종 측정은 20_*의 heldout_flip에서만.
+
+    train_convs : 학습(scale 업데이트)할 LearnableScaleQuantConv2d 부분집합. None이면 전체.
+      · 지정 시 그 conv들의 log_m만 최적화. 나머지 conv는 STE로 gradient는 통과시키되
+        log_m=0(=자기 calibration scale)로 '동결'. → head를 정밀도로 보호하고 학습에서
+        빼면서, backbone/neck에만 PromptCal을 적용하는 실험에 사용.
+      · 전체 conv가 STE 경로여야 gradient가 backbone까지 흐르므로 enable은 전체에 한다.
 
     안정화(초기 실험에서 단일 이미지 스텝이 노이즈 랜덤워크로 held-out을 악화시킨 문제 대응):
       - full-batch 누적: 매 스텝 calib 전체를 돌며 gradient를 모아 한 번 업데이트(빈 스텝 제거).
@@ -228,7 +235,7 @@ def optimize_promptcal_v2(quant_model, fp_model, calib_tensors, device,
     scale_convs = list_scale_convs(quant_model)
     if len(scale_convs) == 0:
         raise RuntimeError("LearnableScaleQuantConv2d 없음. convert_to_learnable_scale 먼저 호출.")
-    enable_scale_training(quant_model)
+    enable_scale_training(quant_model)   # 전체 STE → grad가 backbone까지 흐름
 
     # FP cv4 유사도 타깃 캐시 (grad 불필요)
     fp_head = _find_head(fp_model)
@@ -242,7 +249,14 @@ def optimize_promptcal_v2(quant_model, fp_model, calib_tensors, device,
 
     q_head = _find_head(quant_model)
     q_cap = _CV4Capture(q_head)
-    params = [c.act_scale.log_m for c in scale_convs]
+    if train_convs is None:
+        train_set = scale_convs
+    else:
+        ids = {id(x) for x in train_convs}
+        train_set = [c for c in scale_convs if id(c) in ids]
+        if len(train_set) == 0:
+            raise RuntimeError("train_convs가 scale conv와 하나도 안 겹침 — 대상 확인.")
+    params = [c.act_scale.log_m for c in train_set]
     m_before = torch.tensor([p.detach().item() for p in params])
     opt = torch.optim.Adam(params, lr=lr)
 
@@ -250,7 +264,7 @@ def optimize_promptcal_v2(quant_model, fp_model, calib_tensors, device,
     keep_cols = torch.as_tensor(keep_cols, device=device)
 
     if verbose:
-        print(f"[promptcal_v2] scale conv {len(scale_convs)}개, "
+        print(f"[promptcal_v2] scale conv {len(scale_convs)}개 중 학습 {len(train_set)}개, "
               f"removed(H_cal) {len(removed_cols)}, keep(S) {len(keep_cols)}, "
               f"목적=decision CE(temp={temp}, gate={margin_gate}) | full-batch, lr={lr}")
 
