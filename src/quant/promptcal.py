@@ -44,8 +44,6 @@ def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
     w[-1] = boundary_w                            # k-1↔k 경계 강조
     return ((q_m - fp_m).pow(2) * w).mean()
 
-
-```python
 def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
                        prompt_idx, iters=1000, lr=1e-3, reg_weight=0.1,
                        decision_weight=1.0, k=5, conf_thres=0.25, verbose=True):
@@ -245,9 +243,7 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
         print(
             f"[promptcal] 최적화 완료 "
             f"(alpha 총 변화량={tot_change:.2f})"
-        )
-```
-        
+        )        
         
 def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
                              prompt_idx, iters=1000, lr=1e-2, k=5,
