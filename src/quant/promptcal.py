@@ -48,12 +48,6 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
                        prompt_idx, iters=1000, lr=1e-3, reg_weight=1.0,
                        decision_weight=0.1, k=5, conf_thres=0.25,
                        verbose=True, debug_eval=None):
-    debug_eval = {
-    "h_cal": H_cal,
-    "h_eval": H_eval,
-    "probe": probe,
-    "h_fp": h_fp,
-    }
     """
     PromptCal: semantic decision-aware rounding optimization.
 
