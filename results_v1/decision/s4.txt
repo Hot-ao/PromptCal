@@ -1,0 +1,33 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+======================================================================
+ E 최소 실험: held-out margin 보존 vs baseline
+======================================================================
+ seed |   naive | AdaRound | PromptCal |  vs Ada
+----------------------------------------------------------------------
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 60개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=1.1901 decision=0.9881 margin=0.1434 reg=0.5862 soft_flip=6.7% h→0/1=16%
+  [300/1500] loss=0.2739 decision=0.0794 margin=0.1438 reg=0.5061 soft_flip=0.0% h→0/1=23%
+  [450/1500] loss=0.3702 decision=0.0856 margin=0.2417 reg=0.4296 soft_flip=0.0% h→0/1=31%
+  [600/1500] loss=0.2936 decision=0.0484 margin=0.2090 reg=0.3621 soft_flip=0.0% h→0/1=42%
+  [750/1500] loss=0.8009 decision=0.2199 margin=0.5503 reg=0.3076 soft_flip=0.0% h→0/1=50%
+  [900/1500] loss=0.2180 decision=0.0001 margin=0.1913 reg=0.2652 soft_flip=0.0% h→0/1=57%
+  [1050/1500] loss=0.2326 decision=0.0593 margin=0.1502 reg=0.2308 soft_flip=0.0% h→0/1=62%
+  [1200/1500] loss=1.6133 decision=1.4840 margin=0.1090 reg=0.2035 soft_flip=2.0% h→0/1=67%
+  [1350/1500] loss=0.1267 decision=0.0007 margin=0.1078 reg=0.1812 soft_flip=0.0% h→0/1=70%
+  [1500/1500] loss=0.0902 decision=0.0008 margin=0.0732 reg=0.1620 soft_flip=0.0% h→0/1=73%
+[promptcal] 최적화 완료 (alpha 총 변화량=8729871.99)
+    0 |   8.59% |    8.76% |     9.04% |   -3.2%
+----------------------------------------------------------------------
+ mean |   8.59% |    8.76% |     9.04% |   -3.2%
+======================================================================
+
+판정:
+ - PromptCal H_eval flip < AdaRound이고 seed 일관 → 방향 성공(baseline 넘음).
+ - AdaRound와 비슷/높음 → 09_phase1처럼 held-out 전이 실패. 재설계 필요.

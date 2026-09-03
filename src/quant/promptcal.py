@@ -45,8 +45,15 @@ def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
     return ((q_m - fp_m).pow(2) * w).mean()
 
 def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
-                       prompt_idx, iters=1000, lr=1e-3, reg_weight=0.1,
-                       decision_weight=1.0, k=5, conf_thres=0.25, verbose=True):
+                       prompt_idx, iters=1000, lr=1e-3, reg_weight=1.0,
+                       decision_weight=0.1, k=5, conf_thres=0.25,
+                       verbose=True, debug_eval=None):
+    debug_eval = {
+    "h_cal": H_cal,
+    "h_eval": H_eval,
+    "probe": probe,
+    "h_fp": h_fp,
+    }
     """
     PromptCal: semantic decision-aware rounding optimization.
 
@@ -68,8 +75,8 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
     """
     ada = list_adaround_convs(quant_model)
     for ac in ada:
-        ac.soft = True
-        ac.ste = True
+        ac.soft = False
+        ac.ste = False
 
     # ------------------------------------------------------------
     # 1. FP similarity cache
@@ -228,6 +235,16 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
                 f"soft_flip={flip_ratio:.1f}% "
                 f"h→0/1={hc:.0f}%"
             )
+            if (it + 1) in [100, 200, 300, 500, 750, 1000, 1250, 1500]:
+                torch.save(
+                    {
+                        "iter": it + 1,
+                        "alphas": [a.detach().cpu() for a in alphas],
+                        "h": [h_alpha(a.detach()).cpu() for a in alphas],
+                    },
+                    f"/tmp/promptcal_iter_{it+1}.pt"
+                )
+            
 
     q_cap.close()
 
