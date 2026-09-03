@@ -12,20 +12,20 @@ YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients
 ----------------------------------------------------------------------
 YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
 [promptcal] 32 calib, prompt subset 60개, alpha 71개, margin 보존(k=5)
-  [150/1500] margin_loss=0.1051 h→0/1 17% (warmup)
-  [300/1500] margin_loss=0.0708 h→0/1 22% (warmup)
-  [450/1500] margin_loss=0.2224 h→0/1 26% (warmup)
-  [600/1500] margin_loss=0.0774 h→0/1 30% (warmup)
-  [750/1500] margin_loss=0.1329 h→0/1 31% (margin)
-  [900/1500] margin_loss=0.1049 h→0/1 31% (margin)
-  [1050/1500] margin_loss=0.0745 h→0/1 31% (margin)
-  [1200/1500] margin_loss=0.0414 h→0/1 31% (margin)
-  [1350/1500] margin_loss=0.0362 h→0/1 31% (margin)
-  [1500/1500] margin_loss=0.0303 h→0/1 31% (margin)
-[promptcal] 최적화 완료 (alpha 총 변화량=4330820.39 — 0이면 안 움직인 것)
-    0 |   8.59% |    8.55% |     9.45% |  -10.5%
+  [150/1500] margin=0.1051 decision=0.3559 reg=0.8598 h→0/1 17% (warmup)
+  [300/1500] margin=0.1023 decision=0.0572 reg=0.7845 h→0/1 22% (warmup)
+  [450/1500] margin=0.0859 decision=0.1185 reg=0.6951 h→0/1 26% (warmup)
+  [600/1500] margin=0.0655 decision=0.1164 reg=0.5164 h→0/1 31% (warmup)
+  [750/1500] margin=0.0756 decision=0.1736 reg=0.5116 h→0/1 31% (margin)
+  [900/1500] margin=0.0807 decision=0.0001 reg=0.5108 h→0/1 31% (margin)
+  [1050/1500] margin=0.0816 decision=0.0635 reg=0.5099 h→0/1 31% (margin)
+  [1200/1500] margin=0.0380 decision=0.2567 reg=0.5088 h→0/1 31% (margin)
+  [1350/1500] margin=0.0413 decision=0.0009 reg=0.5078 h→0/1 31% (margin)
+  [1500/1500] margin=0.0342 decision=0.0008 reg=0.5068 h→0/1 31% (margin)
+[promptcal] 최적화 완료 (alpha 총 변화량=4429632.89 — 0이면 안 움직인 것)
+    0 |   8.59% |    8.55% |     9.38% |   -9.6%
 ----------------------------------------------------------------------
- mean |   8.59% |    8.55% |     9.45% |  -10.5%
+ mean |   8.59% |    8.55% |     9.38% |   -9.6%
 ======================================================================
 
 판정:

@@ -126,11 +126,22 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
         opt.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
-            hc = sum(float(((h_alpha(a.alpha) < 0.05) | (h_alpha(a.alpha) > 0.95))
-                     .float().mean()) for a in ada) / len(ada) * 100
-            phase = "warmup" if it < warmup else "margin"
-            print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} h→0/1 {hc:.0f}% ({phase})")
+            hc = sum(
+                float(((h_alpha(a.alpha) < 0.05) | (h_alpha(a.alpha) > 0.95))
+                .float().mean())
+                for a in ada
+            ) / len(ada) * 100
 
+            phase = "warmup" if it < warmup else "margin"
+
+            print(
+                f"  [{it+1}/{iters}] "
+                f"margin={float(ml.detach()):.4f} "
+                f"decision={float(dl.detach()):.4f} "
+                f"reg={float(reg.detach()):.4f} "
+                f"h→0/1 {hc:.0f}% ({phase})"
+            )
+            
     q_cap.close()
     for ac in ada:
         ac.soft = False; ac.ste = False
@@ -205,11 +216,9 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
         if verbose and (it + 1) % max(1, iters // 10) == 0:
             sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
             smean = sum(float(s.detach()) for s in smults) / len(smults)
-            print(f"  [{it+1}/{iters}] "
-                  f"margin_loss={float(ml.detach()):.4f} "
-                  f"decision={float(dl.detach()):.4f} "
-                  f"reg={float(reg.detach()):.4f}"                  
+            print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
                   f"s_mult 평균={smean:.3f} 변화={sd:.4f}")
+
     q_cap.close()
     if verbose:
         tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
