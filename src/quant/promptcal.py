@@ -45,53 +45,39 @@ def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
     return ((q_m - fp_m).pow(2) * w).mean()
 
 
+```python
 def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
-                       prompt_idx, iters=1000, lr=1e-3, reg_weight=1.0,
-                       decision_weight=0.1,
-                       k=5, conf_thres=0.25, verbose=True):
+                       prompt_idx, iters=1000, lr=1e-3, reg_weight=0.1,
+                       decision_weight=1.0, k=5, conf_thres=0.25, verbose=True):
     """
-    held-out margin 보존 최적화. AdaRound로 초기화된 모델을 refine.
+    PromptCal: semantic decision-aware rounding optimization.
 
-    이번 버전에서는 단순 alpha 변화량뿐 아니라,
-    실제 hard rounding decision이 얼마나 바뀌는지를 checkpoint마다 추적한다.
+    핵심:
+      1. FP의 top-1 prompt를 pseudo-label로 사용.
+      2. 현재 quantized model에서 FP decision과 다른 anchor를 hard-example으로 선택.
+      3. 선택된 anchor에 대해 FP-vs-quant decision을 직접 맞추도록 CE 최적화.
+      4. margin은 보조 objective로만 사용.
+      5. alpha를 0/1로 몰아가는 강한 regularization은 사용하지 않음.
 
-    추적 항목:
-      1. margin loss
-      2. decision loss
-      3. regularization loss
-      4. h -> 0/1 비율
-      5. alpha 평균 절대 변화량
-      6. hard rounding decision 변화율
+    목적:
+      soft alpha 상태에서 단순히 margin을 줄이는 것이 아니라,
+      실제 discrete rounding 이후의 semantic decision을 보존하는 방향으로
+      alpha가 움직이는지 확인하는 것.
 
     prompt_idx:
-        calibration에 사용할 프롬프트 인덱스(S + H_cal).
-        H_eval은 포함하지 않는다.
-
-    중요:
-        h_alpha(alpha)는 soft rounding probability이고,
-        실제 discrete rounding 상태는
-            h_alpha(alpha) >= 0.5
-        를 기준으로 판단한다.
-
-        따라서 alpha가 크게 움직이더라도 hard rounding decision이
-        거의 바뀌지 않는 경우를 확인할 수 있다.
+      S + H_cal.
+      H_eval은 절대 optimization에 사용하지 않음.
     """
-
-    # ---------------------------------------------------------
-    # 1. AdaRound module 준비
-    # ---------------------------------------------------------
     ada = list_adaround_convs(quant_model)
-
     for ac in ada:
         ac.soft = True
         ac.ste = True
 
-    # ---------------------------------------------------------
-    # 2. FP cv4 similarity cache
-    # ---------------------------------------------------------
+    # ------------------------------------------------------------
+    # 1. FP similarity cache
+    # ------------------------------------------------------------
     fp_head = _find_head(fp_model)
     fp_cap = _CV4Capture(fp_head)
-
     fp_sims = []
 
     with torch.no_grad():
@@ -99,366 +85,168 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
             fp_cap.clear()
             fp_model(t.to(device))
             parts = []
-
             for i in sorted(fp_cap.buf):
                 B, P, H, W = fp_cap.buf[i].shape
-                parts.append(
-                    fp_cap.buf[i].reshape(B, P, H * W)
-                )
-
+                parts.append(fp_cap.buf[i].reshape(B, P, H * W))
             sim = torch.cat(parts, dim=2)[0].transpose(0, 1)
-            # [A, P]
             fp_sims.append(sim.detach())
+
     fp_cap.close()
 
-    # ---------------------------------------------------------
-    # 3. Quantized model capture
-    # ---------------------------------------------------------
+    # ------------------------------------------------------------
+    # 2. Quantized model capture
+    # ------------------------------------------------------------
     q_head = _find_head(quant_model)
     q_cap = _CV4Capture(q_head)
 
     alphas = [ac.alpha for ac in ada]
+    alpha_before = [a.detach().clone() for a in alphas]
 
-    # ---------------------------------------------------------
-    # 4. 최적화 시작 전 상태 저장
-    # ---------------------------------------------------------
-    alpha_before = [
-        a.detach().clone()
-        for a in alphas
-    ]
-
-    # ★ 핵심 진단:
-    # 최적화 시작 시점의 hard rounding 상태를 저장
-    #
-    # h_alpha(alpha) >= 0.5
-    #     -> upper/higher rounding
-    # h_alpha(alpha) < 0.5
-    #     -> lower rounding
-    #
-    hard_before = [
-        (h_alpha(a).detach() >= 0.5).clone()
-        for a in alphas
-    ]
-
-    # 전체 rounding parameter 개수
-    hard_total = sum(
-        x.numel()
-        for x in hard_before
-    )
-
-    opt = torch.optim.Adam(
-        alphas,
-        lr=lr
-    )
-
-    pidx = torch.tensor(
-        prompt_idx,
-        device=device
-    )
+    opt = torch.optim.Adam(alphas, lr=lr)
+    pidx = torch.tensor(prompt_idx, device=device, dtype=torch.long)
 
     if verbose:
-        print(
-            f"[promptcal] {len(fp_sims)} calib, "
-            f"prompt subset {len(prompt_idx)}개, "
-            f"alpha {len(ada)}개, "
-            f"margin 보존(k={k})"
-        )
+        print(f"[promptcal] {len(fp_sims)} calib, prompt subset "
+              f"{len(prompt_idx)}개, alpha {len(ada)}개, "
+              f"decision-aware rounding(k={k})")
 
-        print(
-            f"[promptcal-debug] "
-            f"hard rounding parameter={hard_total:,}"
-        )
-
-    # ---------------------------------------------------------
-    # 5. optimization schedule
-    # ---------------------------------------------------------
     n = len(calib_tensors)
 
-    warmup = int(0.4 * iters)
-
-    # ---------------------------------------------------------
-    # 6. optimization loop
-    # ---------------------------------------------------------
     for it in range(iters):
-
         j = it % n
-
         t = calib_tensors[j].to(device)
-
         sim_fp = fp_sims[j]
 
-        # -----------------------------------------------------
-        # 6-1. confident anchor 선택
-        # -----------------------------------------------------
-        prob = sim_fp.sigmoid()
-
-        maxp, _ = prob.max(-1)
-
-        conf = maxp > conf_thres
+        # --------------------------------------------------------
+        # 3. FP confident anchors
+        # --------------------------------------------------------
+        prob_fp = sim_fp.sigmoid()
+        maxp_fp, fp_top1 = prob_fp.max(-1)
+        conf = maxp_fp > conf_thres
 
         if conf.sum() == 0:
             continue
 
-        aidx = conf.nonzero(
-            as_tuple=True
-        )[0]
+        aidx_all = conf.nonzero(as_tuple=True)[0]
 
-        # -----------------------------------------------------
-        # 6-2. quantized forward
-        # -----------------------------------------------------
+        # --------------------------------------------------------
+        # 4. Quantized forward
+        # --------------------------------------------------------
         q_cap.clear()
-
         opt.zero_grad()
 
         quant_model(t)
 
         parts = []
-
         for i in sorted(q_cap.buf):
             B, P, H, W = q_cap.buf[i].shape
+            parts.append(q_cap.buf[i].reshape(B, P, H * W))
 
-            parts.append(
-                q_cap.buf[i].reshape(
-                    B,
-                    P,
-                    H * W
-                )
-            )
+        sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
 
-        sim_q = torch.cat(
-            parts,
-            dim=2
-        )[0].transpose(0, 1)
+        # --------------------------------------------------------
+        # 5. Calibration prompt subset
+        # --------------------------------------------------------
+        sq = sim_q[aidx_all][:, pidx]
+        sf = sim_fp[aidx_all][:, pidx]
 
-        # [A, P]
+        # FP top-1 inside the calibration prompt subset
+        fp_target = sf.argmax(dim=-1).detach()
 
-        # -----------------------------------------------------
-        # 6-3. S + H_cal prompt subset
-        # -----------------------------------------------------
-        sq = sim_q[aidx][:, pidx]
+        # Current quantized top-1
+        q_prob = sq.sigmoid()
+        q_top1 = q_prob.argmax(dim=-1).detach()
 
-        sf = sim_fp[aidx][:, pidx]
+        # --------------------------------------------------------
+        # 6. Hard semantic examples
+        #
+        # FP와 quant decision이 이미 같은 anchor보다
+        # 현재 decision이 뒤집힌 anchor에 더 강한 gradient를 준다.
+        # --------------------------------------------------------
+        hard = q_top1 != fp_target
 
-        # -----------------------------------------------------
-        # 6-4. losses
-        # -----------------------------------------------------
-        ml = margin_loss(
-            sq,
-            sf,
-            k=k
-        )
+        if hard.any():
+            sq_h = sq[hard]
+            sf_h = sf[hard]
+            target_h = fp_target[hard]
 
-        dl = decision_loss(
-            sq,
-            sf
-        )
-
-        # -----------------------------------------------------
-        # 6-5. warmup / margin phase
-        # -----------------------------------------------------
-        if it < warmup:
-
-            beta = max(
-                2.0,
-                20.0 * (1 - it / warmup)
-            )
-
-            rw = 10.0
-
+            decision = F.cross_entropy(sq_h, target_h)
         else:
+            # 이미 decision이 모두 일치하면 전체 anchor를 사용하되
+            # gradient가 지나치게 커지지 않도록 평균 CE만 사용.
+            decision = F.cross_entropy(sq, fp_target)
 
-            beta = 2.0
+        # --------------------------------------------------------
+        # 7. Margin preservation
+        #
+        # decision loss가 주 objective.
+        # margin은 decision boundary 주변의 안정성을 보조.
+        # --------------------------------------------------------
+        margin = margin_loss(sq, sf, k=k, boundary_w=3.0)
 
-            rw = reg_weight
-
-        # -----------------------------------------------------
-        # 6-6. AdaRound regularization
-        # -----------------------------------------------------
+        # --------------------------------------------------------
+        # 8. Alpha regularization
+        #
+        # 강한 h->0/1 forcing을 하지 않는다.
+        # 현재 rounding 상태에서 너무 멀리 이동하는 것을 약하게 억제.
+        # --------------------------------------------------------
         reg = sum(
-            ac.reg_loss(
-                beta,
-                reduction="mean"
-            )
+            ac.reg_loss(beta=2.0, reduction="mean")
             for ac in ada
         ) / len(ada)
 
-        # -----------------------------------------------------
-        # 6-7. total loss
-        # -----------------------------------------------------
         loss = (
-            ml
-            + rw * reg
-            + decision_weight * dl
+            decision_weight * decision
+            + margin
+            + reg_weight * reg
         )
 
-        # -----------------------------------------------------
-        # 6-8. backward
-        # -----------------------------------------------------
         loss.backward()
-
-        torch.nn.utils.clip_grad_norm_(
-            alphas,
-            max_norm=1.0
-        )
-
+        torch.nn.utils.clip_grad_norm_(alphas, max_norm=1.0)
         opt.step()
 
-        # =====================================================
-        # 7. CHECKPOINT DIAGNOSTICS
-        # =====================================================
-        if verbose and (
-            (it + 1) % max(1, iters // 10) == 0
-        ):
+        # --------------------------------------------------------
+        # 9. Logging
+        # --------------------------------------------------------
+        if verbose and (it + 1) % max(1, iters // 10) == 0:
+            with torch.no_grad():
+                flip_ratio = float(hard.float().mean()) * 100.0
+                hc = sum(
+                    float(
+                        (
+                            (h_alpha(a.alpha) < 0.05)
+                            | (h_alpha(a.alpha) > 0.95)
+                        ).float().mean()
+                    )
+                    for a in ada
+                ) / len(ada) * 100.0
 
-            # -------------------------------------------------
-            # 7-1. soft rounding saturation
-            # -------------------------------------------------
-            hc = sum(
-                float(
-                    (
-                        (h_alpha(a) < 0.05)
-                        |
-                        (h_alpha(a) > 0.95)
-                    ).float().mean()
-                )
-                for a in alphas
-            ) / len(alphas) * 100
-
-            # -------------------------------------------------
-            # 7-2. alpha 평균 절대 변화량
-            # -------------------------------------------------
-            alpha_abs_change = sum(
-                float(
-                    (a.detach() - b).abs().mean()
-                )
-                for a, b in zip(
-                    alphas,
-                    alpha_before
-                )
-            ) / len(alphas)
-
-            # -------------------------------------------------
-            # 7-3. 현재 hard rounding 상태
-            # -------------------------------------------------
-            hard_now = [
-                (
-                    h_alpha(a).detach() >= 0.5
-                ).clone()
-                for a in alphas
-            ]
-
-            # -------------------------------------------------
-            # 7-4. 시작 시점 대비 hard rounding 변화
-            # -------------------------------------------------
-            hard_changed = sum(
-                int(
-                    (now != before).sum()
-                )
-                for now, before in zip(
-                    hard_now,
-                    hard_before
-                )
-            )
-
-            hard_change_pct = (
-                hard_changed
-                / max(hard_total, 1)
-                * 100.0
-            )
-
-            # -------------------------------------------------
-            # 7-5. 현재 hard rounding의 개수
-            # -------------------------------------------------
-            hard_high_pct = (
-                sum(
-                    int(x.sum())
-                    for x in hard_now
-                )
-                / max(hard_total, 1)
-                * 100.0
-            )
-
-            phase = (
-                "warmup"
-                if it < warmup
-                else "margin"
-            )
-
-            # -------------------------------------------------
-            # 7-6. 로그 출력
-            # -------------------------------------------------
             print(
                 f"  [{it+1}/{iters}] "
-                f"margin={float(ml.detach()):.4f} "
-                f"decision={float(dl.detach()):.4f} "
+                f"loss={float(loss.detach()):.4f} "
+                f"decision={float(decision.detach()):.4f} "
+                f"margin={float(margin.detach()):.4f} "
                 f"reg={float(reg.detach()):.4f} "
-                f"h→0/1={hc:.0f}% "
-                f"alphaΔ={alpha_abs_change:.6f} "
-                f"hardΔ={hard_change_pct:.4f}% "
-                f"hard_hi={hard_high_pct:.2f}% "
-                f"({phase})"
+                f"soft_flip={flip_ratio:.1f}% "
+                f"h→0/1={hc:.0f}%"
             )
 
-    # ---------------------------------------------------------
-    # 8. cleanup
-    # ---------------------------------------------------------
     q_cap.close()
 
     for ac in ada:
         ac.soft = False
         ac.ste = False
 
-    # ---------------------------------------------------------
-    # 9. 최종 diagnostics
-    # ---------------------------------------------------------
     if verbose:
-
-        # 전체 alpha 절대 변화량
         tot_change = sum(
-            float(
-                (a.detach() - b).abs().sum()
-            )
-            for a, b in zip(
-                alphas,
-                alpha_before
-            )
+            float((a.detach() - b).abs().sum())
+            for a, b in zip(alphas, alpha_before)
         )
-
-        # 최종 hard rounding
-        hard_final = [
-            (
-                h_alpha(a).detach() >= 0.5
-            ).clone()
-            for a in alphas
-        ]
-
-        final_hard_changed = sum(
-            int(
-                (now != before).sum()
-            )
-            for now, before in zip(
-                hard_final,
-                hard_before
-            )
-        )
-
-        final_hard_change_pct = (
-            final_hard_changed
-            / max(hard_total, 1)
-            * 100.0
-        )
-
         print(
             f"[promptcal] 최적화 완료 "
             f"(alpha 총 변화량={tot_change:.2f})"
         )
-
-        print(
-            f"[promptcal-debug] "
-            f"hard rounding 변화="
-            f"{final_hard_changed:,}/{hard_total:,} "
-            f"({final_hard_change_pct:.4f}%)"
-        )
+```
         
         
 def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
