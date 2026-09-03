@@ -21,6 +21,16 @@ import torch.nn.functional as F
 from .adaround import AdaRoundQuantConv2d, list_adaround_convs, h_alpha
 from .pdquant import _find_head, _CV4Capture
 
+def decision_loss(sim_q, sim_fp):
+    """
+    FP의 top-1 prompt를 pseudo-label로 사용하여
+    quantized model의 top-1 decision을 FP와 일치시키는 loss.
+
+    sim_*: [anchors, P] pre-sigmoid similarity
+    """
+    target = sim_fp.argmax(dim=-1).detach()  # FP top-1 = pseudo-GT
+    return F.cross_entropy(sim_q, target)
+
 
 def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
     """top-(k+1) 인접 pairwise margin을 FP와 맞춤. top-k 경계 margin에 가중.
@@ -37,6 +47,7 @@ def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
 
 def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
                        prompt_idx, iters=1000, lr=1e-3, reg_weight=1.0,
+                       decision_weight=0.1,
                        k=5, conf_thres=0.25, verbose=True):
     """
     held-out margin 보존 최적화. AdaRound로 초기화된 모델을 refine.
@@ -100,6 +111,7 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
         sq = sim_q[aidx][:, pidx]
         sf = sim_fp[aidx][:, pidx]
         ml = margin_loss(sq, sf, k=k)
+        dl = decision_loss(sq, sf)
         # rounding 수렴: 전반부 reg 강하게(h→0/1), 후반부 완화 + margin 주도
         if it < warmup:
             beta = max(2.0, 20.0 * (1 - it / warmup))
@@ -108,7 +120,7 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
             beta = 2.0
             rw = reg_weight                            # margin 주도
         reg = sum(ac.reg_loss(beta, reduction="mean") for ac in ada) / len(ada)
-        loss = ml + rw * reg
+        loss = ml + rw * reg + decision_weight * dl
         loss.backward()
         torch.nn.utils.clip_grad_norm_(alphas, max_norm=1.0)
         opt.step()
@@ -193,9 +205,11 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
         if verbose and (it + 1) % max(1, iters // 10) == 0:
             sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
             smean = sum(float(s.detach()) for s in smults) / len(smults)
-            print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
+            print(f"  [{it+1}/{iters}] "
+                  f"margin_loss={float(ml.detach()):.4f} "
+                  f"decision={float(dl.detach()):.4f} "
+                  f"reg={float(reg.detach()):.4f}"                  
                   f"s_mult 평균={smean:.3f} 변화={sd:.4f}")
-
     q_cap.close()
     if verbose:
         tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
