@@ -1,0 +1,106 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+====================================================================================================
+ S-only control: H_cal을 objective에서 완전 배제, pidx=S(40개)만 사용
+====================================================================================================
+
+--- seed 0 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 40개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.2588 decision=0.8558 margin=0.1086 reg=0.6458 soft_flip=3.3% h→0/1=12%
+  [300/1500] loss=0.1525 decision=0.4426 margin=0.0453 reg=0.6292 soft_flip=0.0% h→0/1=13%
+  [450/1500] loss=0.1555 decision=0.2310 margin=0.0710 reg=0.6140 soft_flip=0.0% h→0/1=15%
+  [600/1500] loss=0.1019 decision=0.0055 margin=0.0412 reg=0.6014 soft_flip=0.0% h→0/1=18%
+  [750/1500] loss=0.1584 decision=0.3149 margin=0.0677 reg=0.5921 soft_flip=0.0% h→0/1=19%
+  [900/1500] loss=0.2171 decision=0.0001 margin=0.1586 reg=0.5853 soft_flip=0.0% h→0/1=20%
+  [1050/1500] loss=0.2189 decision=0.8683 margin=0.0740 reg=0.5798 soft_flip=6.7% h→0/1=21%
+  [1200/1500] loss=0.2208 decision=1.1521 margin=0.0480 reg=0.5755 soft_flip=2.0% h→0/1=22%
+  [1350/1500] loss=0.1645 decision=0.4630 margin=0.0610 reg=0.5719 soft_flip=0.0% h→0/1=22%
+  [1500/1500] loss=0.2693 decision=1.8071 margin=0.0318 reg=0.5687 soft_flip=14.5% h→0/1=22%
+[promptcal] 최적화 완료 (alpha 총 변화량=2031550.96)
+
+  [S, 최적화 타깃 -- 개선돼야 objective가 작동했다는 뜻]
+    AdaRound  flip=  9.84%  margin=0.1264
+    PromptCal flip=  9.57%  margin=0.0866
+  [H_cal, objective가 전혀 안 건드린 대조군 -- AdaRound와 비슷해야 정상]
+    AdaRound  flip=  6.69%
+    PromptCal flip=  6.98%
+  [H_eval, 최종 헤드라인]
+    naive     flip=  8.14%
+    AdaRound  flip=  7.95%
+    PromptCal flip=  8.69%
+
+--- seed 1 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 40개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.3266 decision=1.3696 margin=0.1250 reg=0.6462 soft_flip=6.7% h→0/1=12%
+  [300/1500] loss=0.2514 decision=1.3992 margin=0.0485 reg=0.6300 soft_flip=9.5% h→0/1=13%
+  [450/1500] loss=0.1381 decision=0.1206 margin=0.0645 reg=0.6152 soft_flip=0.0% h→0/1=15%
+  [600/1500] loss=0.1224 decision=0.0488 margin=0.0573 reg=0.6031 soft_flip=0.0% h→0/1=17%
+  [750/1500] loss=0.3276 decision=0.8644 margin=0.1817 reg=0.5941 soft_flip=16.7% h→0/1=19%
+  [900/1500] loss=0.2414 decision=1.3419 margin=0.0485 reg=0.5876 soft_flip=10.0% h→0/1=20%
+  [1050/1500] loss=0.2535 decision=1.2334 margin=0.0720 reg=0.5823 soft_flip=3.8% h→0/1=21%
+  [1200/1500] loss=0.2238 decision=0.9665 margin=0.0693 reg=0.5782 soft_flip=6.1% h→0/1=21%
+  [1350/1500] loss=0.1904 decision=0.7824 margin=0.0547 reg=0.5748 soft_flip=0.0% h→0/1=22%
+  [1500/1500] loss=0.2325 decision=1.4220 margin=0.0331 reg=0.5718 soft_flip=1.6% h→0/1=22%
+[promptcal] 최적화 완료 (alpha 총 변화량=1946617.94)
+
+  [S, 최적화 타깃 -- 개선돼야 objective가 작동했다는 뜻]
+    AdaRound  flip= 10.46%  margin=0.1303
+    PromptCal flip= 10.72%  margin=0.1102
+  [H_cal, objective가 전혀 안 건드린 대조군 -- AdaRound와 비슷해야 정상]
+    AdaRound  flip=  8.96%
+    PromptCal flip=  9.25%
+  [H_eval, 최종 헤드라인]
+    naive     flip=  9.56%
+    AdaRound  flip=  8.97%
+    PromptCal flip= 10.10%
+
+--- seed 2 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 40개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.1875 decision=0.3026 margin=0.0927 reg=0.6459 soft_flip=0.0% h→0/1=12%
+  [300/1500] loss=0.1708 decision=0.2181 margin=0.0860 reg=0.6296 soft_flip=0.0% h→0/1=13%
+  [450/1500] loss=0.2082 decision=0.0329 margin=0.1434 reg=0.6147 soft_flip=0.0% h→0/1=15%
+  [600/1500] loss=0.1410 decision=0.2511 margin=0.0556 reg=0.6024 soft_flip=0.0% h→0/1=17%
+  [750/1500] loss=0.2051 decision=0.1323 margin=0.1325 reg=0.5933 soft_flip=0.0% h→0/1=19%
+  [900/1500] loss=0.1451 decision=0.0001 margin=0.0865 reg=0.5867 soft_flip=0.0% h→0/1=20%
+  [1050/1500] loss=0.1357 decision=0.0922 margin=0.0684 reg=0.5813 soft_flip=0.0% h→0/1=21%
+  [1200/1500] loss=0.1562 decision=0.1801 margin=0.0805 reg=0.5771 soft_flip=0.0% h→0/1=21%
+  [1350/1500] loss=0.2045 decision=1.0057 margin=0.0466 reg=0.5737 soft_flip=0.0% h→0/1=22%
+  [1500/1500] loss=0.1457 decision=0.4325 margin=0.0454 reg=0.5706 soft_flip=0.0% h→0/1=22%
+[promptcal] 최적화 완료 (alpha 총 변화량=1926543.73)
+
+  [S, 최적화 타깃 -- 개선돼야 objective가 작동했다는 뜻]
+    AdaRound  flip= 11.82%  margin=0.1349
+    PromptCal flip= 12.04%  margin=0.0830
+  [H_cal, objective가 전혀 안 건드린 대조군 -- AdaRound와 비슷해야 정상]
+    AdaRound  flip=  8.41%
+    PromptCal flip=  4.60%
+  [H_eval, 최종 헤드라인]
+    naive     flip=  9.18%
+    AdaRound  flip=  8.90%
+    PromptCal flip= 10.80%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |   Ada_S |    PC_S |  Ada_S_m |   PC_S_m |  Ada_Hcal |  PC_Hcal |  nv_Heval | Ada_Heval |  PC_Heval
+   0 |   9.84% |   9.57% |   0.1264 |   0.0866 |     6.69% |    6.98% |     8.14% |     7.95% |     8.69%
+   1 |  10.46% |  10.72% |   0.1303 |   0.1102 |     8.96% |    9.25% |     9.56% |     8.97% |    10.10%
+   2 |  11.82% |  12.04% |   0.1349 |   0.0830 |     8.41% |    4.60% |     9.18% |     8.90% |    10.80%
+
+판정:
+  PC_S flip/margin이 Ada_S보다 개선 안 됐다면 -> 이 실험 자체가 무효(objective가 작동 안 함).
+  PC_S 개선 확인된 상태에서:
+    PC_Heval이 29_full.txt(H_cal 포함) 수준으로 여전히 악화
+       -> 일반적 부작용 가설: alpha를 어느 방향으로 움직이든 held-out이 나빠진다.
+          capacity 제약(recon_w 강화, 대상 conv 레이어 축소) 방향으로 전환.
+    PC_Heval이 AdaRound 수준 유지
+       -> H_cal(held-out)을 objective에 넣는 것 자체가 원인. class-agnostic
+          reformulation을 계속 파되 30번과 다른 방식 필요.

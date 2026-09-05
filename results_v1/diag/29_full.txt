@@ -1,0 +1,96 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+====================================================================================================
+ 진단: soft/discrete x H_cal/H_eval 분리 측정
+====================================================================================================
+
+--- seed 0 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 60개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.2540 decision=0.8807 margin=0.1013 reg=0.6461 soft_flip=6.7% h→0/1=12%
+  [300/1500] loss=0.1188 decision=0.0463 margin=0.0511 reg=0.6299 soft_flip=0.0% h→0/1=13%
+  [450/1500] loss=0.2033 decision=0.1383 margin=0.1280 reg=0.6153 soft_flip=0.0% h→0/1=15%
+  [600/1500] loss=0.1058 decision=0.0490 margin=0.0406 reg=0.6032 soft_flip=0.0% h→0/1=17%
+  [750/1500] loss=0.1707 decision=0.1685 margin=0.0944 reg=0.5944 soft_flip=0.0% h→0/1=19%
+  [900/1500] loss=0.1689 decision=0.0002 margin=0.1101 reg=0.5880 soft_flip=0.0% h→0/1=20%
+  [1050/1500] loss=0.2257 decision=0.8616 margin=0.0812 reg=0.5828 soft_flip=1.9% h→0/1=21%
+  [1200/1500] loss=0.1352 decision=0.2363 margin=0.0537 reg=0.5788 soft_flip=0.0% h→0/1=21%
+  [1350/1500] loss=0.0888 decision=0.0010 margin=0.0311 reg=0.5755 soft_flip=0.0% h→0/1=22%
+  [1500/1500] loss=0.0861 decision=0.0009 margin=0.0288 reg=0.5726 soft_flip=0.0% h→0/1=22%
+[promptcal] 최적화 완료 (alpha 총 변화량=1872417.54)
+
+  [H_cal, n_anchor≈688]  (n_anchor은 confident+H_cal-top1 anchor 수)
+    AdaRound(무관)        flip=  6.69%  margin=0.1371
+    PromptCal soft        flip=  3.92%  margin=0.0564  (n=688)
+    PromptCal discrete    flip=  5.23%  margin=0.0790  (n=688)
+  [H_eval, 최종 헤드라인]
+    naive     flip=  8.99%
+    AdaRound  flip=  8.64%
+    PromptCal flip=  9.41%
+
+--- seed 1 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 60개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.6346 decision=2.3077 margin=0.3393 reg=0.6458 soft_flip=3.3% h→0/1=12%
+  [300/1500] loss=0.1216 decision=0.0585 margin=0.0528 reg=0.6296 soft_flip=0.0% h→0/1=13%
+  [450/1500] loss=0.1318 decision=0.1391 margin=0.0564 reg=0.6149 soft_flip=0.0% h→0/1=15%
+  [600/1500] loss=0.1102 decision=0.0491 margin=0.0451 reg=0.6028 soft_flip=0.0% h→0/1=17%
+  [750/1500] loss=0.2520 decision=0.7779 margin=0.1149 reg=0.5939 soft_flip=5.6% h→0/1=19%
+  [900/1500] loss=0.1926 decision=0.0001 margin=0.1338 reg=0.5874 soft_flip=0.0% h→0/1=20%
+  [1050/1500] loss=0.2518 decision=1.1231 margin=0.0813 reg=0.5822 soft_flip=7.6% h→0/1=21%
+  [1200/1500] loss=0.1123 decision=0.0155 margin=0.0529 reg=0.5781 soft_flip=0.0% h→0/1=21%
+  [1350/1500] loss=0.0972 decision=0.0091 margin=0.0388 reg=0.5748 soft_flip=0.0% h→0/1=22%
+  [1500/1500] loss=0.0968 decision=0.0013 margin=0.0395 reg=0.5718 soft_flip=0.0% h→0/1=22%
+[promptcal] 최적화 완료 (alpha 총 변화량=1937098.70)
+
+  [H_cal, n_anchor≈670]  (n_anchor은 confident+H_cal-top1 anchor 수)
+    AdaRound(무관)        flip=  8.96%  margin=0.1432
+    PromptCal soft        flip=  6.57%  margin=0.0775  (n=670)
+    PromptCal discrete    flip=  7.76%  margin=0.1022  (n=670)
+  [H_eval, 최종 헤드라인]
+    naive     flip=  9.81%
+    AdaRound  flip=  9.23%
+    PromptCal flip= 10.59%
+
+--- seed 2 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 60개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.1750 decision=0.0006 margin=0.1103 reg=0.6460 soft_flip=0.0% h→0/1=12%
+  [300/1500] loss=0.1324 decision=0.0283 margin=0.0666 reg=0.6299 soft_flip=0.0% h→0/1=13%
+  [450/1500] loss=0.1257 decision=0.0306 margin=0.0611 reg=0.6153 soft_flip=0.0% h→0/1=15%
+  [600/1500] loss=0.1135 decision=0.0574 margin=0.0474 reg=0.6032 soft_flip=0.0% h→0/1=17%
+  [750/1500] loss=0.3663 decision=0.8022 margin=0.2266 reg=0.5943 soft_flip=16.7% h→0/1=19%
+  [900/1500] loss=0.1534 decision=0.0002 margin=0.0946 reg=0.5879 soft_flip=0.0% h→0/1=20%
+  [1050/1500] loss=0.1484 decision=0.1546 margin=0.0747 reg=0.5827 soft_flip=0.0% h→0/1=21%
+  [1200/1500] loss=0.1338 decision=0.0226 margin=0.0737 reg=0.5787 soft_flip=0.0% h→0/1=21%
+  [1350/1500] loss=0.1339 decision=0.2995 margin=0.0464 reg=0.5754 soft_flip=0.0% h→0/1=22%
+  [1500/1500] loss=0.1000 decision=0.0015 margin=0.0426 reg=0.5724 soft_flip=0.0% h→0/1=22%
+[promptcal] 최적화 완료 (alpha 총 변화량=1855221.11)
+
+  [H_cal, n_anchor≈761]  (n_anchor은 confident+H_cal-top1 anchor 수)
+    AdaRound(무관)        flip=  8.41%  margin=0.1415
+    PromptCal soft        flip=  6.83%  margin=0.0655  (n=761)
+    PromptCal discrete    flip=  6.44%  margin=0.0834  (n=761)
+  [H_eval, 최종 헤드라인]
+    naive     flip=  9.92%
+    AdaRound  flip=  9.74%
+    PromptCal flip= 10.60%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |  Ada_Hcal | PCsoft_Hcal | PCdisc_Hcal | Ada_Hcal_m | PCsoft_Hcal_m | PCdisc_Hcal_m |  nv_Heval | Ada_Heval |  PC_Heval
+   0 |     6.69% |       3.92% |       5.23% |     0.1371 |        0.0564 |        0.0790 |     8.99% |     8.64% |     9.41%
+   1 |     8.96% |       6.57% |       7.76% |     0.1432 |        0.0775 |        0.1022 |     9.81% |     9.23% |    10.59%
+   2 |     8.41% |       6.83% |       6.44% |     0.1415 |        0.0655 |        0.0834 |     9.92% |     9.74% |    10.60%
+
+판정 기준 (09-03 문서 §23):
+  soft H_cal flip < Ada_Hcal flip  이고  discrete H_cal flip이 그 개선을 못 지키면 -> Case A (soft->discrete mismatch)
+  discrete H_cal flip < Ada_Hcal flip 인데 PC_Heval >= Ada_Heval 이면          -> Case B (H_cal->H_eval 일반화 실패)
+  soft H_cal flip조차 Ada_Hcal보다 안 좋으면                                    -> Case C (objective 자체가 무력)
+  discrete H_cal flip 개선 AND PC_Heval < Ada_Heval 이면                        -> Case D (방향 유효, 다음은 seed 확대)

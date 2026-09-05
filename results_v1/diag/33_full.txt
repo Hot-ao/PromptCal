@@ -1,0 +1,109 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] warm-start + null (sanity check, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[null] alpha 71개, reg-only(beta=2.0), warm-start 위에 적용
+  [150/1500] reg=0.0093 h→0/1=99%
+  [300/1500] reg=0.0093 h→0/1=99%
+  [450/1500] reg=0.0092 h→0/1=99%
+  [600/1500] reg=0.0091 h→0/1=99%
+  [750/1500] reg=0.0091 h→0/1=99%
+  [900/1500] reg=0.0090 h→0/1=99%
+  [1050/1500] reg=0.0089 h→0/1=99%
+  [1200/1500] reg=0.0089 h→0/1=99%
+  [1350/1500] reg=0.0088 h→0/1=99%
+  [1500/1500] reg=0.0087 h→0/1=99%
+[null] 완료 (alpha 총 변화량=243827.72)
+
+====================================================================================================
+ AdaRound warm-start + semantic(S-only) vs AdaRound vs warm-start+null(sanity)
+====================================================================================================
+
+--- seed 0 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 40개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.1937 decision=0.9044 margin=0.1024 reg=0.0093 soft_flip=6.7% h→0/1=99%
+  [300/1500] loss=0.1317 decision=0.4370 margin=0.0870 reg=0.0093 soft_flip=0.0% h→0/1=99%
+  [450/1500] loss=0.2221 decision=0.3573 margin=0.1854 reg=0.0092 soft_flip=0.0% h→0/1=99%
+  [600/1500] loss=0.1542 decision=0.0081 margin=0.1525 reg=0.0091 soft_flip=0.0% h→0/1=99%
+  [750/1500] loss=0.3466 decision=0.8085 margin=0.2648 reg=0.0091 soft_flip=11.1% h→0/1=99%
+  [900/1500] loss=0.2777 decision=0.0001 margin=0.2768 reg=0.0090 soft_flip=0.0% h→0/1=99%
+  [1050/1500] loss=0.2532 decision=0.9824 margin=0.1540 reg=0.0089 soft_flip=11.4% h→0/1=99%
+  [1200/1500] loss=0.1000 decision=0.1928 margin=0.0798 reg=0.0089 soft_flip=0.0% h→0/1=99%
+  [1350/1500] loss=0.1898 decision=0.4641 margin=0.1425 reg=0.0088 soft_flip=0.0% h→0/1=99%
+  [1500/1500] loss=0.2592 decision=1.9104 margin=0.0673 reg=0.0087 soft_flip=22.6% h→0/1=99%
+[promptcal] 최적화 완료 (alpha 총 변화량=236289.63)
+
+  [S, 최적화 타깃]
+    AdaRound            flip=  9.84%  margin=0.1264
+    warmstart+semantic  flip=  9.84%  margin=0.1264
+  [H_eval, 최종 헤드라인]
+    AdaRound            flip=  7.95%
+    warmstart+null      flip=  7.95%  (sanity, ≈AdaRound 기대)
+    warmstart+semantic  flip=  7.95%
+
+--- seed 1 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 40개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.2758 decision=1.4487 margin=0.1300 reg=0.0093 soft_flip=10.0% h→0/1=99%
+  [300/1500] loss=0.2229 decision=1.4647 margin=0.0755 reg=0.0093 soft_flip=9.5% h→0/1=99%
+  [450/1500] loss=0.0964 decision=0.1255 margin=0.0829 reg=0.0092 soft_flip=0.0% h→0/1=99%
+  [600/1500] loss=0.2630 decision=0.0682 margin=0.2553 reg=0.0091 soft_flip=0.0% h→0/1=99%
+  [750/1500] loss=0.4053 decision=1.1490 margin=0.2895 reg=0.0091 soft_flip=22.2% h→0/1=99%
+  [900/1500] loss=0.2072 decision=0.9275 margin=0.1136 reg=0.0090 soft_flip=0.0% h→0/1=99%
+  [1050/1500] loss=0.2559 decision=1.2150 margin=0.1335 reg=0.0089 soft_flip=9.5% h→0/1=99%
+  [1200/1500] loss=0.2320 decision=1.0696 margin=0.1242 reg=0.0089 soft_flip=8.2% h→0/1=99%
+  [1350/1500] loss=0.2386 decision=1.5768 margin=0.0800 reg=0.0088 soft_flip=18.8% h→0/1=99%
+  [1500/1500] loss=0.1901 decision=1.2392 margin=0.0653 reg=0.0087 soft_flip=4.8% h→0/1=99%
+[promptcal] 최적화 완료 (alpha 총 변화량=236289.63)
+
+  [S, 최적화 타깃]
+    AdaRound            flip= 10.46%  margin=0.1303
+    warmstart+semantic  flip= 10.46%  margin=0.1303
+  [H_eval, 최종 헤드라인]
+    AdaRound            flip=  8.97%
+    warmstart+null      flip=  8.97%  (sanity, ≈AdaRound 기대)
+    warmstart+semantic  flip=  8.97%
+
+--- seed 2 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal] 32 calib, prompt subset 40개, alpha 71개, decision-aware rounding(k=5)
+  [150/1500] loss=0.1267 decision=0.3047 margin=0.0953 reg=0.0093 soft_flip=0.0% h→0/1=99%
+  [300/1500] loss=0.1498 decision=0.2335 margin=0.1255 reg=0.0093 soft_flip=0.0% h→0/1=99%
+  [450/1500] loss=0.1579 decision=0.0379 margin=0.1532 reg=0.0092 soft_flip=0.0% h→0/1=99%
+  [600/1500] loss=0.1822 decision=0.3006 margin=0.1512 reg=0.0091 soft_flip=0.0% h→0/1=99%
+  [750/1500] loss=0.3189 decision=0.0901 margin=0.3090 reg=0.0091 soft_flip=0.0% h→0/1=99%
+  [900/1500] loss=0.2180 decision=0.0001 margin=0.2171 reg=0.0090 soft_flip=0.0% h→0/1=99%
+  [1050/1500] loss=0.2687 decision=1.0113 margin=0.1667 reg=0.0089 soft_flip=1.0% h→0/1=99%
+  [1200/1500] loss=0.1535 decision=0.2133 margin=0.1312 reg=0.0089 soft_flip=0.0% h→0/1=99%
+  [1350/1500] loss=0.3527 decision=1.9043 margin=0.1614 reg=0.0088 soft_flip=25.0% h→0/1=99%
+  [1500/1500] loss=0.1104 decision=0.5130 margin=0.0582 reg=0.0087 soft_flip=0.0% h→0/1=99%
+[promptcal] 최적화 완료 (alpha 총 변화량=236289.63)
+
+  [S, 최적화 타깃]
+    AdaRound            flip= 11.82%  margin=0.1349
+    warmstart+semantic  flip= 11.82%  margin=0.1349
+  [H_eval, 최종 헤드라인]
+    AdaRound            flip=  8.90%
+    warmstart+null      flip=  8.90%  (sanity, ≈AdaRound 기대)
+    warmstart+semantic  flip=  8.90%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |   Ada_S |    WS_S |  Ada_S_m |   WS_S_m | Ada_Heval | WNull_Heval | WSem_Heval
+   0 |   9.84% |   9.84% |   0.1264 |   0.1264 |     7.95% |       7.95% |      7.95%
+   1 |  10.46% |  10.46% |   0.1303 |   0.1303 |     8.97% |       8.97% |      8.97%
+   2 |  11.82% |  11.82% |   0.1349 |   0.1349 |     8.90% |       8.90% |      8.90%
+
+참고: 31번(raw-init PromptCal, S-only) H_eval flip = 8.69% / 10.10% / 10.80% (seed 0/1/2)
+
+판정:
+  WNull_Heval ≈ Ada_Heval이 아니면 -> sanity check 실패, warm-start 파이프라인 자체를 점검.
+  WSem_Heval이 Ada_Heval보다 여전히 뚜렷이 나쁨(31번과 비슷한 폭)
+     -> raw-init 문제였다는 가설 기각. semantic objective 자체가 원인(init과 무관).
+  WSem_Heval이 Ada_Heval에 훨씬 가까워짐(31번보다 확연히 개선)
+     -> raw-init이 지금까지 degradation의 상당 부분을 설명. PromptCal은 항상
+        AdaRound warm-start를 거쳐야 함.

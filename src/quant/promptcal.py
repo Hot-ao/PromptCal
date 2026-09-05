@@ -47,7 +47,7 @@ def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
 def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
                        prompt_idx, iters=1000, lr=1e-3, reg_weight=1.0,
                        decision_weight=0.1, k=5, conf_thres=0.25,
-                       verbose=True, debug_eval=None):
+                       verbose=True, debug_eval=None, post_train_hook=None):
     """
     PromptCal: semantic decision-aware rounding optimization.
 
@@ -69,8 +69,8 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
     """
     ada = list_adaround_convs(quant_model)
     for ac in ada:
-        ac.soft = False
-        ac.ste = False
+        ac.soft = True
+        ac.ste = True
 
     # ------------------------------------------------------------
     # 1. FP similarity cache
@@ -241,6 +241,11 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
             
 
     q_cap.close()
+
+    if post_train_hook is not None:
+        # 아직 soft=True/ste=True인 상태(hardening 전)에서 콜백 실행.
+        # Q1~Q4 진단: soft 상태의 H_cal margin/flip을 discrete 상태와 분리해서 측정하기 위함.
+        post_train_hook(quant_model)
 
     for ac in ada:
         ac.soft = False

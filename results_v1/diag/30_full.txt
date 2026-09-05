@@ -1,0 +1,92 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+====================================================================================================
+ Semantic Calibration + Utility-Constrained Refinement 평가
+====================================================================================================
+
+--- seed 0 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[semantic_pcal] 32 calib, pool 60개, alpha 71개, k_near=5 k_far=3, stage2 시작=1050/1500
+  [150/1500] (calib) recon=0.0011 sem=0.5257 reg=0.9266 n_anchor=10 h→0/1=12%
+  [300/1500] (calib) recon=0.0016 sem=0.0866 reg=0.9092 n_anchor=21 h→0/1=13%
+  [450/1500] (calib) recon=0.0019 sem=0.1564 reg=0.8960 n_anchor=9 h→0/1=13%
+  [600/1500] (calib) recon=0.0014 sem=0.0908 reg=0.8818 n_anchor=55 h→0/1=14%
+  [750/1500] (calib) recon=0.0031 sem=0.2852 reg=0.8645 n_anchor=16 h→0/1=14%
+  [900/1500] (calib) recon=0.0031 sem=0.1542 reg=0.8416 n_anchor=10 h→0/1=15%
+  [1050/1500] (calib) recon=0.0015 sem=0.1667 reg=0.8077 n_anchor=99 h→0/1=15%
+  [1200/1500] (utility) recon=0.0022 sem=0.2667 reg=0.7549 n_anchor=39 h→0/1=16% thresh=-0.0000 box=0.1208
+  [1350/1500] (utility) recon=0.0045 sem=0.1412 reg=0.6327 n_anchor=16 h→0/1=16% thresh=-0.0000 box=0.0384
+  [1500/1500] (utility) recon=0.0014 sem=0.0545 reg=0.6297 n_anchor=62 h→0/1=16% thresh=-0.0000 box=0.0202
+[semantic_pcal] 완료 (hard rounding 확정)
+
+  [H_cal, n_anchor≈688]
+    AdaRound(무관)     flip=  7.99%  margin=0.1394
+    Ours soft          flip=  5.81%  margin=0.0868  (n=688)
+    Ours discrete      flip=  6.54%  margin=0.1161  (n=688)
+  [H_eval, 최종 헤드라인]
+    naive     flip=  8.59%
+    AdaRound  flip=  8.30%
+    Ours      flip=  9.53%
+
+--- seed 1 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[semantic_pcal] 32 calib, pool 60개, alpha 71개, k_near=5 k_far=3, stage2 시작=1050/1500
+  [150/1500] (calib) recon=0.0010 sem=0.3521 reg=0.9264 n_anchor=20 h→0/1=12%
+  [300/1500] (calib) recon=0.0017 sem=0.1163 reg=0.9091 n_anchor=21 h→0/1=13%
+  [450/1500] (calib) recon=0.0018 sem=0.1116 reg=0.8960 n_anchor=9 h→0/1=13%
+  [600/1500] (calib) recon=0.0013 sem=0.0846 reg=0.8819 n_anchor=55 h→0/1=14%
+  [750/1500] (calib) recon=0.0028 sem=0.3561 reg=0.8646 n_anchor=12 h→0/1=14%
+  [900/1500] (calib) recon=0.0035 sem=0.1352 reg=0.8418 n_anchor=10 h→0/1=15%
+  [1050/1500] (calib) recon=0.0027 sem=0.1951 reg=0.8080 n_anchor=33 h→0/1=15%
+  [1200/1500] (utility) recon=0.0025 sem=0.2016 reg=0.7552 n_anchor=49 h→0/1=16% thresh=-0.0000 box=0.0525
+  [1350/1500] (utility) recon=0.0048 sem=0.0927 reg=0.6330 n_anchor=16 h→0/1=16% thresh=-0.0000 box=0.0218
+  [1500/1500] (utility) recon=0.0014 sem=0.0856 reg=0.6299 n_anchor=62 h→0/1=16% thresh=-0.0000 box=0.0283
+[semantic_pcal] 완료 (hard rounding 확정)
+
+  [H_cal, n_anchor≈670]
+    AdaRound(무관)     flip=  9.55%  margin=0.1481
+    Ours soft          flip=  5.82%  margin=0.0981  (n=670)
+    Ours discrete      flip=  6.87%  margin=0.1191  (n=670)
+  [H_eval, 최종 헤드라인]
+    naive     flip=  9.72%
+    AdaRound  flip=  9.25%
+    Ours      flip= 10.87%
+
+--- seed 2 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[semantic_pcal] 32 calib, pool 60개, alpha 71개, k_near=5 k_far=3, stage2 시작=1050/1500
+  [150/1500] (calib) recon=0.0013 sem=0.4126 reg=0.9264 n_anchor=30 h→0/1=12%
+  [300/1500] (calib) recon=0.0018 sem=0.1229 reg=0.9088 n_anchor=21 h→0/1=13%
+  [450/1500] (calib) recon=0.0023 sem=0.1316 reg=0.8956 n_anchor=9 h→0/1=13%
+  [600/1500] (calib) recon=0.0015 sem=0.0764 reg=0.8812 n_anchor=55 h→0/1=14%
+  [750/1500] (calib) recon=0.0032 sem=0.1773 reg=0.8638 n_anchor=14 h→0/1=14%
+  [900/1500] (calib) recon=0.0030 sem=0.1024 reg=0.8410 n_anchor=10 h→0/1=15%
+  [1050/1500] (calib) recon=0.0018 sem=0.1599 reg=0.8072 n_anchor=96 h→0/1=15%
+  [1200/1500] (utility) recon=0.0030 sem=0.2683 reg=0.7545 n_anchor=49 h→0/1=16% thresh=-0.0000 box=0.0763
+  [1350/1500] (utility) recon=0.0075 sem=0.1238 reg=0.6325 n_anchor=10 h→0/1=16% thresh=-0.0000 box=0.0148
+  [1500/1500] (utility) recon=0.0017 sem=0.0558 reg=0.6293 n_anchor=62 h→0/1=16% thresh=-0.0000 box=0.0248
+[semantic_pcal] 완료 (hard rounding 확정)
+
+  [H_cal, n_anchor≈761]
+    AdaRound(무관)     flip=  9.07%  margin=0.1461
+    Ours soft          flip=  7.10%  margin=0.1432  (n=761)
+    Ours discrete      flip=  8.54%  margin=0.2119  (n=761)
+  [H_eval, 최종 헤드라인]
+    naive     flip=  9.91%
+    AdaRound  flip= 10.08%
+    Ours      flip= 11.72%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |  Ada_Hcal | Ours_soft_Hcal | Ours_disc_Hcal |  nv_Heval | Ada_Heval | Ours_Heval |   vs_Ada
+   0 |     7.99% |          5.81% |          6.54% |     8.59% |     8.30% |      9.53% |   -14.9%
+   1 |     9.55% |          5.82% |          6.87% |     9.72% |     9.25% |     10.87% |   -17.6%
+   2 |     9.07% |          7.10% |          8.54% |     9.91% |    10.08% |     11.72% |   -16.3%
+
+ mean AdaRound H_eval=9.21%  Ours H_eval=10.71%  (-16.3% vs AdaRound)

@@ -1,0 +1,53 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] Null control (semantic=0, reg only, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[null] alpha 71개, reg-only(beta=2.0), FP/calib 데이터 미사용
+  [150/1500] reg=0.5840 h→0/1=16%
+  [300/1500] reg=0.5012 h→0/1=23%
+  [450/1500] reg=0.4226 h→0/1=32%
+  [600/1500] reg=0.3546 h→0/1=43%
+  [750/1500] reg=0.3003 h→0/1=51%
+  [900/1500] reg=0.2580 h→0/1=58%
+  [1050/1500] reg=0.2242 h→0/1=63%
+  [1200/1500] reg=0.1975 h→0/1=68%
+  [1350/1500] reg=0.1754 h→0/1=71%
+  [1500/1500] reg=0.1566 h→0/1=74%
+[null] 완료 (alpha 총 변화량=8924943.05)
+
+====================================================================================================
+ Null control: semantic loss=0, reg_loss만으로 alpha 최적화(raw init, 데이터 미사용)
+====================================================================================================
+
+--- seed 0 ---
+  [S]      AdaRound flip=  9.84% margin=0.1264   Null flip=  9.31% margin=0.1554
+  [H_cal]  AdaRound flip=  6.69%   Null flip=  5.23%
+  [H_eval] AdaRound flip=  7.95%   Null flip=  8.35%
+
+--- seed 1 ---
+  [S]      AdaRound flip= 10.46% margin=0.1303   Null flip= 10.19% margin=0.1570
+  [H_cal]  AdaRound flip=  8.96%   Null flip=  8.06%
+  [H_eval] AdaRound flip=  8.97%   Null flip=  9.78%
+
+--- seed 2 ---
+  [S]      AdaRound flip= 11.82% margin=0.1349   Null flip= 10.28% margin=0.1622
+  [H_cal]  AdaRound flip=  8.41%   Null flip=  8.02%
+  [H_eval] AdaRound flip=  8.90%   Null flip=  9.18%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |   Ada_S |  Null_S |  Ada_S_m | Null_S_m |  Ada_Hcal | Null_Hcal | Ada_Heval | Null_Heval
+   0 |   9.84% |   9.31% |   0.1264 |   0.1554 |     6.69% |     5.23% |     7.95% |      8.35%
+   1 |  10.46% |  10.19% |   0.1303 |   0.1570 |     8.96% |     8.06% |     8.97% |      9.78%
+   2 |  11.82% |  10.28% |   0.1349 |   0.1622 |     8.41% |     8.02% |     8.90% |      9.18%
+
+판정:
+  Null_Heval이 Ada_Heval과 비슷 -> raw init 자체는 문제가 아님.
+     지금까지의 degradation은 진짜로 semantic objective(어떤 형태로든
+     alpha를 데이터 기반으로 움직이는 것) 자체에서 온다.
+  Null_Heval도 이미 Ada_Heval보다 나쁨 -> raw init(AdaRound reconstruction
+     warm-start 없음) 자체가 원인의 상당 부분. 다음 실험은 AdaRound로
+     먼저 warm-start한 뒤 그 위에 semantic objective를 얹는 조건으로 재설계.

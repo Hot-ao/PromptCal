@@ -1,0 +1,101 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+====================================================================================================
+ AdaRound(weight) + 방향 C(scale, S-only) 결합 vs AdaRound 단독
+====================================================================================================
+
+--- seed 0 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1222 s_mult 평균=0.969 변화=0.0618
+  [300/1500] margin_loss=0.0845 s_mult 평균=0.967 변화=0.0697
+  [450/1500] margin_loss=0.0903 s_mult 평균=0.969 변화=0.0830
+  [600/1500] margin_loss=0.1073 s_mult 평균=0.964 변화=0.0782
+  [750/1500] margin_loss=0.1502 s_mult 평균=0.974 변화=0.0810
+  [900/1500] margin_loss=0.2719 s_mult 평균=0.975 변화=0.0769
+  [1050/1500] margin_loss=0.1596 s_mult 평균=0.982 변화=0.0915
+  [1200/1500] margin_loss=0.0920 s_mult 평균=0.986 변화=0.0802
+  [1350/1500] margin_loss=0.0694 s_mult 평균=0.976 변화=0.0908
+  [1500/1500] margin_loss=0.0501 s_mult 평균=0.987 변화=0.0980
+[promptcal-C] 완료 (s_mult 총 변화=6.961)
+
+  [S, 최적화 타깃]
+    AdaRound         flip=  9.84%  margin=0.1264
+    AdaRound+scale   flip= 11.17%  margin=0.1082
+  [H_cal, 미사용 대조군]
+    AdaRound+scale   flip=  6.69%
+  [H_eval, 최종 헤드라인]
+    AdaRound         flip=  7.95%
+    AdaRound+scale   flip=  7.72%
+
+--- seed 1 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1516 s_mult 평균=0.986 변화=0.0818
+  [300/1500] margin_loss=0.1037 s_mult 평균=0.988 변화=0.0786
+  [450/1500] margin_loss=0.1211 s_mult 평균=0.983 변화=0.0893
+  [600/1500] margin_loss=0.2155 s_mult 평균=0.985 변화=0.0830
+  [750/1500] margin_loss=0.1880 s_mult 평균=0.986 변화=0.0818
+  [900/1500] margin_loss=0.1002 s_mult 평균=0.987 변화=0.0848
+  [1050/1500] margin_loss=0.1665 s_mult 평균=0.982 변화=0.0906
+  [1200/1500] margin_loss=0.2070 s_mult 평균=1.001 변화=0.0937
+  [1350/1500] margin_loss=0.0431 s_mult 평균=0.995 변화=0.0960
+  [1500/1500] margin_loss=0.0739 s_mult 평균=1.001 변화=0.0986
+[promptcal-C] 완료 (s_mult 총 변화=7.002)
+
+  [S, 최적화 타깃]
+    AdaRound         flip= 10.46%  margin=0.1303
+    AdaRound+scale   flip=  6.70%  margin=0.1068
+  [H_cal, 미사용 대조군]
+    AdaRound+scale   flip=  8.06%
+  [H_eval, 최종 헤드라인]
+    AdaRound         flip=  8.97%
+    AdaRound+scale   flip=  8.21%
+
+--- seed 2 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1636 s_mult 평균=0.968 변화=0.0637
+  [300/1500] margin_loss=0.0711 s_mult 평균=0.968 변화=0.0745
+  [450/1500] margin_loss=0.0839 s_mult 평균=0.978 변화=0.0881
+  [600/1500] margin_loss=0.1159 s_mult 평균=0.967 변화=0.0904
+  [750/1500] margin_loss=0.2255 s_mult 평균=0.967 변화=0.0821
+  [900/1500] margin_loss=0.2448 s_mult 평균=0.971 변화=0.0859
+  [1050/1500] margin_loss=0.1956 s_mult 평균=0.981 변화=0.0892
+  [1200/1500] margin_loss=0.1742 s_mult 평균=0.985 변화=0.0890
+  [1350/1500] margin_loss=0.0524 s_mult 평균=0.976 변화=0.0837
+  [1500/1500] margin_loss=0.0841 s_mult 평균=0.973 변화=0.0837
+[promptcal-C] 완료 (s_mult 총 변화=5.945)
+
+  [S, 최적화 타깃]
+    AdaRound         flip= 11.82%  margin=0.1349
+    AdaRound+scale   flip= 16.85%  margin=0.1415
+  [H_cal, 미사용 대조군]
+    AdaRound+scale   flip=  6.70%
+  [H_eval, 최종 헤드라인]
+    AdaRound         flip=  8.90%
+    AdaRound+scale   flip=  9.58%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |   Ada_S |  Comb_S |  Ada_S_m | Comb_S_m | Ada_Heval | Comb_Heval
+   0 |   9.84% |  11.17% |   0.1264 |   0.1082 |     7.95% |      7.72%
+   1 |  10.46% |   6.70% |   0.1303 |   0.1068 |     8.97% |      8.21%
+   2 |  11.82% |  16.85% |   0.1349 |   0.1415 |     8.90% |      9.58%
+
+참고: 34번(방향 C 단독, weight=naive) H_eval = 7.67% / 9.12% / 9.07% (seed 0/1/2)
+참고: naive H_eval = 8.14% / 9.56% / 9.18% (seed 0/1/2)
+
+판정:
+  Comb_S_m이 Ada_S_m보다 개선 안 됐으면 -> objective가 이 조합에서 작동 안 함(무효).
+  Comb_Heval < Ada_Heval (동일 weight rounding 대비 순수 semantic 효과)
+     -> AdaRound의 reconstruction 품질을 유지하면서 semantic 보존도 얻는 조합.
+        held-out flip 절대 수치로 지금까지 중 최선. 다음은 seed 확대/논문화.
+  Comb_Heval >= Ada_Heval
+     -> scale 튜닝을 얹는 것 자체가 이미 최적화된 AdaRound 예측을 흔들기만 함.
+        방향 C의 34번 개선은 naive(약한 baseline) 대비였을 뿐, 이미 좋은
+        baseline(AdaRound) 위에서는 추가 이득이 없다는 뜻.

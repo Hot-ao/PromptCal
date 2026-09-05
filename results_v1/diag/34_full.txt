@@ -1,0 +1,106 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+====================================================================================================
+ 방향 C: PromptCal-scale(연속 s_mult, S-only) vs naive vs AdaRound
+====================================================================================================
+
+--- seed 0 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1361 s_mult 평균=0.973 변화=0.0602
+  [300/1500] margin_loss=0.1631 s_mult 평균=0.978 변화=0.0663
+  [450/1500] margin_loss=0.3087 s_mult 평균=0.974 변화=0.0716
+  [600/1500] margin_loss=0.0918 s_mult 평균=0.971 변화=0.0699
+  [750/1500] margin_loss=0.1318 s_mult 평균=0.970 변화=0.0757
+  [900/1500] margin_loss=0.1857 s_mult 평균=0.969 변화=0.0686
+  [1050/1500] margin_loss=0.1215 s_mult 평균=0.965 변화=0.0779
+  [1200/1500] margin_loss=0.1073 s_mult 평균=0.966 변화=0.0790
+  [1350/1500] margin_loss=0.0817 s_mult 평균=0.969 변화=0.0739
+  [1500/1500] margin_loss=0.0567 s_mult 평균=0.967 변화=0.0777
+[promptcal-C] 완료 (s_mult 총 변화=5.518)
+
+  [S, 최적화 타깃]
+    naive              flip= 10.37%
+    AdaRound           flip=  9.84%  margin=0.1264
+    PromptCal-scale    flip=  9.31%  margin=0.1107
+  [H_cal, 미사용 대조군]
+    PromptCal-scale    flip=  7.41%
+  [H_eval, 최종 헤드라인]
+    naive              flip=  8.14%
+    AdaRound           flip=  7.95%
+    PromptCal-scale    flip=  7.67%
+
+--- seed 1 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1970 s_mult 평균=0.973 변화=0.0706
+  [300/1500] margin_loss=0.0983 s_mult 평균=0.968 변화=0.0731
+  [450/1500] margin_loss=0.0319 s_mult 평균=0.970 변화=0.0728
+  [600/1500] margin_loss=0.1040 s_mult 평균=0.964 변화=0.0710
+  [750/1500] margin_loss=0.1415 s_mult 평균=0.970 변화=0.0746
+  [900/1500] margin_loss=0.0980 s_mult 평균=0.969 변화=0.0728
+  [1050/1500] margin_loss=0.1453 s_mult 평균=0.970 변화=0.0761
+  [1200/1500] margin_loss=0.1926 s_mult 평균=0.980 변화=0.0874
+  [1350/1500] margin_loss=0.0685 s_mult 평균=0.976 변화=0.0831
+  [1500/1500] margin_loss=0.0598 s_mult 평균=0.973 변화=0.0799
+[promptcal-C] 완료 (s_mult 총 변화=5.676)
+
+  [S, 최적화 타깃]
+    naive              flip= 11.26%
+    AdaRound           flip= 10.46%  margin=0.1303
+    PromptCal-scale    flip= 10.72%  margin=0.1137
+  [H_cal, 미사용 대조군]
+    PromptCal-scale    flip=  8.51%
+  [H_eval, 최종 헤드라인]
+    naive              flip=  9.56%
+    AdaRound           flip=  8.97%
+    PromptCal-scale    flip=  9.12%
+
+--- seed 2 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1162 s_mult 평균=0.972 변화=0.0652
+  [300/1500] margin_loss=0.1681 s_mult 평균=0.965 변화=0.0783
+  [450/1500] margin_loss=0.0971 s_mult 평균=0.952 변화=0.0814
+  [600/1500] margin_loss=0.0590 s_mult 평균=0.962 변화=0.0787
+  [750/1500] margin_loss=0.1019 s_mult 평균=0.961 변화=0.0804
+  [900/1500] margin_loss=0.3191 s_mult 평균=0.966 변화=0.0819
+  [1050/1500] margin_loss=0.2222 s_mult 평균=0.970 변화=0.0780
+  [1200/1500] margin_loss=0.1103 s_mult 평균=0.980 변화=0.0801
+  [1350/1500] margin_loss=0.1062 s_mult 평균=0.982 변화=0.0883
+  [1500/1500] margin_loss=0.0583 s_mult 평균=0.981 변화=0.0911
+[promptcal-C] 완료 (s_mult 총 변화=6.465)
+
+  [S, 최적화 타깃]
+    naive              flip= 12.47%
+    AdaRound           flip= 11.82%  margin=0.1349
+    PromptCal-scale    flip= 12.25%  margin=0.1166
+  [H_cal, 미사용 대조군]
+    PromptCal-scale    flip=  8.02%
+  [H_eval, 최종 헤드라인]
+    naive              flip=  9.18%
+    AdaRound           flip=  8.90%
+    PromptCal-scale    flip=  9.07%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |   nv_S |   Ada_S |   PCs_S |  Ada_S_m |  PCs_S_m |  nv_Heval | Ada_Heval | PCs_Heval
+   0 | 10.37% |   9.84% |   9.31% |   0.1264 |   0.1107 |     8.14% |     7.95% |     7.67%
+   1 | 11.26% |  10.46% |  10.72% |   0.1303 |   0.1137 |     9.56% |     8.97% |     9.12%
+   2 | 12.47% |  11.82% |  12.25% |   0.1349 |   0.1166 |     9.18% |     8.90% |     9.07%
+
+판정:
+  PCs_S margin이 Ada_S_m보다 개선 안 됐으면 -> 이 실험도 objective가 작동 안 함(무효).
+  (naive 대비 순수 marginal effect) PCs_Heval vs nv_Heval:
+     PCs_Heval < nv_Heval        -> 연속 파라미터화가 discrete alpha의 negative
+                                    transfer 문제를 실제로 피한다. 유망한 방향.
+     PCs_Heval >= nv_Heval       -> 파라미터화를 바꿔도 같은 문제가 재현됨.
+                                    '어떤 형태로든 semantic objective로 alpha/scale을
+                                    데이터 기반으로 움직이면 held-out이 나빠진다'는
+                                    가설이 더 강하게 지지됨(파라미터화 무관 현상).
