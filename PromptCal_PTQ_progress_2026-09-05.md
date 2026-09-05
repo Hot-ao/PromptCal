@@ -177,18 +177,131 @@ seed 0/1은 margin·H_eval 모두 AdaRound보다 좋아졌다. seed 2는 **S mar
 
 ---
 
-## 10. 다음 실험 후보 (미착수)
+## 10. (경과) 최초에 세운 다음 실험 후보
 
-1. **seed 확대 검증**: 35번 조합을 seed 3~6까지 더 돌려서 2승 1패가 우연인지, 평균적으로
-   AdaRound를 이기는지 확인.
-2. **seed 2 불안정성 원인 진단**: lr을 낮추거나 gradient clipping을 강화해서 margin loss
-   발산/진동을 먼저 잡을 수 있는지 확인.
-3. (미착수) H_cal을 포함한 pidx로 35번 조합을 재현해서 지금까지의 "H_cal 포함 여부는
-   무관하다"는 31번 결론이 이 새 파라미터화에서도 유지되는지 확인.
+1. seed 확대 검증: 35번 조합을 seed 3~6까지 더 돌려서 2승 1패가 우연인지 확인.
+2. seed 2 불안정성 원인 진단: lr을 낮추거나 gradient clipping을 강화.
+3. H_cal 포함 pidx로 35번 조합 재현.
+
+실제로는 1, 2번을 진행하다가 훨씬 근본적인 문제(§11~13)를 발견해서 3번은 보류됐다.
 
 ---
 
-## 11. 코드 구조 (09-03 문서 이후 추가분)
+## 11. 36번: seed 2 lr 스윕 — lr 문제가 아니었다
+
+`scripts/36_seed2_stability.py`로 seed 2 고정, lr ∈ {0.01, 0.005, 0.003, 0.001}을
+스윕하며 150 iter마다 실제 group_margin(S)/group_flip(H_eval) 궤적을 측정했다
+([36_full.txt](results_v1/diag/36_full.txt)).
+
+```text
+      lr |  final_S_m | final_Heval |  best_it | best_Heval
+    0.01 |     0.1186 |       8.64% |      900 |      8.36%   (35번과 동일 설정인데 개선됨!)
+   0.005 |     0.1581 |       8.67% |      750 |      8.27%
+   0.003 |     0.1339 |       9.24% |     1200 |      8.64%
+   0.001 |     0.1405 |       9.64% |     1350 |      9.41%
+```
+
+lr을 낮추는 건 도움이 안 됐다(오히려 원래 lr=0.01이 최선). 결정적으로: **lr=0.01·seed=2로
+35번과 완전히 동일한 설정인데, 35번은 악화(S_margin=0.1415, H_eval=9.58%)였고 36번은
+개선(S_margin=0.1186, H_eval=8.64%)이었다.** 코드 차이는 없다(eval_hook은
+`@torch.no_grad()`라 학습에 영향 불가). → **run-to-run non-determinism**을 의심.
+
+---
+
+## 12. 37번: 반복 실행으로 분산 직접 측정 — "2승 1패"는 노이즈였다
+
+AdaRound 체크포인트를 1회만 만들어 고정하고, 그 지점에서 scale-tuning만 6회 독립
+반복해서 분산을 측정했다([37_full.txt](results_v1/diag/37_full.txt),
+[37_seed0_full.txt](results_v1/diag/37_seed0_full.txt),
+[37_seed1_full.txt](results_v1/diag/37_seed1_full.txt)).
+
+```text
+seed | Ada_Heval | Comb mean H_eval | std  | 개선 trial | 평균 격차
+   0 |     7.59% |            7.53% | 0.55 |       4/6 | -0.06pp (노이즈 범위)
+   1 |     8.92% |            8.81% | 0.36 |       4/6 | -0.11pp (노이즈 범위)
+   2 |     8.90% |            9.20% | 0.21 |       1/6 | +0.30pp (악화, 노이즈보다 큼)
+```
+
+seed 0/1의 "평균적 개선"은 trial-to-trial 표준편차보다 훨씬 작아 통계적으로 0과
+구분되지 않는다. seed 2만 격차가 std보다 커서 어느 정도 실제 신호에 가깝고, 방향은
+"악화"다. **35번(및 34번)에서 "방향 C가 AdaRound를 이긴다"고 봤던 결론은 기각된다.**
+추가로 AdaRound 기준선 자체도 재구축할 때마다 값이 조금씩 다르다는 것도 확인됨
+(reconstruction도 완전히 결정적이지 않음).
+
+---
+
+## 13. 결정성 도입 (torch.manual_seed + cudnn.deterministic)
+
+원인은 코드베이스 어디에도 `torch.manual_seed`/`cudnn.deterministic` 설정이 없어서
+cuDNN이 실행마다 다른 conv 알고리즘을 골라 미세한 수치 차이가 1500 iteration에 걸쳐
+증폭된 것으로 보인다. `scripts/37_variance_check.py`, `scripts/35_adaround_plus_scale.py`에
+다음을 추가했다.
+
+```python
+torch.manual_seed(args.torch_seed)   # 기본값 0
+torch.cuda.manual_seed_all(args.torch_seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+```
+
+검증([38_determinism_check.txt](results_v1/diag/38_determinism_check.txt)): 동일 설정
+2회 반복이 **완전히 동일한 값**(S_margin=0.1439, H_eval=9.24%, std=0.0000)을 냈다 —
+결정성 도입 성공.
+
+이 설정으로 35번(AdaRound vs Combined)을 GPU 7 고정해서 재실행했다
+([35_deterministic_full.txt](results_v1/diag/35_deterministic_full.txt)):
+
+```text
+seed | Ada_Heval | Comb_Heval | 격차
+   0 |     7.59% |      7.36% | -0.23pp
+   1 |     8.92% |      9.00% | +0.08pp
+   2 |     9.64% |      9.10% | -0.54pp
+```
+
+세 값 모두 37번이 보여준 노이즈 구름(분포) 범위 안에 있는 값이다. **중요한 구분**:
+결정성은 "같은 설정을 다시 돌리면 같은 숫자가 나온다"는 재현성만 보장하며, 그 숫자
+자체가 방법의 진짜 평균 성능을 대표한다는 뜻은 아니다 — scale-tuning 최적화 자체가
+여전히 초기 부동소수점 조건에 민감한(margin_loss가 매 checkpoint마다 크게 진동하는)
+카오스적 landscape를 갖고 있어서, torch_seed를 바꾸면 여전히 결과가 흔들린다. 즉
+37번의 반복측정 결론(사실상 무승부/근소 악화)이 여전히 유효한 결론이다.
+
+또한 흥미롭게도 **AdaRound reconstruction 자체는 GPU/실행이 달라도 거의 재현**됐다
+(seed별 baseline이 서로 다른 GPU/실행에서 여러 번 정확히 일치). 즉 non-determinism의
+주 원인은 AdaRound reconstruction이 아니라 **scale-tuning(margin loss 기반 Adam) 단계
+자체**로 좁혀진다.
+
+---
+
+## 14. 09-05 최종 결론
+
+```
+29: Case B 확정 (H_cal 개선 → H_eval 악화, 전이 실패)
+31: S-only도 동일하게 악화 → "H_cal을 쓴 것"이 원인 아님
+32: raw-init도 일부 원인이지만 semantic이 추가 손해를 얹음
+33: AdaRound 완전 warm-start → alpha 포화 → semantic objective 무력화
+    → discrete alpha rounding의 구조적 한계
+34/35: 연속 s_mult(방향 C)로 첫 긍정 신호처럼 보였음
+36/37: 그 신호는 대부분 run-to-run non-determinism에 의한 노이즈였음이 확인됨
+    → 반복 측정 결과 seed 0/1은 통계적으로 무승부, seed 2는 오히려 악화
+38: torch.manual_seed+cudnn.deterministic 도입, 재현성 확보(작동 검증 완료)
+    → 그러나 결정적 재실행도 37번의 노이즈 구름 범위 안의 한 값일 뿐,
+      방향 C의 우위를 되살리지 못함
+```
+
+**현재까지의 진짜 결론**: discrete AdaRound alpha rounding 기반 semantic objective도,
+연속 activation scale(방향 C) 기반 semantic objective도, held-out(H_eval) 일반화를
+안정적으로 개선한다는 근거를 찾지 못했다. 유일한 절차적 성과는 실험 인프라
+자체(torch.manual_seed+cudnn.deterministic)가 이제 재현 가능해졌다는 것 —
+앞으로의 실험은 이 설정을 기본으로 써야 한다.
+
+다음 단계로는 (a) 이 family(AdaRound alpha/scale 기반 semantic objective) 자체를
+접고 완전히 다른 접근을 찾거나, (b) 여러 torch_seed로 반복 측정하는 프로토콜을
+표준화해서 다른 하이퍼파라미터/objective를 계속 탐색하는 두 갈래가 있다. 09-05
+시점에는 아직 결정하지 않음.
+
+---
+
+## 15. 코드 구조 (09-03 문서 이후 추가분)
 
 ```text
 scripts/29_diag_transfer.py       -- soft/discrete x H_cal/H_eval 분리 진단
@@ -198,10 +311,20 @@ scripts/32_null_control.py        -- semantic=0 null control
 scripts/33_warmstart_semantic.py  -- AdaRound warm-start 후 semantic (alpha 포화 확인)
 scripts/34_promptcal_scale.py     -- 방향 C(연속 s_mult) 단독 검증
 scripts/35_adaround_plus_scale.py -- AdaRound weight + 방향 C scale 결합
+                                      (--torch-seed로 결정성 지원)
+scripts/36_seed2_stability.py     -- seed 2 lr 스윕 + 학습 궤적(eval_hook) 측정
+scripts/37_variance_check.py      -- 동일 설정 N회 반복으로 run-to-run 분산 측정
+                                      (--torch-seed로 결정성 지원)
 
 src/quant/semantic_calib.py       -- 30번에서 사용한 class-agnostic objective 구현
 src/quant/promptcal.py            -- optimize_promptcal_scale("방향 C") 기존 구현 활용,
-                                      soft/ste 버그 수정(True로 복원)
+                                      soft/ste 버그 수정(True로 복원),
+                                      eval_hook 파라미터 추가(학습 중 궤적 측정용)
 
-results_v1/diag/29_full.txt ~ 35_full.txt  -- 각 스크립트 실행 로그/결과
+results_v1/diag/29_full.txt ~ 35_full.txt        -- 각 스크립트 실행 로그/결과
+results_v1/diag/36_full.txt                      -- seed 2 lr 스윕 결과
+results_v1/diag/37_full.txt                      -- seed 2 6회 반복 (non-determinism)
+results_v1/diag/37_seed0_full.txt, 37_seed1_full.txt -- seed 0/1 6회 반복
+results_v1/diag/38_determinism_check.txt         -- 결정성 도입 검증(2회 반복 동일값 확인)
+results_v1/diag/35_deterministic_full.txt        -- 결정성 적용 후 35번 재실행
 ```

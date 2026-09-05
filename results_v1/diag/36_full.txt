@@ -11,3 +11,122 @@ YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients
 
 --- lr=0.01 ---
 YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1361 s_mult 평균=0.973 변화=0.0576
+    [eval@150] S_margin=0.1285  H_eval flip=8.47%
+  [300/1500] margin_loss=0.0977 s_mult 평균=0.980 변화=0.0851
+    [eval@300] S_margin=0.1210  H_eval flip=9.04%
+  [450/1500] margin_loss=0.0669 s_mult 평균=0.974 변화=0.0783
+    [eval@450] S_margin=0.1287  H_eval flip=9.10%
+  [600/1500] margin_loss=0.0838 s_mult 평균=0.984 변화=0.0868
+    [eval@600] S_margin=0.1195  H_eval flip=9.38%
+  [750/1500] margin_loss=0.2539 s_mult 평균=0.983 변화=0.0871
+    [eval@750] S_margin=0.1163  H_eval flip=8.56%
+  [900/1500] margin_loss=0.2095 s_mult 평균=0.976 변화=0.0883
+    [eval@900] S_margin=0.1283  H_eval flip=8.36%
+  [1050/1500] margin_loss=0.2509 s_mult 평균=0.981 변화=0.0882
+    [eval@1050] S_margin=0.1518  H_eval flip=9.10%
+  [1200/1500] margin_loss=0.2718 s_mult 평균=0.989 변화=0.0892
+    [eval@1200] S_margin=0.1578  H_eval flip=9.10%
+  [1350/1500] margin_loss=0.0669 s_mult 평균=0.992 변화=0.0818
+    [eval@1350] S_margin=0.1215  H_eval flip=8.61%
+  [1500/1500] margin_loss=0.0800 s_mult 평균=0.991 변화=0.0923
+    [eval@1500] S_margin=0.1186  H_eval flip=8.64%
+[promptcal-C] 완료 (s_mult 총 변화=6.555)
+  최종: S_margin=0.1186  H_eval flip=8.64%  (궤적 중 최선 체크포인트: iter=900 H_eval=8.36% S_margin=0.1283)
+
+--- lr=0.005 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1053 s_mult 평균=0.956 변화=0.0540
+    [eval@150] S_margin=0.1407  H_eval flip=9.41%
+  [300/1500] margin_loss=0.1017 s_mult 평균=0.949 변화=0.0603
+    [eval@300] S_margin=0.1344  H_eval flip=9.55%
+  [450/1500] margin_loss=0.0817 s_mult 평균=0.941 변화=0.0668
+    [eval@450] S_margin=0.1329  H_eval flip=9.75%
+  [600/1500] margin_loss=0.0883 s_mult 평균=0.942 변화=0.0722
+    [eval@600] S_margin=0.1379  H_eval flip=9.49%
+  [750/1500] margin_loss=0.2274 s_mult 평균=0.946 변화=0.0693
+    [eval@750] S_margin=0.1527  H_eval flip=8.27%
+  [900/1500] margin_loss=0.3319 s_mult 평균=0.946 변화=0.0657
+    [eval@900] S_margin=0.1312  H_eval flip=9.15%
+  [1050/1500] margin_loss=0.2261 s_mult 평균=0.944 변화=0.0656
+    [eval@1050] S_margin=0.1256  H_eval flip=9.27%
+  [1200/1500] margin_loss=0.3953 s_mult 평균=0.943 변화=0.0649
+    [eval@1200] S_margin=0.1352  H_eval flip=9.24%
+  [1350/1500] margin_loss=0.0560 s_mult 평균=0.941 변화=0.0670
+    [eval@1350] S_margin=0.1331  H_eval flip=9.66%
+  [1500/1500] margin_loss=0.0710 s_mult 평균=0.943 변화=0.0676
+    [eval@1500] S_margin=0.1581  H_eval flip=8.67%
+[promptcal-C] 완료 (s_mult 총 변화=4.797)
+  최종: S_margin=0.1581  H_eval flip=8.67%  (궤적 중 최선 체크포인트: iter=750 H_eval=8.27% S_margin=0.1527)
+
+--- lr=0.003 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1065 s_mult 평균=0.968 변화=0.0402
+    [eval@150] S_margin=0.1175  H_eval flip=9.64%
+  [300/1500] margin_loss=0.1272 s_mult 평균=0.955 변화=0.0513
+    [eval@300] S_margin=0.1364  H_eval flip=9.84%
+  [450/1500] margin_loss=0.0699 s_mult 평균=0.948 변화=0.0590
+    [eval@450] S_margin=0.1364  H_eval flip=9.72%
+  [600/1500] margin_loss=0.0931 s_mult 평균=0.942 변화=0.0648
+    [eval@600] S_margin=0.1355  H_eval flip=9.58%
+  [750/1500] margin_loss=0.1812 s_mult 평균=0.948 변화=0.0632
+    [eval@750] S_margin=0.1375  H_eval flip=9.18%
+  [900/1500] margin_loss=0.2456 s_mult 평균=0.947 변화=0.0640
+    [eval@900] S_margin=0.1312  H_eval flip=8.95%
+  [1050/1500] margin_loss=0.2436 s_mult 평균=0.941 변화=0.0661
+    [eval@1050] S_margin=0.1487  H_eval flip=9.07%
+  [1200/1500] margin_loss=0.8658 s_mult 평균=0.943 변화=0.0658
+    [eval@1200] S_margin=0.1514  H_eval flip=8.64%
+  [1350/1500] margin_loss=0.0769 s_mult 평균=0.942 변화=0.0665
+    [eval@1350] S_margin=0.1315  H_eval flip=9.75%
+  [1500/1500] margin_loss=0.0749 s_mult 평균=0.943 변화=0.0668
+    [eval@1500] S_margin=0.1339  H_eval flip=9.24%
+[promptcal-C] 완료 (s_mult 총 변화=4.740)
+  최종: S_margin=0.1339  H_eval flip=9.24%  (궤적 중 최선 체크포인트: iter=1200 H_eval=8.64% S_margin=0.1514)
+
+--- lr=0.001 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.0776 s_mult 평균=0.986 변화=0.0187
+    [eval@150] S_margin=0.1505  H_eval flip=9.61%
+  [300/1500] margin_loss=0.0814 s_mult 평균=0.978 변화=0.0279
+    [eval@300] S_margin=0.1346  H_eval flip=9.69%
+  [450/1500] margin_loss=0.0967 s_mult 평균=0.972 변화=0.0372
+    [eval@450] S_margin=0.1356  H_eval flip=9.64%
+  [600/1500] margin_loss=0.1641 s_mult 평균=0.966 변화=0.0445
+    [eval@600] S_margin=0.1337  H_eval flip=9.84%
+  [750/1500] margin_loss=0.5650 s_mult 평균=0.961 변화=0.0501
+    [eval@750] S_margin=0.1696  H_eval flip=9.44%
+  [900/1500] margin_loss=0.3074 s_mult 평균=0.959 변화=0.0520
+    [eval@900] S_margin=0.1503  H_eval flip=9.58%
+  [1050/1500] margin_loss=0.2186 s_mult 평균=0.957 변화=0.0551
+    [eval@1050] S_margin=0.1442  H_eval flip=9.66%
+  [1200/1500] margin_loss=0.3021 s_mult 평균=0.954 변화=0.0567
+    [eval@1200] S_margin=0.1388  H_eval flip=9.55%
+  [1350/1500] margin_loss=0.0769 s_mult 평균=0.951 변화=0.0598
+    [eval@1350] S_margin=0.1433  H_eval flip=9.41%
+  [1500/1500] margin_loss=0.0719 s_mult 평균=0.948 변화=0.0623
+    [eval@1500] S_margin=0.1405  H_eval flip=9.64%
+[promptcal-C] 완료 (s_mult 총 변화=4.425)
+  최종: S_margin=0.1405  H_eval flip=9.64%  (궤적 중 최선 체크포인트: iter=1350 H_eval=9.41% S_margin=0.1433)
+
+====================================================================================================
+ 요약 표 (seed 2, 기준선 AdaRound: S_margin=0.1349 H_eval=8.90%)
+====================================================================================================
+      lr |  final_S_m | final_Heval |  best_it | best_Heval
+    0.01 |     0.1186 |       8.64% |      900 |      8.36%
+   0.005 |     0.1581 |       8.67% |      750 |      8.27%
+   0.003 |     0.1339 |       9.24% |     1200 |      8.64%
+   0.001 |     0.1405 |       9.64% |     1350 |      9.41%
+
+판정:
+  어떤 lr에서 final_S_m < 0.1349(AdaRound) AND final_Heval < 8.90%(AdaRound)면
+     -> lr을 낮추는 것만으로 seed 2 불안정성이 해결됨. 그 lr로 seed 0/1도
+        재검증해서 여전히 이기는지 확인 필요.
+  모든 lr에서 계속 나쁘거나 궤적이 계속 진동하면
+     -> lr 문제가 아니라 이 seed의 prompt 조합/데이터 자체가 이 방법과 안 맞는
+        경우일 가능성. best_it 체크포인트(early stopping)가 유의미하게 좋다면
+        '너무 오래 학습하면 오히려 나빠진다'는 방향으로 재해석.

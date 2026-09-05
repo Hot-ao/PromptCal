@@ -1,0 +1,44 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (weight rounding, 1회만 최적화, 이후 모든 trial의 공통 시작점)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+[seed 0 기준선] AdaRound  S_margin=0.1277  H_eval flip=7.59%
+
+====================================================================================================
+ 동일 설정(seed=0, lr=0.01) 6회 반복 -- torch.manual_seed 없음
+====================================================================================================
+
+--- trial 0 ---
+  S_margin=0.1071  H_eval flip=7.31%  (개선 vs AdaRound)
+
+--- trial 1 ---
+  S_margin=0.1049  H_eval flip=6.99%  (개선 vs AdaRound)
+
+--- trial 2 ---
+  S_margin=0.1011  H_eval flip=7.12%  (개선 vs AdaRound)
+
+--- trial 3 ---
+  S_margin=0.1105  H_eval flip=8.64%  (악화 vs AdaRound)
+
+--- trial 4 ---
+  S_margin=0.1043  H_eval flip=7.33%  (개선 vs AdaRound)
+
+--- trial 5 ---
+  S_margin=0.1118  H_eval flip=7.78%  (악화 vs AdaRound)
+
+====================================================================================================
+ 요약
+====================================================================================================
+AdaRound 기준선: S_margin=0.1277  H_eval=7.59%
+6회 반복 (동일 설정, seed=0, lr=0.01):
+  S_margin : mean=0.1066  std=0.0037  min=0.1011  max=0.1118
+  H_eval   : mean=7.53%  std=0.55  min=6.99%  max=8.64%
+  AdaRound보다 H_eval 개선된 trial: 4/6
+
+판정:
+  std가 AdaRound와의 평균 격차보다 크거나 비슷하면 -> '개선/악화'를 1회 실행으로
+     판단하는 것 자체가 통계적으로 무의미. 지금까지 29~35의 개별 seed 결론들도
+     같은 잣대로 재해석해야 함(여러 번 반복해서 평균+분산으로 봐야 함).
+  std가 충분히 작고 mean이 뚜렷하게 AdaRound보다 낫거나 나쁘면 -> non-determinism은
+     결과를 뒤집을 정도는 아니고, 원래 결론(방향 C 유망/불안정)을 유지해도 됨.

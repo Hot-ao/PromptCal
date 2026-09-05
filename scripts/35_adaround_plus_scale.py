@@ -132,8 +132,18 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
+    ap.add_argument("--torch-seed", type=int, default=0,
+                    help="torch.manual_seed 고정값. 37번에서 확인된 run-to-run "
+                         "non-determinism을 없애서 결과를 재현 가능하게 만든다.")
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
+
+    torch.manual_seed(args.torch_seed)
+    torch.cuda.manual_seed_all(args.torch_seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print(f"[determinism] torch.manual_seed={args.torch_seed}, cudnn.deterministic=True, cudnn.benchmark=False")
+
     names = load_coco_names()
 
     from ultralytics import YOLOWorld
