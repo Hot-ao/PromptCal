@@ -1,0 +1,13 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (weight rounding, seed-무관, 재사용될 base)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+[seed 2 기준선] AdaRound  S_margin=0.1349  H_eval flip=8.90%
+
+====================================================================================================
+ seed 2 lr sweep: 학습 중 S_margin/H_eval flip 궤적
+====================================================================================================
+
+--- lr=0.01 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs

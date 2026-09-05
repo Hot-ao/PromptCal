@@ -263,7 +263,7 @@ def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
         
 def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
                              prompt_idx, iters=1000, lr=1e-2, k=5,
-                             conf_thres=0.25, verbose=True):
+                             conf_thres=0.25, verbose=True, eval_hook=None):
     """
     방향 C: rounding(alpha) 대신 learnable activation scale(s_mult)을 최적화.
 
@@ -329,6 +329,9 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
             smean = sum(float(s.detach()) for s in smults) / len(smults)
             print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
                   f"s_mult 평균={smean:.3f} 변화={sd:.4f}")
+
+        if eval_hook is not None and (it + 1) % max(1, iters // 10) == 0:
+            eval_hook(it + 1, quant_model)
 
     q_cap.close()
     if verbose:
