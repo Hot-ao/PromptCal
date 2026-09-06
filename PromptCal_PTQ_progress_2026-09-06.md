@@ -434,4 +434,128 @@ results_v1/diag/44_full.txt, 44_seed{0,1,4,5,7}_full.txt -- Utility 재통합 �
 results_v1/diag/45_full.txt                     -- QDrop/BRECQ 첫 비교(seed 2, 버그 수정 전)
 results_v1/diag/45_fixed_seed{0,1,2,4,5,7}_full.txt -- 누적 오차 수정 후 AP 재검증(6 seed)
 results_v1/diag/45_flip_seed{0,1,2,4,5,7}_full.txt -- flip까지 포함한 최종 baseline 비교(6 seed)
+results_v1/diag/45_metrics_seed{0,1,2,4,5,7}_full.txt -- §18: 09_phase1 표준 지표(Top1_flip,
+                                      GT_MRR/R@1/lost/gained, UPIR) + calib 시간/모델 크기까지
+                                      포함한 최종 6-seed 비교(45_baseline_compare.py 최신판)
 ```
+
+---
+
+## 18. 09-07: 평가지표 확장 (Top1_flip/GT 기반 지표/비용) 구현 및 6-seed 검증
+
+### 18.1 배경
+
+§15에서 확인한 flip-vs-AP 괴리(우리가 만든 masked H_eval flip이 AP와 반대로
+움직임)를 두고, "flip의 counterfactual 정의 자체가 AP와 다른 배포 시나리오를
+재고 있다"는 결론까지는 냈지만 두 가지가 미해결이었다: (1) masking 없는
+**표준** flip(09_phase1_final_report_ko_v2.pdf §1.3 정의, AP와 동일 배포 조건)을
+아직 안 쟀고, (2) FP32를 pseudo-GT로 쓰는 지금 파이프라인과 달리 **진짜 COCO
+GT**를 쓰는 지표(GT MRR/R@1/top-1 lost·gained, UPIR)를 한 번도 안 써봤다.
+이전 팀원의 Phase 1(RankSafe) 보고서가 바로 이 지표 세트를 표준으로 썼고,
+그 보고서 자체도 "정렬 개선만으로 성공을 선언하지 말고 AP와 GT 기반 semantic
+error가 함께 개선되는지 봐야 한다"고 명시적으로 경고한 바 있어, 우리 논문도
+같은 기준으로 검증해야 한다고 판단했다. 실험 시간이 오래 걸리는 걸 감안해
+지표를 전부 구현한 뒤 5개 조건(naive/AdaRound/QDrop/BRECQ/Combined) x 6-seed를
+**한 번에** 돌리기로 함(2단계로 나눠 두 번 도는 것 대비 GPU 시간 절약).
+
+### 18.2 구현 (scripts/45_baseline_compare.py 확장)
+
+- **Top1_flip(표준)**: masking 없이 FP confident anchor(sigmoid conf>0.25)에서
+  raw top-1(전체 80class)이 quant와 같은지. AP와 동일한 전체-vocabulary 배포
+  조건에서 결정 일치도를 직접 잰다.
+- **GT 앵커 매칭**: `pycocotools.coco.COCO`로 val2017 GT를 로드하고
+  `ultralytics.data.converter.coco91_to_coco80_class()`로 category_id를 우리
+  80-class 인덱스로 변환. GT 박스를 letterbox 변환으로 640 공간에 옮긴 뒤, 3개
+  FPN level(80x80/40x40/20x20, stride 8/16/32 -- `SimilarityHarness._level_buf`
+  실제 forward로 확인)에서 그리드 셀 중심이 박스 안에 드는 후보 anchor를 모으고,
+  FP32가 그 GT의 정답 class에 가장 confident한 anchor 하나를 대표로 선택(공식
+  TaskAlignedAssigner의 근사).
+- **GT_MRR/GT_R@1**: 각 GT-anchor에서 정답 class의 quant 자체 랭킹 역수/1위 여부.
+- **GT top-1 lost/gained**: FP에서 정답이 1위였다가 quant에서 잃은/그 반대로 얻은 카운트.
+- **UPIR**: FP 1위였던 GT-anchor 중(정답 class가 H_eval이 아닌 경우만) quant의
+  top-1이 H_eval class로 바뀐 비율 -- "calibration에서 안 본 prompt가 정답 위로 침입".
+- **calib 시간**: `build()` 호출을 wall-clock으로 계측(naive/AdaRound/QDrop/BRECQ/Combined).
+- **이론적 모델 크기**: 양자화 대상 conv weight 총 원소수 x 1byte(8bit) -> MiB.
+- 효율화: FP32 sim과 quant sim을 baseline/함수당 반복 계산하지 않고 이미지당
+  1회씩만 계산해서 재사용(원래 group_flip/standard_flip/gt_metrics 3개 함수가
+  각각 forward를 다시 돌리던 구조를 리팩터링).
+
+스모크 테스트(calib=8, eval=16, iters 대폭 축소)로 전체 파이프라인이 에러 없이
+도는 것과 GT 앵커 매칭이 합리적인 개수(n=103)를 만들어내는 것을 먼저 확인한 뒤,
+실제 설정(calib=32, eval=500, 기본 iters)으로 6-seed(0,1,2,4,5,7) 전체 실행.
+
+### 18.3 결과 (6-seed 집계, GPU 7 / RTX4000 Ada, 순차 실행 총 ~5시간)
+
+```
+              AP(overall)      H_eval AP        H_eval_flip%      Top1_flip%
+naive         35.06 (const)    35.63 ± 3.97     9.79 ± 1.06       0.820 (const)
+adaround      35.05 (const)    35.56 ± 3.93     8.98 ± 0.82       0.690 (const)
+qdrop         35.08 (const)    35.58 ± 3.88     8.85 ± 0.85       0.680 (const)
+brecq         35.01 (const)    35.48 ± 3.97     8.33 ± 1.06       0.630 (const)
+combined      36.46 ± 0.06     37.00 ± 4.01     9.75 ± 0.80       0.655 ± 0.061
+
+              GT_MRR            GT_R@1            lost         gained      UPIR%            calib_t(s)
+naive         0.9267 (const)    0.8843 (const)    41.0(const)  18.0(const)  0.232 ± 0.130    3.5 ± 0.6
+adaround      0.9272 (const)    0.8851 (const)    35.0(const)  15.0(const)  0.218 ± 0.104    456 ± 13
+qdrop         0.9274 (const)    0.8866 (const)    35.0(const)  20.0(const)  0.207 ± 0.156    875 ± 21
+brecq         0.9276 (const)    0.8866 (const)    30.0(const)  15.0(const)  0.165 ± 0.090    661 ± 12
+combined      0.9280 ± 0.0008   0.8874 ± 0.0014   31.2 ± 5.8   19.0 ± 1.7   0.142 ± 0.059    637 ± 12
+(모델 크기: 14.33 MiB, 모든 W8A8 방법 공통)
+```
+
+**중요한 확인(버그 아님)**: naive/AdaRound/QDrop/BRECQ는 `pidx`(S)나 `H_eval`을
+전혀 쓰지 않고 calib/probe 이미지도 seed와 무관하게 고정이므로, AP·GT_MRR·
+GT_R@1·lost/gained·Top1_flip이 6개 seed 전부에서 **완전히 동일**(const로 표시).
+seed가 실제로 바꾸는 건 (1) Combined의 학습 대상(S)과 (2) H_eval에 의존하는
+지표(H_eval AP, H_eval_flip, UPIR)뿐이다. 즉 "6-seed 평균"은 4개 baseline에
+대해서는 반복측정(진짜 분산 없음)이고, Combined와 H_eval-의존 지표에만 진짜
+seed 분산이 있다 -- 논문에 std를 보고할 때 이 비대칭을 반드시 명시해야 한다.
+
+**판정**:
+
+1. **AP: Combined가 6/6 완승**(overall +1.40, H_eval subset +1.4~2.0), QDrop/BRECQ
+   포함 전부를 이김. §13의 결론이 새 지표 파이프라인에서도 그대로 재확인됨.
+2. **Top1_flip(표준, AP와 같은 배포조건)에서는 flip 문제가 사라진다.** Combined
+   평균(0.655%)은 naive(0.82%)·AdaRound(0.69%)·QDrop(0.68%)보다 낮고, 최선인
+   BRECQ(0.63%)와 거의 같다(6개 중 3개 seed는 BRECQ보다도 낮음: 0.59/0.60/0.63).
+   §15에서 예상한 대로, **masked H_eval flip에서 본 "역전"은 그 지표의 counterfactual
+   정의(정답 vocabulary 제거) 때문이었지, 실제 배포 조건에서 Combined가 결정
+   일치도를 해친다는 뜻이 아니었다** -- 이번 실험으로 그 가설이 6-seed 규모로 확증됨.
+3. **H_eval_flip(masked, 우리 진단용)은 여전히 Combined가 6/6 전부 최악 아니면
+   2위-최악**(BRECQ가 매 seed 최선). §15의 메커니즘 설명(neighbor preservation이
+   S-margin만 지키지 H_cal은 전혀 보호하지 않음)이 6-seed로 일반화됨 -- "H_eval을
+   아예 안 쓰는 다른 사용자" 시나리오에서는 여전히 실질적 비용으로 봐야 한다.
+4. **GT_MRR/R@1/lost(진짜 GT 기준)는 Combined와 BRECQ가 사실상 동률**. Combined
+   평균이 근소하게 높지만(GT_MRR +0.0004, R@1 +0.0008) seed0/1에서는 BRECQ가
+   오히려 더 높았음 -- "Combined가 real-GT 기준으로도 항상 최선"이라고 과대
+   주장하면 안 되고, "naive보다는 분명히 낫고 BRECQ와 비슷한 수준"이 정확한 서술.
+5. **UPIR(calibration에서 안 본 prompt의 침입률)은 Combined가 5/6 seed에서
+   BRECQ보다 낮고 평균으로도 5개 방법 중 최저**(naive 0.232% > AdaRound 0.218%
+   > QDrop 0.207% > BRECQ 0.165% > Combined 0.142%) -- 논문의 핵심 동기("calibration에
+   없던 prompt가 침범하는 것을 막는다")와 가장 직접적으로 맞아떨어지는 지표에서
+   Combined가 명확히 최선.
+6. **비용**: Combined 계산 시간(~637s)은 QDrop(~875s)보다 짧고 BRECQ(~661s)와
+   비슷하며 AdaRound(~456s)의 1.4배 정도 -- AP·UPIR에서 최선을 내면서 계산
+   비용은 다른 reconstruction 계열 baseline과 같은 자릿수. 모델 크기는 W8A8
+   전 방법이 동일(14.33 MiB, weight-only 이론값).
+
+### 18.4 논문 서술에 대한 시사점
+
+§15.5에서 미결정으로 남겨둔 "flip-vs-AP 괴리를 어떻게 서술할지" 문제가 이번
+실험으로 사실상 정리됐다: **"표준(masking 없는) 지표들에서는 Combined가 AP와
+결정일치도(Top1_flip)를 동시에 개선하며 GT 기준으로도 최선의 baseline(BRECQ)과
+동등하다. 다만 우리가 별도로 정의한 masked H_eval flip(= H_eval을 아예 쓰지
+않는 다른 사용자 시나리오)에서는 여전히 BRECQ보다 못하다"**는 3단 구조로 쓰면
+과장도 은폐도 없이 정직하게 강점과 한계를 모두 보여줄 수 있다. 즉:
+  - 메인 클레임(AP, 표준 Top1_flip, UPIR): Combined 승리, 다른 reconstruction
+    baseline보다 강함.
+  - GT MRR/R@1/lost: Combined ≈ BRECQ(동률), naive보다는 확실히 나음.
+  - 한계로 명시할 것: masked H_eval flip 기준으로는 여전히 BRECQ가 낫다 --
+    "H_eval을 전혀 쓰지 않는 사용자"라는 좁은 반사실적 시나리오에 한정된 약점.
+
+### 18.5 남은 일
+
+- 실제 하드웨어(TFLite/TensorRT) latency/메모리 측정은 여전히 별도 후속 과제로 보류.
+- §18.4의 3단 구조를 논문 초안(`논문.txt`, git 미추적)에 실제로 반영.
+- Boundary inversion, NDCG@10 등 §1.3의 나머지 secondary 지표는 아직 미구현 --
+  우선순위는 낮음(위 6가지로 이미 메인 클레임과 한계를 충분히 뒷받침).
