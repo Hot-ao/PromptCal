@@ -153,7 +153,10 @@ def main():
 
     results = []
     for trial in range(args.trials):
-        print(f"\n--- trial {trial} ---")
+        trial_seed = args.torch_seed + trial
+        torch.manual_seed(trial_seed)
+        torch.cuda.manual_seed_all(trial_seed)
+        print(f"\n--- trial {trial} (torch_seed={trial_seed}) ---")
         cb_model = copy.deepcopy(ad.model)  # AdaRound 체크포인트의 독립적 복사본에서 시작
         optimize_promptcal_scale(cb_model, fp.model, calib, device, pidx,
                                  iters=args.iters, lr=args.lr, k=args.k, verbose=False)

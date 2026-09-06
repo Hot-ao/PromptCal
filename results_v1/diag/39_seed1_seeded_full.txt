@@ -1,0 +1,45 @@
+[determinism] torch.manual_seed=0, cudnn.deterministic=True, cudnn.benchmark=False
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (weight rounding, 1회만 최적화, 이후 모든 trial의 공통 시작점)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+[seed 1 기준선] AdaRound  S_margin=0.1406  H_eval flip=8.92%
+
+====================================================================================================
+ 동일 설정(seed=1, lr=0.01) 6회 반복 -- torch.manual_seed 없음
+====================================================================================================
+
+--- trial 0 (torch_seed=0) ---
+  S_margin=0.1216  H_eval flip=9.09%  (악화 vs AdaRound)
+
+--- trial 1 (torch_seed=1) ---
+  S_margin=0.1216  H_eval flip=9.09%  (악화 vs AdaRound)
+
+--- trial 2 (torch_seed=2) ---
+  S_margin=0.1216  H_eval flip=9.09%  (악화 vs AdaRound)
+
+--- trial 3 (torch_seed=3) ---
+  S_margin=0.1216  H_eval flip=9.09%  (악화 vs AdaRound)
+
+--- trial 4 (torch_seed=4) ---
+  S_margin=0.1216  H_eval flip=9.09%  (악화 vs AdaRound)
+
+--- trial 5 (torch_seed=5) ---
+  S_margin=0.1216  H_eval flip=9.09%  (악화 vs AdaRound)
+
+====================================================================================================
+ 요약
+====================================================================================================
+AdaRound 기준선: S_margin=0.1406  H_eval=8.92%
+6회 반복 (동일 설정, seed=1, lr=0.01):
+  S_margin : mean=0.1216  std=0.0000  min=0.1216  max=0.1216
+  H_eval   : mean=9.09%  std=0.00  min=9.09%  max=9.09%
+  AdaRound보다 H_eval 개선된 trial: 0/6
+
+판정:
+  std가 AdaRound와의 평균 격차보다 크거나 비슷하면 -> '개선/악화'를 1회 실행으로
+     판단하는 것 자체가 통계적으로 무의미. 지금까지 29~35의 개별 seed 결론들도
+     같은 잣대로 재해석해야 함(여러 번 반복해서 평균+분산으로 봐야 함).
+  std가 충분히 작고 mean이 뚜렷하게 AdaRound보다 낫거나 나쁘면 -> non-determinism은
+     결과를 뒤집을 정도는 아니고, 원래 결론(방향 C 유망/불안정)을 유지해도 됨.

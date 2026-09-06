@@ -1,0 +1,55 @@
+[determinism] torch.manual_seed=0, cudnn.deterministic=True, cudnn.benchmark=False
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+====================================================================================================
+ AdaRound vs +scale vs +scale+neighbor(k=5, w=1.0, asymmetric=True)
+====================================================================================================
+
+--- seed 3 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1975 s_mult 평균=0.969 변화=0.0675
+  [300/1500] margin_loss=0.1247 s_mult 평균=0.957 변화=0.0776
+  [450/1500] margin_loss=0.0855 s_mult 평균=0.949 변화=0.0890
+  [600/1500] margin_loss=0.0810 s_mult 평균=0.954 변화=0.0914
+  [750/1500] margin_loss=0.2696 s_mult 평균=0.962 변화=0.0917
+  [900/1500] margin_loss=0.1672 s_mult 평균=0.964 변화=0.0888
+  [1050/1500] margin_loss=0.1500 s_mult 평균=0.966 변화=0.0859
+  [1200/1500] margin_loss=0.5130 s_mult 평균=0.971 변화=0.0896
+  [1350/1500] margin_loss=0.1132 s_mult 평균=0.977 변화=0.0945
+  [1500/1500] margin_loss=0.1761 s_mult 평균=0.960 변화=0.0911
+[promptcal-C] 완료 (s_mult 총 변화=6.465)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C+neighbor] 32 calib, prompt subset 40개, neighbor 35개(k=5), s_mult 71개, margin(k=5) neighbor_weight=1.0
+  [150/1500] margin_loss=0.1417 neighbor_loss=0.0142 s_mult 평균=0.983 변화=0.0593
+  [300/1500] margin_loss=0.1289 neighbor_loss=0.0234 s_mult 평균=0.968 변화=0.0681
+  [450/1500] margin_loss=0.0954 neighbor_loss=0.0105 s_mult 평균=0.980 변화=0.0805
+  [600/1500] margin_loss=0.1493 neighbor_loss=0.0223 s_mult 평균=0.992 변화=0.0822
+  [750/1500] margin_loss=0.3749 neighbor_loss=0.0205 s_mult 평균=0.985 변화=0.0847
+  [900/1500] margin_loss=0.1301 neighbor_loss=0.0081 s_mult 평균=0.992 변화=0.0873
+  [1050/1500] margin_loss=0.1465 neighbor_loss=0.0543 s_mult 평균=0.995 변화=0.0908
+  [1200/1500] margin_loss=0.3067 neighbor_loss=0.0349 s_mult 평균=1.013 변화=0.0938
+  [1350/1500] margin_loss=0.1176 neighbor_loss=0.0148 s_mult 평균=1.003 변화=0.0963
+  [1500/1500] margin_loss=0.0948 neighbor_loss=0.0327 s_mult 평균=1.017 변화=0.1031
+[promptcal-C+neighbor] 완료 (s_mult 총 변화=7.321)
+
+  [S margin]      AdaRound=0.1655  +scale=0.1749  +scale+near=0.1973
+  [H_eval flip]   AdaRound=7.62%  +scale=7.12%  +scale+near=7.06%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |   Ada_H |  Scale_H | ScaleNear_H |   Ada_m |  Scale_m | ScaleNear_m
+   3 |   7.62% |    7.12% |       7.06% |  0.1655 |   0.1749 |      0.1973
+
+참고: 39번(결정성 적용, neighbor 없음) H_eval = 7.99%/9.09%/9.24% (seed 0/1/2)
+
+판정:
+  ScaleNear_H < Scale_H (동일 seed에서 neighbor 항이 순수하게 도움이 됐는지)
+     -> collateral shift 억제가 실제로 작동. seed 0/1의 악화가 줄어드는지가 핵심.
+  ScaleNear_H < Ada_H 까지 되면 -> AdaRound baseline 자체를 이긴 것(논문 핵심 주장 지지).
+  변화 없거나 악화 -> neighbor 항의 강도(neighbor_weight)나 범위(neighbor_k) 조정 필요,
+     혹은 이 메커니즘 자체가 억제 대상이 아닐 수 있음.

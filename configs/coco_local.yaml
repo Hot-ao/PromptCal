@@ -1,6 +1,6 @@
 path: /data/taeho/coco_ultra
 val: val2017.txt
-train: val2017.txt' configs/coco_local.yaml
+train: val2017.txt
 names:
   0: person
   1: bicycle

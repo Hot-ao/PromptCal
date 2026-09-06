@@ -20,6 +20,7 @@ import torch.nn.functional as F
 
 from .adaround import AdaRoundQuantConv2d, list_adaround_convs, h_alpha
 from .pdquant import _find_head, _CV4Capture
+from .semantic_calib import get_txt_feats, text_neighbor_order
 
 def decision_loss(sim_q, sim_fp):
     """
@@ -337,3 +338,124 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
     if verbose:
         tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C] 완료 (s_mult 총 변화={tot:.3f})")
+
+
+def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, device,
+                                      prompt_idx, iters=1000, lr=1e-2, k=5,
+                                      neighbor_k=5, neighbor_weight=1.0,
+                                      asymmetric=False,
+                                      conf_thres=0.25, verbose=True, eval_hook=None):
+    """
+    방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
+
+    동기: optimize_promptcal_scale은 S(pidx) 프롬프트의 top-k margin만 FP와
+    맞춘다. 그런데 s_mult는 class-agnostic한 activation scale이라 S의 margin을
+    맞추려는 움직임이 나머지 79개 출력 컬럼 전체에 공유되어 전파된다 -- 특히
+    text embedding상 S와 가까운 class일수록 이 collateral shift를 크게 받는다
+    (09-05 §40: H_eval이 S와 가까운 seed일수록 held-out 성능이 더 나빠짐을 관찰).
+
+    이 함수는 margin_loss에 다음을 추가한다: S의 각 class에 대해 text embedding
+    최근접 이웃(비-S class) neighbor_k개를 뽑아, 그 class들의 similarity가 FP
+    대비 흔들리지 않도록 붙잡아둔다. GT/held-out identity 불필요 -- FP text
+    encoder(get_txt_feats)만으로 "위험한 이웃"을 계산하므로 논문 §4.2 Prompt
+    Selection("teacher target 및 semantically competitive prompts 선택, GT
+    annotation 없이 teacher-derived signal 사용")과 동일한 제약을 따른다.
+
+    30번(semantic_calib.py)과의 차이: 30번은 경쟁 프롬프트를 상대 margin 계산에만
+    썼다(target-competitor 차이를 FP와 맞춤) -- competitor 자체의 절대 유사도가
+    드리프트하는 건 막지 못했다. 이 함수는 그 절대값 드리프트를 직접 억제하는
+    항을 margin_loss 하나에만 단독으로 추가한다(09-03 §24 원칙: 한 번에 하나씩).
+
+    asymmetric=False(기본): symmetric MSE. 이웃의 유사도가 FP보다 오르든 내리든
+    똑같이 벌점을 준다. 41번 실험(neighbor_weight 0.3/0.5/1.0 스윕)에서 seed마다
+    반응이 뒤바뀌는 불안정한 패턴이 나왔다 -- 이웃 쪽으로의 흔들림이 우연히
+    유익한 seed(0)에서도 무차별적으로 억제해버렸기 때문으로 추정.
+
+    asymmetric=True: one-sided hinge, relu(sim_q - sim_fp)^2 만 사용. 이웃의
+    유사도가 FP보다 "낮아지는" 방향(경쟁자가 약해짐 -> 원래 anchor의 target이
+    안전해짐)은 전혀 벌점을 주지 않고, "높아지는" 방향(경쟁자가 FP보다 강해져서
+    실제로 top-1을 빼앗을 위험이 커짐)만 억제한다. semantic_calib.py의
+    utility_refinement_terms(threshold-crossing hinge)와 같은 스타일.
+    """
+    ada = list_adaround_convs(quant_model)
+    for ac in ada:
+        ac.soft = False
+        ac.ste = False
+        ac.use_smult = True
+        ac.alpha.requires_grad_(False)
+
+    fp_head = _find_head(fp_model); fp_cap = _CV4Capture(fp_head)
+    fp_sims = []
+    with torch.no_grad():
+        for t in calib_tensors:
+            fp_cap.clear(); fp_model(t.to(device))
+            parts = []
+            for i in sorted(fp_cap.buf):
+                B, P, H, W = fp_cap.buf[i].shape
+                parts.append(fp_cap.buf[i].reshape(B, P, H*W))
+            fp_sims.append(torch.cat(parts, dim=2)[0].transpose(0, 1).detach())
+    fp_cap.close()
+
+    txt_feats = get_txt_feats(fp_model).to(device)
+    neighbor_order = text_neighbor_order(txt_feats)
+    pidx_set = set(prompt_idx)
+    neighbor_set = set()
+    for c in prompt_idx:
+        order = neighbor_order[c].tolist()
+        picked = [o for o in order if o not in pidx_set][:neighbor_k]
+        neighbor_set.update(picked)
+    neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
+
+    q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head)
+    smults = [ac.s_mult for ac in ada]
+    s0 = [s.detach().clone() for s in smults]
+    opt = torch.optim.Adam(smults, lr=lr)
+    pidx = torch.tensor(prompt_idx, device=device)
+
+    if verbose:
+        print(f"[promptcal-C+neighbor] {len(fp_sims)} calib, prompt subset {len(prompt_idx)}개, "
+              f"neighbor {len(neighbor_cols)}개(k={neighbor_k}), s_mult {len(ada)}개, "
+              f"margin(k={k}) neighbor_weight={neighbor_weight}")
+
+    n = len(calib_tensors)
+    for it in range(iters):
+        j = it % n
+        t = calib_tensors[j].to(device); sim_fp = fp_sims[j]
+        prob = sim_fp.sigmoid(); mp, _ = prob.max(-1); conf = mp > conf_thres
+        if conf.sum() == 0:
+            continue
+        aidx = conf.nonzero(as_tuple=True)[0]
+        q_cap.clear(); opt.zero_grad()
+        quant_model(t)
+        parts = []
+        for i in sorted(q_cap.buf):
+            B, P, H, W = q_cap.buf[i].shape
+            parts.append(q_cap.buf[i].reshape(B, P, H*W))
+        sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
+        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k)
+        if asymmetric:
+            # 경쟁자가 FP보다 강해지는 방향(sim_q > sim_fp)만 억제. 약해지는
+            # 방향은 벌점 없음 -- 우연히 유익한 흔들림(예: seed 0)을 보존.
+            diff = sim_q[aidx][:, neighbor_cols] - sim_fp[aidx][:, neighbor_cols]
+            nl = F.relu(diff).pow(2).mean()
+        else:
+            nl = F.mse_loss(sim_q[aidx][:, neighbor_cols], sim_fp[aidx][:, neighbor_cols])
+        loss = ml + neighbor_weight * nl
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(smults, max_norm=1.0)
+        opt.step()
+
+        if verbose and (it + 1) % max(1, iters // 10) == 0:
+            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
+                  f"neighbor_loss={float(nl.detach()):.4f} "
+                  f"s_mult 평균={smean:.3f} 변화={sd:.4f}")
+
+        if eval_hook is not None and (it + 1) % max(1, iters // 10) == 0:
+            eval_hook(it + 1, quant_model)
+
+    q_cap.close()
+    if verbose:
+        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        print(f"[promptcal-C+neighbor] 완료 (s_mult 총 변화={tot:.3f})")

@@ -1,0 +1,119 @@
+[determinism] torch.manual_seed=0, cudnn.deterministic=True, cudnn.benchmark=False
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] AdaRound (baseline, seed-무관)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+====================================================================================================
+ AdaRound vs +scale vs +scale+neighbor(k=5, w=0.5)
+====================================================================================================
+
+--- seed 0 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1825 s_mult 평균=0.959 변화=0.0624
+  [300/1500] margin_loss=0.0677 s_mult 평균=0.964 변화=0.0723
+  [450/1500] margin_loss=0.0781 s_mult 평균=0.958 변화=0.0785
+  [600/1500] margin_loss=0.0658 s_mult 평균=0.970 변화=0.0847
+  [750/1500] margin_loss=0.1875 s_mult 평균=0.980 변화=0.0773
+  [900/1500] margin_loss=0.1872 s_mult 평균=0.968 변화=0.0785
+  [1050/1500] margin_loss=0.1492 s_mult 평균=0.985 변화=0.0759
+  [1200/1500] margin_loss=0.1044 s_mult 평균=0.982 변화=0.0702
+  [1350/1500] margin_loss=0.0486 s_mult 평균=0.976 변화=0.0754
+  [1500/1500] margin_loss=0.0553 s_mult 평균=0.969 변화=0.0737
+[promptcal-C] 완료 (s_mult 총 변화=5.235)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C+neighbor] 32 calib, prompt subset 40개, neighbor 35개(k=5), s_mult 71개, margin(k=5) neighbor_weight=0.5
+  [150/1500] margin_loss=0.1262 neighbor_loss=0.1020 s_mult 평균=0.973 변화=0.0593
+  [300/1500] margin_loss=0.0783 neighbor_loss=0.1991 s_mult 평균=0.978 변화=0.0708
+  [450/1500] margin_loss=0.2478 neighbor_loss=6.6168 s_mult 평균=0.977 변화=0.0789
+  [600/1500] margin_loss=0.0695 neighbor_loss=0.0640 s_mult 평균=0.974 변화=0.0822
+  [750/1500] margin_loss=0.2140 neighbor_loss=0.2620 s_mult 평균=0.976 변화=0.0868
+  [900/1500] margin_loss=0.1996 neighbor_loss=0.0943 s_mult 평균=0.977 변화=0.0792
+  [1050/1500] margin_loss=0.1541 neighbor_loss=0.2410 s_mult 평균=0.973 변화=0.0767
+  [1200/1500] margin_loss=0.0907 neighbor_loss=0.3509 s_mult 평균=0.958 변화=0.0805
+  [1350/1500] margin_loss=0.0613 neighbor_loss=0.0650 s_mult 평균=0.969 변화=0.0774
+  [1500/1500] margin_loss=0.0531 neighbor_loss=0.0524 s_mult 평균=0.963 변화=0.0769
+[promptcal-C+neighbor] 완료 (s_mult 총 변화=5.463)
+
+  [S margin]      AdaRound=0.1277  +scale=0.1020  +scale+near=0.1086
+  [H_eval flip]   AdaRound=7.59%  +scale=7.36%  +scale+near=8.61%
+
+--- seed 1 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.2017 s_mult 평균=0.972 변화=0.0629
+  [300/1500] margin_loss=0.1192 s_mult 평균=0.981 변화=0.0770
+  [450/1500] margin_loss=0.0887 s_mult 평균=0.968 변화=0.0823
+  [600/1500] margin_loss=0.0641 s_mult 평균=0.979 변화=0.0836
+  [750/1500] margin_loss=0.1040 s_mult 평균=0.983 변화=0.0720
+  [900/1500] margin_loss=0.0978 s_mult 평균=0.978 변화=0.0823
+  [1050/1500] margin_loss=0.1612 s_mult 평균=0.978 변화=0.0912
+  [1200/1500] margin_loss=0.1858 s_mult 평균=0.985 변화=0.0888
+  [1350/1500] margin_loss=0.0415 s_mult 평균=0.985 변화=0.0863
+  [1500/1500] margin_loss=0.0681 s_mult 평균=0.979 변화=0.0877
+[promptcal-C] 완료 (s_mult 총 변화=6.230)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C+neighbor] 32 calib, prompt subset 40개, neighbor 35개(k=5), s_mult 71개, margin(k=5) neighbor_weight=0.5
+  [150/1500] margin_loss=0.2840 neighbor_loss=0.6878 s_mult 평균=0.966 변화=0.0585
+  [300/1500] margin_loss=0.0900 neighbor_loss=0.1071 s_mult 평균=0.971 변화=0.0628
+  [450/1500] margin_loss=0.0887 neighbor_loss=0.1177 s_mult 평균=0.968 변화=0.0688
+  [600/1500] margin_loss=0.1338 neighbor_loss=0.2949 s_mult 평균=0.978 변화=0.0689
+  [750/1500] margin_loss=0.1806 neighbor_loss=0.1898 s_mult 평균=0.971 변화=0.0717
+  [900/1500] margin_loss=0.1092 neighbor_loss=0.1584 s_mult 평균=0.972 변화=0.0719
+  [1050/1500] margin_loss=0.1847 neighbor_loss=0.1569 s_mult 평균=0.974 변화=0.0764
+  [1200/1500] margin_loss=0.1258 neighbor_loss=0.2112 s_mult 평균=0.980 변화=0.0747
+  [1350/1500] margin_loss=0.0744 neighbor_loss=0.0729 s_mult 평균=0.985 변화=0.0807
+  [1500/1500] margin_loss=0.0542 neighbor_loss=0.0475 s_mult 평균=0.991 변화=0.0841
+[promptcal-C+neighbor] 완료 (s_mult 총 변화=5.973)
+
+  [S margin]      AdaRound=0.1406  +scale=0.1104  +scale+near=0.1183
+  [H_eval flip]   AdaRound=8.92%  +scale=9.00%  +scale+near=8.21%
+
+--- seed 2 ---
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C] 32 calib, prompt subset 40개, s_mult 71개 최적화(scale), margin(k=5)
+  [150/1500] margin_loss=0.1523 s_mult 평균=0.965 변화=0.0713
+  [300/1500] margin_loss=0.0878 s_mult 평균=0.961 변화=0.0728
+  [450/1500] margin_loss=0.2479 s_mult 평균=0.957 변화=0.0828
+  [600/1500] margin_loss=0.0843 s_mult 평균=0.957 변화=0.0723
+  [750/1500] margin_loss=0.1121 s_mult 평균=0.967 변화=0.0759
+  [900/1500] margin_loss=0.2421 s_mult 평균=0.967 변화=0.0769
+  [1050/1500] margin_loss=0.2385 s_mult 평균=0.959 변화=0.0782
+  [1200/1500] margin_loss=0.1798 s_mult 평균=0.966 변화=0.0790
+  [1350/1500] margin_loss=0.0690 s_mult 평균=0.967 변화=0.0746
+  [1500/1500] margin_loss=0.0614 s_mult 평균=0.968 변화=0.0762
+[promptcal-C] 완료 (s_mult 총 변화=5.408)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[promptcal-C+neighbor] 32 calib, prompt subset 40개, neighbor 35개(k=5), s_mult 71개, margin(k=5) neighbor_weight=0.5
+  [150/1500] margin_loss=0.1187 neighbor_loss=0.3045 s_mult 평균=0.980 변화=0.0589
+  [300/1500] margin_loss=0.0719 neighbor_loss=0.1413 s_mult 평균=0.970 변화=0.0721
+  [450/1500] margin_loss=0.4845 neighbor_loss=5.1777 s_mult 평균=0.972 변화=0.0748
+  [600/1500] margin_loss=0.0498 neighbor_loss=0.0825 s_mult 평균=0.972 변화=0.0758
+  [750/1500] margin_loss=0.4092 neighbor_loss=0.1955 s_mult 평균=0.971 변화=0.0744
+  [900/1500] margin_loss=0.2442 neighbor_loss=0.1188 s_mult 평균=0.967 변화=0.0816
+  [1050/1500] margin_loss=0.2165 neighbor_loss=0.1724 s_mult 평균=0.977 변화=0.0804
+  [1200/1500] margin_loss=0.3340 neighbor_loss=0.8406 s_mult 평균=0.981 변화=0.0820
+  [1350/1500] margin_loss=0.0660 neighbor_loss=0.0731 s_mult 평균=0.974 변화=0.0765
+  [1500/1500] margin_loss=0.0679 neighbor_loss=0.0486 s_mult 평균=0.972 변화=0.0779
+[promptcal-C+neighbor] 완료 (s_mult 총 변화=5.531)
+
+  [S margin]      AdaRound=0.1393  +scale=0.1256  +scale+near=0.1224
+  [H_eval flip]   AdaRound=9.64%  +scale=9.10%  +scale+near=8.56%
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |   Ada_H |  Scale_H | ScaleNear_H |   Ada_m |  Scale_m | ScaleNear_m
+   0 |   7.59% |    7.36% |       8.61% |  0.1277 |   0.1020 |      0.1086
+   1 |   8.92% |    9.00% |       8.21% |  0.1406 |   0.1104 |      0.1183
+   2 |   9.64% |    9.10% |       8.56% |  0.1393 |   0.1256 |      0.1224
+
+참고: 39번(결정성 적용, neighbor 없음) H_eval = 7.99%/9.09%/9.24% (seed 0/1/2)
+
+판정:
+  ScaleNear_H < Scale_H (동일 seed에서 neighbor 항이 순수하게 도움이 됐는지)
+     -> collateral shift 억제가 실제로 작동. seed 0/1의 악화가 줄어드는지가 핵심.
+  ScaleNear_H < Ada_H 까지 되면 -> AdaRound baseline 자체를 이긴 것(논문 핵심 주장 지지).
+  변화 없거나 악화 -> neighbor 항의 강도(neighbor_weight)나 범위(neighbor_k) 조정 필요,
+     혹은 이 메커니즘 자체가 억제 대상이 아닐 수 있음.

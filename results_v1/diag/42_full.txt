@@ -1,0 +1,151 @@
+[load] FP
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+
+====================================================================================================
+ seed별 H_eval 구성 분석
+====================================================================================================
+
+--- seed 0 : 39번 결과 = 승 (-0.10pp) ---
+  H_eval class 20개: ['banana', 'bed', 'bird', 'chair', 'cup', 'donut', 'frisbee', 'kite', 'laptop', 'oven', 'potted plant', 'sandwich', 'sink', 'snowboard', 'teddy bear', 'tennis racket', 'toaster', 'toothbrush', 'truck', 'umbrella']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8449
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    truck           <-> bus              sim=0.8991
+    snowboard       <-> skateboard       sim=0.8988
+    bird            <-> horse            sim=0.8766
+    cup             <-> bottle           sim=0.8741
+    sandwich        <-> pizza            sim=0.8730
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 3819
+  가장 많이 등장한 H_eval class: [('chair', 1168), ('cup', 660), ('laptop', 347), ('potted plant', 176), ('banana', 161)]
+
+--- seed 1 : 39번 결과 = 패 (+0.10pp) ---
+  H_eval class 20개: ['banana', 'bed', 'boat', 'broccoli', 'car', 'carrot', 'clock', 'cup', 'fire hydrant', 'fork', 'hair drier', 'handbag', 'oven', 'pizza', 'potted plant', 'refrigerator', 'skateboard', 'sports ball', 'teddy bear', 'wine glass']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8428
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    handbag         <-> backpack         sim=0.9032
+    skateboard      <-> snowboard        sim=0.8988
+    fork            <-> knife            sim=0.8911
+    cup             <-> bowl             sim=0.8777
+    boat            <-> train            sim=0.8764
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 4080
+  가장 많이 등장한 H_eval class: [('car', 827), ('cup', 660), ('broccoli', 373), ('handbag', 335), ('clock', 236)]
+
+--- seed 2 : 39번 결과 = 승 (-0.71pp) ---
+  H_eval class 20개: ['backpack', 'banana', 'bicycle', 'broccoli', 'car', 'cat', 'couch', 'dog', 'fork', 'frisbee', 'horse', 'refrigerator', 'remote', 'scissors', 'skateboard', 'skis', 'snowboard', 'surfboard', 'toaster', 'zebra']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8358
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    backpack        <-> handbag          sim=0.9032
+    car             <-> truck            sim=0.8902
+    horse           <-> cow              sim=0.8878
+    dog             <-> cow              sim=0.8858
+    cat             <-> cow              sim=0.8763
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 3517
+  가장 많이 등장한 H_eval class: [('car', 827), ('broccoli', 373), ('zebra', 298), ('couch', 240), ('horse', 238)]
+
+--- seed 3 : 39번 결과 = 승 (-0.56pp) ---
+  H_eval class 20개: ['bed', 'bird', 'boat', 'bowl', 'broccoli', 'bus', 'couch', 'cow', 'dog', 'donut', 'frisbee', 'handbag', 'kite', 'refrigerator', 'sink', 'skateboard', 'tie', 'traffic light', 'truck', 'wine glass']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8523
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    bus             <-> train            sim=0.9150
+    skateboard      <-> snowboard        sim=0.8988
+    truck           <-> train            sim=0.8939
+    cow             <-> horse            sim=0.8878
+    wine glass      <-> cup              sim=0.8789
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 3583
+  가장 많이 등장한 H_eval class: [('bowl', 486), ('broccoli', 373), ('handbag', 335), ('couch', 240), ('bus', 225)]
+
+--- seed 4 : 39번 결과 = 패 (+0.42pp) ---
+  H_eval class 20개: ['airplane', 'carrot', 'cat', 'cell phone', 'dining table', 'donut', 'elephant', 'hair drier', 'horse', 'keyboard', 'laptop', 'pizza', 'scissors', 'toothbrush', 'traffic light', 'train', 'tv', 'umbrella', 'vase', 'zebra']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8421
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    train           <-> bus              sim=0.9150
+    cat             <-> dog              sim=0.9122
+    horse           <-> bear             sim=0.8767
+    pizza           <-> sandwich         sim=0.8730
+    scissors        <-> knife            sim=0.8709
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 3799
+  가장 많이 등장한 H_eval class: [('dining table', 564), ('laptop', 347), ('cell phone', 324), ('tv', 303), ('zebra', 298)]
+
+--- seed 5 : 39번 결과 = 승 (-1.11pp) ---
+  H_eval class 20개: ['bicycle', 'boat', 'broccoli', 'bus', 'cat', 'dog', 'fire hydrant', 'hair drier', 'hot dog', 'kite', 'laptop', 'microwave', 'motorcycle', 'mouse', 'pizza', 'sandwich', 'scissors', 'surfboard', 'toilet', 'wine glass']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8459
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    bus             <-> train            sim=0.9150
+    wine glass      <-> cup              sim=0.8789
+    boat            <-> train            sim=0.8764
+    laptop          <-> keyboard         sim=0.8722
+    sandwich        <-> cake             sim=0.8705
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 3059
+  가장 많이 등장한 H_eval class: [('broccoli', 373), ('motorcycle', 350), ('laptop', 347), ('bus', 225), ('pizza', 210)]
+
+--- seed 6 : 39번 결과 = 승 (-0.95pp) ---
+  H_eval class 20개: ['backpack', 'banana', 'bear', 'bird', 'book', 'cake', 'cup', 'dining table', 'elephant', 'fork', 'horse', 'knife', 'microwave', 'parking meter', 'person', 'pizza', 'scissors', 'sports ball', 'truck', 'vase']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8536
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    backpack        <-> handbag          sim=0.9032
+    truck           <-> bus              sim=0.8991
+    cup             <-> wine glass       sim=0.8789
+    pizza           <-> sandwich         sim=0.8730
+    microwave       <-> oven             sim=0.8721
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 12171
+  가장 많이 등장한 H_eval class: [('person', 8952), ('cup', 660), ('dining table', 564), ('elephant', 253), ('horse', 238)]
+
+--- seed 7 : 39번 결과 = 패 (+1.21pp) ---
+  H_eval class 20개: ['baseball bat', 'bear', 'bench', 'bus', 'cat', 'cup', 'dining table', 'horse', 'hot dog', 'keyboard', 'kite', 'knife', 'oven', 'remote', 'sheep', 'skis', 'snowboard', 'stop sign', 'tennis racket', 'umbrella']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8558
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    bear            <-> teddy bear       sim=0.9272
+    bus             <-> train            sim=0.9150
+    cat             <-> dog              sim=0.9122
+    snowboard       <-> skateboard       sim=0.8988
+    knife           <-> fork             sim=0.8911
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 3391
+  가장 많이 등장한 H_eval class: [('cup', 660), ('dining table', 564), ('sheep', 241), ('horse', 238), ('bus', 225)]
+
+--- seed 8 : 39번 결과 = 패 (+0.16pp) ---
+  H_eval class 20개: ['bed', 'broccoli', 'car', 'cell phone', 'cup', 'elephant', 'giraffe', 'hair drier', 'handbag', 'horse', 'knife', 'microwave', 'orange', 'refrigerator', 'spoon', 'sports ball', 'surfboard', 'teddy bear', 'tie', 'toaster']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8418
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    knife           <-> fork             sim=0.8911
+    horse           <-> cow              sim=0.8878
+    cup             <-> bowl             sim=0.8777
+    surfboard       <-> skateboard       sim=0.8770
+    microwave       <-> oven             sim=0.8721
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 4407
+  가장 많이 등장한 H_eval class: [('car', 827), ('cup', 660), ('broccoli', 373), ('handbag', 335), ('cell phone', 324)]
+
+--- seed 9 : 39번 결과 = 승 (-0.79pp) ---
+  H_eval class 20개: ['backpack', 'bed', 'boat', 'bus', 'chair', 'fire hydrant', 'fork', 'giraffe', 'handbag', 'kite', 'microwave', 'person', 'remote', 'sandwich', 'skateboard', 'spoon', 'sports ball', 'suitcase', 'tv', 'vase']
+  H_eval -> S 최근접 이웃 평균 cos-sim: 0.8456
+  H_eval -> S 최근접 이웃 top5 (가장 가까운 순):
+    bus             <-> train            sim=0.9150
+    skateboard      <-> snowboard        sim=0.8988
+    boat            <-> train            sim=0.8764
+    microwave       <-> oven             sim=0.8721
+    tv              <-> couch            sim=0.8617
+  H_eval confident anchor 총 개수(FP 기준, probe 500장): 12361
+  가장 많이 등장한 H_eval class: [('person', 8952), ('chair', 1168), ('handbag', 335), ('tv', 303), ('bus', 225)]
+
+====================================================================================================
+ 요약 표
+====================================================================================================
+seed |  gap(pp) |           결과 |  avg_sim(H_eval->S) | n_confident
+   0 |    -0.10 |  승 (-0.10pp) |              0.8449 |        3819
+   1 |    +0.10 |  패 (+0.10pp) |              0.8428 |        4080
+   2 |    -0.71 |  승 (-0.71pp) |              0.8358 |        3517
+   3 |    -0.56 |  승 (-0.56pp) |              0.8523 |        3583
+   4 |    +0.42 |  패 (+0.42pp) |              0.8421 |        3799
+   5 |    -1.11 |  승 (-1.11pp) |              0.8459 |        3059
+   6 |    -0.95 |  승 (-0.95pp) |              0.8536 |       12171
+   7 |    +1.21 |  패 (+1.21pp) |              0.8558 |        3391
+   8 |    +0.16 |  패 (+0.16pp) |              0.8418 |        4407
+   9 |    -0.79 |  승 (-0.79pp) |              0.8456 |       12361
+
+Pearson 상관계수: gap vs avg_sim(H_eval->S) = +0.161   gap vs n_confident = -0.430
+  (+ : avg_sim/n_confident가 클수록 gap도 커진다 = 악화와 연관.
+   - : avg_sim/n_confident가 클수록 gap은 작아진다 = 개선과 연관.)
+
+해석 가이드:
+  avg_sim(H_eval->S)이 높을수록 H_eval class가 S class와 text embedding상
+  가깝다 -- S에서 배운 margin 조정이 우연히 H_eval에도 통했을 가능성.
+  n_confident가 seed마다 크게 다르면 flip%의 표본 크기 자체가 달라
+  노이즈에 대한 민감도가 다를 수 있음(작은 n은 flip%가 쉽게 크게 흔들림).
