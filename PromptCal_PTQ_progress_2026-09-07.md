@@ -139,3 +139,58 @@ results_v1/diag/45_metrics_seed{0,1,2,4,5,7}_full.txt -- 위 로그를 관례 �
 
 관련 커밋: `511f438`(Top1_flip/GT 지표 구현 + 6-seed 결과), `379fdca`
 (MASTER_SUMMARY 갱신 + PROMPTCAL_HOW_IT_WORKS 신규).
+
+---
+
+## 6. v1(최초 PromptCal: margin+decision+reg, alpha rounding)을 새 지표로 재검증
+
+사용자 질문: "v1도 flip이 안 좋아지는 걸 확인했었는데, 평가지표가 바뀌었으니
+v1도 새 지표로 다시 확인해보고 싶다." 여기서 v1은 `scripts/20_promptcal_minimal.py`
+/ `src/quant/promptcal.py`의 `optimize_promptcal` — AdaRound의 alpha(rounding)를
+`margin_loss + decision_weight·decision(CE) + reg_weight·reg`로 최적화하는,
+Combined(연속 s_mult + asymmetric neighbor hinge)로 피벗하기 **이전**의 최초
+시도다(`PROMPTCAL_METHOD_SPEC.md` 참고). 당시엔 masked held-out flip만 쟀고
+AdaRound보다 못했다(때에 따라 9.24%→14.80%까지 악화)는 이유로 폐기됐었다.
+
+그런데 09-06/09-07에서 Combined도 masked H_eval_flip에서는 나쁘지만 표준
+Top1_flip/AP/GT 지표에서는 최선이라는 게 밝혀졌으니(§18, 본 문서 §2), "v1도
+당시 masked flip만으로 성급하게 버려진 건 아닐까?"라는 합리적 의문이 생김.
+`scripts/46_v1_metrics_check.py`를 새로 작성해서(naive/v1만 새로 빌드, AdaRound/
+Combined는 이미 확보된 6-seed 값 재사용) 같은 6-seed·같은 probe로 확인.
+
+### 6.1 결과 (6-seed 집계)
+
+```
+condition |    AP      | H_evalAP   | Heval_flip% | Top1_flip% | GT_MRR        | GT_R@1        | lost      | UPIR%
+naive     | 35.06(c)   | 35.63±3.97 |  9.79±1.06  |  0.820(c)  | 0.9267(c)     | 0.8843(c)     | 41.0(c)   | 0.232±0.130
+v1        | 35.56±0.08 | 36.06±3.85 | 10.00±1.07  |  0.920±0.036| 0.9269±0.0005 | 0.8850±0.0009 | 42.0±2.4  | 0.220±0.113
+(calib 시간: naive 3.7s, v1 129s)
+```
+
+v1 vs naive 승패(6-seed):
+- AP: v1이 **6/6 승**(+0.5, 이전엔 한 번도 측정된 적 없던 지표 — v1도 naive보다 AP는 낫다).
+- Top1_flip(표준): v1이 **0/6 승** — 6개 seed 전부 naive보다 나쁨(naive 0.82% vs v1 평균 0.92%).
+- H_eval_flip(masked)/lost/UPIR: 승패가 반반으로 갈려 사실상 **naive와 구분 안 됨**(noise 수준).
+- GT_MRR/R@1: 근소하게 나음(+0.0002/+0.0007) — 사실상 무의미한 차이.
+
+### 6.2 판정 — Combined와 다르게, v1은 새 지표로도 구제되지 않는다
+
+Combined는 "masked H_eval_flip에서만 나쁘고 나머지(AP·표준 flip·GT·UPIR)는
+전부 최선"이라는 패턴이었다. v1은 그 반대에 가깝다: **AP는 naive보다 낫지만,
+정작 이 연구의 핵심 관심사인 "결정 일치도"를 표준 지표(masking 없는 실제
+배포 조건)로 재면 v1은 naive(아무것도 안 함)보다도 못하다.** GT 기반 지표·
+masked flip도 개선은커녕 naive와 다를 바 없다. 즉:
+
+> v1의 문제는 "잘못된 지표로 잰 것"이 아니라 **실제로 결정 보존에 실패했다는 것**
+> 자체였다 — masked H_eval_flip이 우연히 그 실패를 잡아낸 것뿐, 어떤 지표로
+> 봐도 v1은 개선이라 부를 수 없다. Combined로의 피벗(alpha rounding → 연속
+> s_mult, decision CE → margin+neighbor hinge)이 정당했다는 게 새 지표
+> 세트로도 재확인됨.
+
+### 6.3 코드/결과
+
+```
+scripts/46_v1_metrics_check.py      -- v1(naive/promptcal alpha) 전용 새 지표 재검증
+runs/46_v1/seed{0,1,2,4,5,7}.log    -- 원본 stdout
+results_v1/diag/46_v1_metrics_seed{0,1,2,4,5,7}_full.txt -- 관례 경로 복사본
+```
