@@ -198,15 +198,229 @@ identity mapping이라 문제없었음을 UUID로 확인. 이후 모든 실행�
 
 ---
 
-## 9. 코드 구조 (09-05 문서 이후 추가분)
+## 9. 44번: Utility-Constrained Refinement 재통합 — 중립적
+
+논문 §4.3(threshold-crossing + box consistency, `semantic_calib.py`의
+`utility_refinement_terms`)을 `optimize_promptcal_scale_neighbor_utility`로
+Combined 위에 재통합해서(`scripts/44_utility_ap_check.py`) 6 seed(0,1,2,4,5,7)에서
+확인했다.
+
+```text
+Combined vs Combined+Utility 격차 (6 seed)
+  전체 mAP  평균 +0.05 (최대 편차 ±0.17)
+  H_eval mAP 평균 +0.06 (최대 편차 ±0.17)
+```
+
+기본 가중치(thresh_w=1.0, box_w=0.5)에서는 **사실상 중립적** — 있으나 없으나 거의
+같다. neighbor preservation(semantic calibration)이 이미 개선 여지의 대부분을
+가져간 것으로 보이며, 이 세팅에서 utility constraint를 추가로 튜닝해도 큰 이득은
+기대하기 어려워 보인다(가중치를 세게 올려서 재확인하는 것도 가능하지만 후순위로 미룸).
+
+---
+
+## 10. Baseline 비교 착수: QDrop, BRECQ
+
+지금까지 AdaRound 하나만 baseline이었다. 논문 Related Work에 언급된 QDrop
+(activation drop으로 강건한 rounding), BRECQ(block 단위 joint reconstruction)와도
+비교해야 baseline 비교가 완성된다. 코드베이스에 이미 구현이 있었다
+(`src/quant/brecq.py`, `src/quant/adaround.py`의 `qdrop_prob`).
+
+`scripts/45_baseline_compare.py`(seed 2)로 첫 확인:
+
+```text
+전체 mAP50-95: FP32=36.80 naive=35.06 AdaRound=34.96 QDrop=35.06 BRECQ=34.98 Combined=36.47
+```
+
+**QDrop, BRECQ가 AdaRound보다 더 정교한 방법인데도 naive와 거의 구분이 안 됐다**
+(34.96~35.06 좁은 범위). Combined만 확실히 앞섰다(+1.4 이상).
+
+---
+
+## 11. 발견: AdaRound/BRECQ의 "누적 오차 미반영" 버그
+
+QDrop/BRECQ가 이론상 기대만큼 효과가 없는 게 이상해서 구현을 재검토했다.
+`optimize_adaround`(및 `optimize_brecq`)는 **모든 layer/block의 재구성 입력을
+fp_module에서만 캡처**하고 있었다 — 즉 10번째 layer를 최적화할 때도 "앞의 9개
+layer가 이미 양자화돼서 생긴 오차가 섞인 진짜 입력"이 아니라 "앞이 전부 완벽한
+FP였다고 가정한 입력"을 썼다. 원래 AdaRound/BRECQ 절차의 핵심(순서대로 처리하며
+이미 처리된 앞쪽 layer의 실제 양자화 오차를 뒤쪽 layer가 보상하도록 학습)이
+빠져 있었던 것.
+
+**수정**: `optimize_adaround`, `optimize_brecq` 둘 다 target(이상적 목표)은
+그대로 FP 기준으로 캡처하되, pred의 입력(`q_in`)은 quant_module 자체의 현재
+상태(이미 처리된 앞쪽 layer는 hardened, 아직 처리 안 된 뒤쪽은 soft/init)로
+별도로 다시 캡처하도록 고쳤다(asymmetric reconstruction: target=FP, input=실제
+누적 오차 반영). QDrop의 drop도 이제 q_in 기준으로 동작하도록 함께 수정.
+
+---
+
+## 12. 수정 후 재검증: 버그는 진짜였지만 "숨겨진 개선"은 없었다
+
+수정 후 seed 2 재실행(`45_fixed_seed2_full.txt`):
+
+```text
+                수정 전                수정 후
+naive         | 35.06                | 35.06
+AdaRound      | 34.96                | 35.05
+QDrop         | 35.06                | 35.08
+BRECQ         | 34.98                | 35.01
+Combined      | 36.47                | 36.38
+```
+
+**AdaRound/QDrop/BRECQ는 수정 후에도 naive와 여전히 거의 구분이 안 된다**(오히려
+더 좁게 뭉침). 즉 "누적 오차 미반영이 이 baseline들을 실제보다 약하게 만들었다"는
+가설은 기각됐다 — 버그는 실재했고 고쳤지만, 그게 원인이 아니었다.
+
+더 설득력 있는 설명: **W8A8은 naive quantization도 이미 FP32에 꽤 가까운("쉬운")
+세팅이라, reconstruction 기반 방법들이 개선할 여지 자체가 거의 없다.** 이 방법들은
+보통 INT4 이하 저비트에서 진가를 발휘한다. Combined는 수정 후에도 거의 그대로
+유지(-0.09, noise 범위) — 예전 버그가 Combined 결과를 부풀린 것도 아니었다.
+
+결과적으로 이건 논문 주장을 더 깔끔하게 만든다: **"reconstruction을 아무리
+정교하게(버그를 고쳐도) 해도 이 세팅에서는 다 같은 지점(~35.0~35.1)에 갇히는데,
+semantic-aware 방법만 그 천장을 뚫는다."**
+
+---
+
+## 13. 6-seed baseline 비교 (AP): Combined 6/6 완승
+
+수정판으로 seed 0,1,2,4,5,7 전체를 재실행(`45_fixed_seed{N}_full.txt`).
+
+H_eval subset mAP50-95:
+
+```text
+seed |  naive | AdaRound |  QDrop |  BRECQ | Combined | Combined 격차(최고 baseline 대비)
+   0 |  32.61 |    32.66 |  32.68 |  32.39 |    33.64 | +0.96
+   1 |  30.47 |    30.47 |  30.52 |  30.41 |    31.65 | +1.13
+   2 |  35.77 |    35.70 |  35.65 |  35.61 |    37.23 | +1.46
+   4 |  40.20 |    39.98 |  40.02 |  39.96 |    41.33 | +1.13
+   5 |  40.21 |    40.23 |  40.11 |  40.20 |    41.72 | +1.49
+   7 |  34.54 |    34.35 |  34.49 |  34.32 |    36.32 | +1.78
+평균 |  35.63 |    35.57 |  35.58 |  35.48 |    36.98 | +1.35
+```
+
+**6/6 전승, 평균 +1.35.** naive/AdaRound/QDrop/BRECQ는 seed 안에서 항상 0.2~0.4점
+이내로 서로 구분이 안 되는데, Combined는 그 넷 중 최고보다도 항상 최소 +0.96점
+이상 앞선다. QDrop, BRECQ까지 포함해서 baseline 비교가 통계적으로 탄탄해졌다.
+
+---
+
+## 14. flip을 다시 추가했더니 정반대 결과가 나왔다
+
+AP만 재고 flip을 안 잰 것을 사용자가 지적함 — `scripts/45_baseline_compare.py`에
+`group_flip`(H_eval flip)을 다시 추가해서 같은 6 seed에서 재실행.
+
+```text
+H_eval flip (%)
+seed |  naive | AdaRound |  QDrop |  BRECQ | Combined
+   0 |   8.06 |     7.96 |   7.80 |   6.57 |     8.56
+   1 |  10.05 |     8.58 |   8.26 |   8.36 |     9.90
+   2 |   9.35 |     8.79 |   8.81 |   8.33 |     9.07
+   4 |  10.37 |     9.45 |   9.53 |   8.82 |     9.82
+   5 |  11.21 |    10.33 |  10.13 |   9.81 |    10.49
+   7 |   9.67 |     8.76 |   8.55 |   8.08 |     9.94
+평균 |   9.79 |     8.98 |   8.85 |   8.33 |     9.63
+```
+
+**AP 순위와 정반대다.** naive가 항상 flip 최악, **BRECQ가 6개 seed 전부 flip
+최선**, Combined는 naive와 비슷한 수준(오히려 4/6 seed는 naive보다 근소하게
+낫지만, AdaRound/QDrop/BRECQ보다는 뚜렷이 나쁘다). 같은 6 seed, 같은 모델들인데
+"AP 1등"과 "flip 1등"이 정확히 뒤바뀐 것.
+
+---
+
+## 15. flip과 AP가 왜 갈리는가 — 메커니즘 정리 (사용자와의 논의로 도출)
+
+### 15.1 flip 계산이 실제로 무엇을 재는지
+
+`group_flip`은 (1) FP가 confident하게 H_eval을 1등으로 뽑은 anchor만 골라서,
+(2) **H_eval 컬럼을 통째로 가린 뒤**, (3) 남은 **S+H_cal 60개** 안에서 새 1등
+(argmax)이 FP와 양자화 모델에서 같은지를 비교한다. 즉 "정답(H_eval)을 vocabulary에서
+지웠다면 승격됐을 2등이, FP와 양자화 모델에서 같은가"를 재는 지표다.
+
+### 15.2 Combined가 왜 flip에서 밀리는가
+
+margin_loss/neighbor_loss는 학습 중 **S 컬럼만 슬라이스해서** 계산되므로 H_cal
+컬럼을 아예 본 적이 없다. 그런데 실제 조정 대상인 `s_mult`는 conv 하나를 지나는
+시각 특징 전체에 곱해지는 **class-agnostic 스칼라**라서, S를 위해 조정한 결과가
+공유 특징을 통해 H_cal(및 다른 모든 클래스)의 절대 점수에도 그대로 새어나간다.
+flip이 순위를 비교하는 S+H_cal 60개 중 H_cal 20개는 이 누출을 전혀 방어받지
+못하므로, "정답을 지운 뒤의 2등 경쟁"이 흔들리기 쉽다. 반대로 AdaRound/QDrop/
+BRECQ(특히 block 단위로 상관까지 잡는 BRECQ)는 특정 클래스를 겨냥하지 않고
+전 클래스에 고르게 FP를 재현하려 하므로 이 좁은 지표에서 오히려 안정적이다.
+
+### 15.3 그런데도 AP는 왜 개선되는가
+
+flip이 재는 "정답을 지운 뒤의 2등"은 **실제 배포에서는 벌어지지 않는 상황**이다
+(정답이 vocabulary에 실제로 있으면 지워질 일이 없다). AP는 "정답이 실제로 있는
+상황에서 그 정답을 confident하고 정확하게 찾아내는가"만 본다. Combined는 S
+margin을 다듬는 과정의 전반적 효과로 **정답 자체의 유사도/confidence가 FP에
+가깝게 유지**되고(그 부수효과가 H_eval에도 일부 번지는 것으로 보임 -- 40번의
+collateral shift와 같은 메커니즘), 이게 AP 개선으로 이어진다. 반면 "정답이 없을
+때의 가상의 2등"이 안정적인가는 AP와 무관하다.
+
+### 15.4 flip을 재는 이유 자체는 타당하다 -- 단, 다른 배포 시나리오를 잰다
+
+flip이 가정하는 "정답 클래스가 vocabulary에서 빠진 상황"은 사실 실제로 일어날 수
+있다 -- open-vocabulary detection은 **같은 양자화 모델을 서로 다른 사용자가
+서로 다른 vocabulary로 질의**할 수 있다는 게 핵심 전제이므로, "zebra를 아예 안
+쓰는 사용자"는 실재하는 시나리오다. 문제는 **지금 AP는 "80개 다 포함한 사용자"
+기준으로, flip은 "H_eval을 뺀 사용자" 기준으로 재고 있어서, 서로 다른 두 배포
+조건을 하나의 표에서 비교하고 있었다**는 점이다. 이게 이번 반전의 근본 원인이다.
+
+### 15.5 논문 서술에 대한 함의 (미결정)
+
+이 발견 자체가 논문 §3.4("rank 보존이 AP를 보장하지 않음")를 실증하는 좋은
+사례가 될 수 있다. 다만 어떻게 다룰지는 아직 결정 안 됨. 후보:
+1. flip은 §3(Motivation)에서 "reconstruction만으로는 안 보이는 손상이 있다"는
+   문제 제기용으로만 쓰고, method 평가/main results는 AP(특히 H_eval subset AP)
+   중심으로 명확히 분리해서 서술.
+2. §Evaluation Protocol의 다른 지표(GT rank, boundary inversion)를 추가로 구현해서
+   flip만의 특이 현상인지, "결정 구조" 계열 지표 전체의 문제인지 구분.
+3. "좁은 반사실적 지표와 실제 배포 지표가 괴리될 수 있다"는 것 자체를 분석
+   섹션의 발견으로 정직하게 다루기.
+
+---
+
+## 16. 09-06 최종 결론
+
+```
+9  : Utility-Constrained Refinement 재통합 -> 중립적(기본 가중치 기준)
+10 : QDrop/BRECQ 첫 비교(seed 2) -> naive와 거의 구분 안 됨
+11 : AdaRound/BRECQ의 누적 오차 미반영 버그 발견, 수정
+12 : 수정 후에도 baseline들 그대로 -> W8A8은 원래 reconstruction 개선 여지가 작음
+13 : 6-seed AP 비교 -> Combined가 QDrop/BRECQ 포함 전부를 6/6으로 이김(평균 +1.35)
+14 : flip 재추가 -> AP와 정반대(BRECQ가 flip 최선, Combined는 naive 수준)
+15 : 메커니즘 규명 -> flip은 "정답이 vocabulary에서 빠진 다른 사용자" 시나리오,
+     AP는 "정답이 실제로 있는 상황" 시나리오. 서로 다른 배포 조건을 재고 있었음.
+```
+
+09-06 세션 전체를 통해: (1) 방법론 핵심(AdaRound weight + asymmetric neighbor
+scale)은 AP 기준으로 QDrop/BRECQ까지 포함해 통계적으로 탄탄하게 검증됐고, (2)
+그 과정에서 발견한 flip-AP 괴리는 버그가 아니라 **서로 다른 배포 시나리오를
+측정하고 있었다는 개념적 문제**임을 확인했다. 논문에서 이걸 어떻게 서술할지는
+아직 미결정 -- 다음 세션에서 결정 필요.
+
+---
+
+## 17. 코드 구조 (09-05 문서 이후 추가분)
 
 ```text
 scripts/40_seed_analysis.py       -- seed별 H_eval 구성/임베딩 유사도/anchor 수 분석
 scripts/41_neighbor_preserve.py   -- neighbor preservation(symmetric/asymmetric) 검증
 scripts/43_ap_check.py            -- pycocotools AP 검증(전체 + S/H_eval subset)
+scripts/44_utility_ap_check.py    -- Utility-Constrained Refinement 재통합 검증
+scripts/45_baseline_compare.py    -- AdaRound/QDrop/BRECQ/Combined AP+flip 비교
 
 src/quant/promptcal.py            -- optimize_promptcal_scale_neighbor 추가
-                                      (asymmetric 옵션 포함), eval_hook 지원
+                                      (asymmetric 옵션 포함), eval_hook 지원.
+                                      optimize_promptcal_scale_neighbor_utility 추가
+                                      (§4.3 utility constraint 재통합)
+src/quant/adaround.py             -- optimize_adaround: 누적 오차 반영(순차 재구성)로
+                                      수정 -- target은 FP 기준, pred 입력은 quant_module
+                                      현재 상태에서 별도 캡처. qdrop_prob도 q_in 기준.
+src/quant/brecq.py                -- optimize_brecq: 동일한 누적 오차 반영 수정
+                                      (target=FP 출력, input=quant_module 현재 상태)
 
 configs/coco_local.yaml           -- train 필드 손상 수정(오래된 잔재)
 
@@ -216,4 +430,8 @@ results_v1/diag/41_full.txt, 41_w03/w05_full.txt -- neighbor_weight 스윕
 results_v1/diag/41_asym_w10_full.txt, 41_asym_seed{3~9}_full.txt -- asymmetric 10-seed
 results_v1/diag/42_full.txt                     -- 상관관계 재분석
 results_v1/diag/43_full.txt, 43_seed{0,1,4,5,7}_full.txt -- AP 검증(6 seed)
+results_v1/diag/44_full.txt, 44_seed{0,1,4,5,7}_full.txt -- Utility 재통합 검증(6 seed)
+results_v1/diag/45_full.txt                     -- QDrop/BRECQ 첫 비교(seed 2, 버그 수정 전)
+results_v1/diag/45_fixed_seed{0,1,2,4,5,7}_full.txt -- 누적 오차 수정 후 AP 재검증(6 seed)
+results_v1/diag/45_flip_seed{0,1,2,4,5,7}_full.txt -- flip까지 포함한 최종 baseline 비교(6 seed)
 ```

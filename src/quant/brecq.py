@@ -34,6 +34,15 @@ def _hpairs(qm, fm):
 
 def optimize_brecq(quant_module, fp_module, calib_tensors, device,
                    iters=2000, lr=1e-2, reg_weight=1e-3, verbose=True):
+    """
+    09-06 수정: 순차/누적 오차 반영. 이전 버전은 block의 입력과 출력(target)을
+    둘 다 fp_module에서만 캡처해서, 앞선 block들의 실제 양자화 오차가 뒤쪽 block
+    재구성에 전혀 반영되지 않았다(모든 block이 "앞은 전부 완벽한 FP"라고 가정).
+    이번 버전은 입력을 quant_module 자체의 현재 상태(이미 처리된 앞쪽 block은
+    hardened, 아직 처리 안 된 뒤쪽은 soft/init)로 다시 캡처해서 누적 오차를
+    반영한다. target(출력) 기준은 그대로 FP다(asymmetric reconstruction,
+    optimize_adaround와 동일 원리).
+    """
     q_seq = quant_module.model      # DetectionModel.model = Sequential(blocks)
     fp_seq = fp_module.model
     q_blocks = list(q_seq)
@@ -57,28 +66,40 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
     if verbose:
         nb = sum(1 for t in targets if t[4])
         nc = sum(1 for t in targets if not t[4])
-        print(f"[brecq] 재구성 대상: block단위 {nb}개(joint), head conv단위 {nc}개")
+        print(f"[brecq] 재구성 대상: block단위 {nb}개(joint), head conv단위 {nc}개 (누적 오차 반영)")
 
     for ti, (label, qm, fm, convs, is_block) in enumerate(targets):
-        # FP (입력들, 출력) 캐시. C2fAttn 등은 입력이 2개(vision + text guide)이므로
-        # 첫 입력만이 아니라 입력 tuple 전체를 저장. 텍스트 guide는 양자화 안 하므로 FP값 유지.
-        in_buf, out_buf = [], []
+        # (1) target(FP 출력) 캐시 -- 이상적 목표, 순수 FP forward에서만 캡처.
+        out_buf = []
 
-        def hook(m, inp, out):
+        def fp_hook(m, inp, out):
             if torch.is_tensor(out):
-                saved = tuple(
-                    x.detach().half().cpu() if torch.is_tensor(x) else x
-                    for x in inp
-                )
-                in_buf.append(saved)
                 out_buf.append(out.detach().half().cpu())
-        hh = fm.register_forward_hook(hook)
+        hh_fp = fm.register_forward_hook(fp_hook)
         with torch.no_grad():
             for t in calib_list:
                 fp_module(t.to(device))
-        hh.remove()
+        hh_fp.remove()
 
-        if not in_buf:
+        # (2) 이 block/conv로 실제 흘러들어오는 입력 -- quant_module 현재 상태로
+        #     forward해서 캡처(누적 오차 반영). C2fAttn 등 입력이 여러 개인
+        #     경우 tuple 전체를 저장(텍스트 guide 등 양자화 안 하는 입력은 그대로).
+        in_buf = []
+
+        def q_hook(m, inp, out):
+            saved = tuple(
+                x.detach().half().cpu() if torch.is_tensor(x) else x
+                for x in inp
+            )
+            in_buf.append(saved)
+        hh_q = qm.register_forward_hook(q_hook)
+        with torch.no_grad():
+            for t in calib_list:
+                quant_module(t.to(device))
+        hh_q.remove()
+
+        n = min(len(in_buf), len(out_buf))
+        if n == 0:
             for c in convs:
                 c.soft = False
             if verbose:
@@ -91,7 +112,7 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
         alphas = [c.alpha for c in convs]
         opt = torch.optim.Adam(alphas, lr=lr)
         for it in range(iters):
-            j = it % len(in_buf)
+            j = it % n
             # 입력 복원: 텐서는 device로, 비텐서(있으면)는 그대로
             args = tuple(
                 x.to(device).float() if torch.is_tensor(x) else x

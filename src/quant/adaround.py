@@ -118,21 +118,35 @@ def optimize_adaround(quant_module, fp_module, calib_tensors, device,
                       iters=2000, lr=1e-2, reg_weight=1e-3, batch=1,
                       qdrop_prob=0.0, verbose=True):
     """
-    layer-wise AdaRound 최적화. 각 AdaRound conv를 독립적으로 최적화.
-      target = fp_conv(fp_input)  (FP 출력)
-      pred   = adaround_conv(act_input)  (양자화 weight)
+    layer-wise AdaRound 최적화(순차/누적 오차 반영, 09-06 수정). 각 conv를
+    네트워크 순서대로 처리하며:
+      target = fp_conv(fp_input)      (이상적 목표 -- 항상 순수 FP forward)
+      pred   = adaround_conv(q_input) (q_input은 quant_module 자체의 현재 상태로
+                                        흘린 실제 입력 -- 이미 처리된 앞쪽 layer는
+                                        hardened, 아직 처리 안 된 뒤쪽은 soft/init)
       loss   = MSE(pred, target) + reg_weight * reg(alpha)
 
-    qdrop_prob > 0 이면 QDrop: 최적화 중 activation을 원소별로 확률 qdrop_prob로만
-    양자화(나머지는 FP)해서 activation 양자화 노이즈에 강건한 반올림을 학습.
+    이전 버전은 target과 pred 둘 다 fp_module에서 캡처한 입력(xin)을 그대로
+    썼다 -- 즉 모든 layer가 "앞쪽이 전부 완벽한 FP"라고 가정하고 독립적으로
+    재구성됐고, 앞선 layer들의 실제 양자화 오차가 뒤쪽 layer 학습에 전혀
+    반영되지 않았다(AdaRound/BRECQ 원 절차의 핵심인 누적 오차 보상이 빠짐).
+    이번 버전은 pred의 입력만 quant_module 쪽에서 별도로 다시 캡처해서 이
+    누적 오차를 반영한다. target 기준은 그대로 FP다(asymmetric reconstruction).
+
+    qdrop_prob > 0 이면 QDrop: q_input 기준으로 원소별 확률 qdrop_prob로만
+    양자화(나머지는 q_input 그대로, 즉 "이 layer만 양자화 안 했다면"의 반사실)
+    해서 activation 양자화 노이즈에 강건한 반올림을 학습.
     추론(AdaRoundQuantConv2d.forward)은 항상 양자화 → drop 없음.
 
-    주의: 계산 무거움. calib 이미지 수 x layer 수만큼 fp forward.
+    주의: 계산 더 무거움. layer마다 FP forward 1회 + quant forward 1회
+    (calib 이미지 수만큼)가 추가로 필요.
     """
     import torch.nn as nn
 
     # quant/fp 트리를 나란히 순회해 위치가 정확히 대응되는 (AdaRound conv, fp Conv2d) 짝 생성.
     # wrap이 같은 위치의 nn.Conv2d를 AdaRound로 교체했으므로 두 트리 구조가 동일 → 1:1 매칭.
+    # named_children() 순회 순서가 forward 실행 순서와 (대체로) 일치한다고 가정 --
+    # 분기/concat이 있는 블록에서는 근사치이지만, "전부 완벽한 FP" 가정보다는 낫다.
     def pairs(qm, fm):
         for (qn, qc), (fn, fc) in zip(qm.named_children(), fm.named_children()):
             if isinstance(qc, AdaRoundQuantConv2d):
@@ -142,22 +156,33 @@ def optimize_adaround(quant_module, fp_module, calib_tensors, device,
 
     conv_pairs = list(pairs(quant_module, fp_module))
     if verbose:
-        print(f"[adaround] {len(conv_pairs)} conv 최적화 시작 (트리 나란히 매칭)")
+        print(f"[adaround] {len(conv_pairs)} conv 순차 최적화 시작 (누적 오차 반영, 트리 나란히 매칭)")
 
     calib_list = list(calib_tensors)
 
     for i, (ac, fc) in enumerate(conv_pairs):
-        # 대응 fp conv(fc)에 hook을 걸어 이 layer의 fp 입력을 streaming 캐시
-        buf = []
-        hh = fc.register_forward_hook(
-            lambda m, inp, out: buf.append(inp[0].detach().half().cpu()))
+        # (1) 이 layer의 FP 입력 -- target 계산 기준(이상적, 변경 없음)
+        fp_buf = []
+        hh_fp = fc.register_forward_hook(
+            lambda m, inp, out: fp_buf.append(inp[0].detach().half().cpu()))
         with torch.no_grad():
             for t in calib_list:
                 fp_module(t.to(device))
-        hh.remove()
+        hh_fp.remove()
 
-        inputs = buf
-        if len(inputs) == 0:
+        # (2) 이 layer로 실제 흘러들어오는 입력 -- quant_module 현재 상태(앞쪽
+        #     layer는 이미 hardened, 뒤쪽은 아직 처리 전 soft/init)로 forward해서
+        #     캡처. 누적 오차가 여기 반영된다.
+        q_buf = []
+        hh_q = ac.register_forward_hook(
+            lambda m, inp, out: q_buf.append(inp[0].detach().half().cpu()))
+        with torch.no_grad():
+            for t in calib_list:
+                quant_module(t.to(device))
+        hh_q.remove()
+
+        n = min(len(fp_buf), len(q_buf))
+        if n == 0:
             ac.soft = False
             if verbose:
                 print(f"  [{i+1}/{len(conv_pairs)}] 입력 미포착 스킵 (hard 유지)")
@@ -170,14 +195,16 @@ def optimize_adaround(quant_module, fp_module, calib_tensors, device,
         ac.soft = True
         opt = torch.optim.Adam([ac.alpha], lr=lr)
         for it in range(iters):
-            xin = inputs[it % len(inputs)].to(device).float()
+            j = it % n
+            fp_in = fp_buf[j].to(device).float()
+            q_in = q_buf[j].to(device).float()
             with torch.no_grad():
-                target = F.conv2d(xin, fp_w, bias, stride, pad, dil, grp)
-                xq = ac.a_obs.quantize(xin) if ac.a_obs.ready else xin
+                target = F.conv2d(fp_in, fp_w, bias, stride, pad, dil, grp)
+                xq = ac.a_obs.quantize(q_in) if ac.a_obs.ready else q_in
                 if qdrop_prob > 0:
-                    # QDrop: 원소별 확률 qdrop_prob로 양자화, 나머지는 FP
-                    m = (torch.rand_like(xin) < qdrop_prob)
-                    xq = torch.where(m, xq, xin)
+                    # QDrop: 원소별 확률 qdrop_prob로 양자화, 나머지는 q_in 그대로
+                    m = (torch.rand_like(q_in) < qdrop_prob)
+                    xq = torch.where(m, xq, q_in)
             opt.zero_grad()
             wq = ac.quant_weight()
             pred = F.conv2d(xq, wq, bias, stride, pad, dil, grp)
@@ -186,7 +213,7 @@ def optimize_adaround(quant_module, fp_module, calib_tensors, device,
             loss.backward()
             opt.step()
 
-        ac.soft = False   # 추론은 hard 반올림
+        ac.soft = False   # 확정(hard) -- 다음 layer의 quant_module capture에 반영됨
         if verbose:
             h = h_alpha(ac.alpha).detach()
             conv01 = float(((h < 0.05) | (h > 0.95)).float().mean()) * 100

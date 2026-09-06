@@ -20,7 +20,7 @@ import torch.nn.functional as F
 
 from .adaround import AdaRoundQuantConv2d, list_adaround_convs, h_alpha
 from .pdquant import _find_head, _CV4Capture
-from .semantic_calib import get_txt_feats, text_neighbor_order
+from .semantic_calib import get_txt_feats, text_neighbor_order, _LevelCapture, utility_refinement_terms
 
 def decision_loss(sim_q, sim_fp):
     """
@@ -459,3 +459,129 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     if verbose:
         tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C+neighbor] 완료 (s_mult 총 변화={tot:.3f})")
+
+
+def optimize_promptcal_scale_neighbor_utility(quant_model, fp_model, calib_tensors, device,
+                                              prompt_idx, iters=1500, lr=1e-2, k=5,
+                                              neighbor_k=5, neighbor_weight=1.0,
+                                              stage2_frac=0.3, thresh_w=1.0, box_w=0.5,
+                                              det_thres=0.25, margin_thres=0.5,
+                                              conf_thres=0.25, verbose=True, eval_hook=None):
+    """
+    optimize_promptcal_scale_neighbor(asymmetric 고정) + 논문 §4.3
+    Utility-Constrained Refinement(semantic_calib.py의 utility_refinement_terms:
+    threshold-crossing + box consistency) 재통합.
+
+    09-06: 41번에서 확정한 asymmetric neighbor preservation은 AP를 6/6 seed에서
+    개선시켰지만, 논문 §4.3(utility constraint)은 아직 한 번도 이 조합에
+    재통합해서 검증하지 않았다. §6.4 Ablation Study("Semantic Calibration /
+    Utility Refinement on/off")가 요구하는 비교이기도 하다.
+
+    30번(semantic_calib.py)의 optimize_semantic_pcal과 동일하게 2단계로 나눈다:
+      1단계(전체 iters의 (1-stage2_frac)): margin_loss + neighbor_weight*neighbor_loss만.
+      2단계(마지막 stage2_frac): 여기에 thresh_w*l_thresh + box_w*l_box 추가.
+        l_thresh: reliable anchor에서 FP가 det_thres를 넘었던 target의 quant
+                  확률이 그 밑으로 떨어지지 않게 하는 one-sided hinge.
+        l_box   : 같은 anchor에서 cv2(box regression) 출력을 FP와 MSE로 맞춤.
+    neighbor_loss는 항상 asymmetric(one-sided hinge)로 고정 -- 41번에서 이미
+    symmetric보다 낫다는 게 확인됨.
+    """
+    ada = list_adaround_convs(quant_model)
+    for ac in ada:
+        ac.soft = False
+        ac.ste = False
+        ac.use_smult = True
+        ac.alpha.requires_grad_(False)
+
+    fp_head = _find_head(fp_model)
+    fp_cap = _CV4Capture(fp_head)
+    fp_cv2_cap = _LevelCapture(fp_head.cv2)
+    fp_sims, fp_cv2s = [], []
+    with torch.no_grad():
+        for t in calib_tensors:
+            fp_cap.clear(); fp_cv2_cap.clear()
+            fp_model(t.to(device))
+            parts = []
+            for i in sorted(fp_cap.buf):
+                B, P, H, W = fp_cap.buf[i].shape
+                parts.append(fp_cap.buf[i].reshape(B, P, H*W))
+            fp_sims.append(torch.cat(parts, dim=2)[0].transpose(0, 1).detach())
+            fp_cv2s.append(fp_cv2_cap.assemble().detach())
+    fp_cap.close(); fp_cv2_cap.close()
+
+    txt_feats = get_txt_feats(fp_model).to(device)
+    neighbor_order = text_neighbor_order(txt_feats)
+    pidx_set = set(prompt_idx)
+    neighbor_set = set()
+    for c in prompt_idx:
+        order = neighbor_order[c].tolist()
+        picked = [o for o in order if o not in pidx_set][:neighbor_k]
+        neighbor_set.update(picked)
+    neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
+
+    q_head = _find_head(quant_model)
+    q_cap = _CV4Capture(q_head)
+    q_cv2_cap = _LevelCapture(q_head.cv2)
+    smults = [ac.s_mult for ac in ada]
+    s0 = [s.detach().clone() for s in smults]
+    opt = torch.optim.Adam(smults, lr=lr)
+    pidx = torch.tensor(prompt_idx, device=device)
+
+    n = len(calib_tensors)
+    stage2_start = int((1 - stage2_frac) * iters)
+
+    if verbose:
+        print(f"[promptcal-C+neighbor+utility] {len(fp_sims)} calib, prompt subset "
+              f"{len(prompt_idx)}개, neighbor {len(neighbor_cols)}개(k={neighbor_k}), "
+              f"s_mult {len(ada)}개, margin(k={k}) neighbor_weight={neighbor_weight}, "
+              f"stage2 시작={stage2_start}/{iters}")
+
+    for it in range(iters):
+        j = it % n
+        t = calib_tensors[j].to(device); sim_fp = fp_sims[j]
+        prob = sim_fp.sigmoid(); mp, _ = prob.max(-1); conf = mp > conf_thres
+        if conf.sum() == 0:
+            continue
+        aidx = conf.nonzero(as_tuple=True)[0]
+        q_cap.clear(); q_cv2_cap.clear(); opt.zero_grad()
+        quant_model(t)
+        parts = []
+        for i in sorted(q_cap.buf):
+            B, P, H, W = q_cap.buf[i].shape
+            parts.append(q_cap.buf[i].reshape(B, P, H*W))
+        sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
+
+        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k)
+        diff = sim_q[aidx][:, neighbor_cols] - sim_fp[aidx][:, neighbor_cols]
+        nl = F.relu(diff).pow(2).mean()
+        loss = ml + neighbor_weight * nl
+
+        l_thresh = l_box = None
+        if it >= stage2_start:
+            cv2_q = q_cv2_cap.assemble()
+            l_thresh, l_box = utility_refinement_terms(
+                sim_q, sim_fp, cv2_q, fp_cv2s[j], pidx, det_thres=det_thres,
+                conf_thres=conf_thres, margin_thres=margin_thres)
+            loss = loss + thresh_w * l_thresh + box_w * l_box
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(smults, max_norm=1.0)
+        opt.step()
+
+        if verbose and (it + 1) % max(1, iters // 10) == 0:
+            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            phase = "utility" if it >= stage2_start else "calib"
+            extra = (f" thresh={float(l_thresh.detach()):.4f} box={float(l_box.detach()):.4f}"
+                    if l_thresh is not None else "")
+            print(f"  [{it+1}/{iters}] ({phase}) margin_loss={float(ml.detach()):.4f} "
+                  f"neighbor_loss={float(nl.detach()):.4f} "
+                  f"s_mult 평균={smean:.3f} 변화={sd:.4f}{extra}")
+
+        if eval_hook is not None and (it + 1) % max(1, iters // 10) == 0:
+            eval_hook(it + 1, quant_model)
+
+    q_cap.close(); q_cv2_cap.close()
+    if verbose:
+        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        print(f"[promptcal-C+neighbor+utility] 완료 (s_mult 총 변화={tot:.3f})")
