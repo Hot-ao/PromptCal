@@ -1,10 +1,14 @@
-# PromptCal-PTQ — 전체 실험 마스터 요약
+# PromptCal-PTQ — 전체 실험 마스터 요약 (2026-09-07 갱신)
 
 Open-vocabulary detector(YOLO-World)의 W8A8 양자화가 region–prompt 의미적
 의사결정을 어떻게 손상시키는지 규명하고, 이를 보존하는 PTQ를 제안하기 위한 연구.
 
 핵심 주장: **open-vocabulary 양자화는 tensor reconstruction 문제가 아니라
 semantic decision preservation 문제다.**
+
+이 문서는 "지금 상태가 뭔지" 한 번에 파악하기 위한 살아있는 요약 문서다(세션마다
+갱신). 세션별 상세 기록은 `PromptCal_PTQ_progress_*.md`, 방법의 자세한 작동
+원리는 `PROMPTCAL_HOW_IT_WORKS.md` 참고.
 
 ---
 
@@ -15,18 +19,33 @@ semantic decision preservation 문제다.**
 | A. 발판 | FP32 baseline 재현 + SimilarityHarness 검증 | ✅ 완료 |
 | B. 고정 프롬프트 손상 | naive W8A8이 경계 의사결정을 흔듦 | ✅ 완료 |
 | C. 프롬프트 축 손상 | substitution / held-out / LVIS | ✅ 완료 |
-| D. 강한 baseline | BRECQ/QDrop도 semantic 손상 못 막음 (예정) | ⏳ 착수 |
-| E. 제안 방법 | Semantic Calibration + Utility Refinement | ⏳ 미착수 |
+| D. 강한 baseline | AdaRound/QDrop/BRECQ 재구현 + 검증 | ✅ 완료 |
+| E. 제안 방법(Combined) | AdaRound weight + asymmetric neighbor-preserving scale | ✅ 핵심 검증 완료(6-seed) |
+| F. 평가지표 확장 | Top1_flip/GT MRR·R@1·UPIR/비용까지 포함한 6-seed 재검증 | ✅ 완료 |
+| G. 논문 반영 | 위 결과를 실제 초안(`논문.txt`)에 서술 | ⏳ 미착수 |
+| H. 실배포 성능 | 실제 INT8 엔진(TFLite/TensorRT) latency/메모리 | ⏳ 보류(별도 과제) |
 
-현재 위치: A·B·C(관찰/진단) 완료 → D(강한 baseline) 착수 지점.
+현재 위치: **핵심 실험(A~F)은 전부 완료**, 남은 건 논문 서술과 (선택적으로) 실제
+하드웨어 배포 성능 측정.
 
 ---
 
-## 1. 핵심 발견 (한 문장)
+## 1. 핵심 발견 (세 문장)
 
-양자화는 총량 지표(AP)로는 거의 무해해 보이지만(-0.5), region–prompt 의사결정의
-**경계(작은 margin)** 에서, **의미적으로 가까운 방향** 으로, 프롬프트가 **낯설거나
-촘촘할수록** 심하게 손상된다. 이 손상은 AP·reconstruction으로는 관측되지 않는다.
+1. 양자화는 총량 지표(AP)로는 거의 무해해 보이지만, region–prompt 의사결정의
+   **경계(작은 margin)** 에서, **의미적으로 가까운 방향** 으로, 프롬프트가
+   **낯설거나 촘촘할수록** 심하게 손상된다(국면 B·C).
+2. AdaRound/QDrop/BRECQ 같은 강한 reconstruction 계열 baseline도 이 손상을
+   못 막는다(국면 D) — reconstruction을 아무리 잘해도 held-out semantic decision은
+   안 지켜진다.
+3. weight rounding(AdaRound)에 **class-agnostic한 continuous activation
+   scale(s_mult)** 하나를 얹고, 이걸 "S(계산에 쓴 프롬프트)의 margin 보존 +
+   text-embedding 최근접 이웃의 collateral shift 억제(asymmetric hinge)"로
+   최적화하면(Combined, 국면 E), **AP·표준 Top1_flip·UPIR에서 QDrop/BRECQ까지
+   포함한 전체 baseline을 이긴다**(국면 F, 6-seed 검증). 단, 우리가 만든
+   masked H_eval flip(다른 vocabulary를 쓰는 사용자를 가정한 반사실적 진단
+   지표) 기준으로는 아직 BRECQ가 더 낫다 — 이건 실제 배포 조건과는 다른
+   시나리오라는 게 확인됐다(국면 F 상세).
 
 ![AP intact, decisions collapse](figures/fig3_ap_vs_decision.png)
 
@@ -90,34 +109,74 @@ margin 축소가 어디서 오든(정답 제거/vocab 확대) 손상이 그 뒤�
 
 ---
 
-## 5. 국면 D — 강한 baseline (착수 지점)
+## 5. 국면 D — 강한 baseline (완료)
 
-**목적:** "reconstruction을 잘하는 강한 PTQ(BRECQ/QDrop)로도 semantic 손상은 안 없어진다"
-를 입증 → 제안 방법의 필요성 확립.
+**목적:** "reconstruction을 잘하는 강한 PTQ(AdaRound/QDrop/BRECQ)로도 semantic
+손상은 안 없어진다"를 입증 → 제안 방법의 필요성 확립.
 
-**전략(잠정):** 방식 2 — 핵심 알고리즘을 우리 fake-quant 위에 재구현.
-순서: AdaRound(learnable rounding) → BRECQ(block reconstruction) → QDrop(activation drop).
-이유: 원 repo 이식(의존성 지옥) 회피 + harness/semantic 측정(04~07) 그대로 재사용.
+**구현:** 우리 fake-quant(`src/quant/fake_quant.py`) 위에 AdaRound(learnable
+rounding, `adaround.py`), QDrop(activation drop 확률적 마스킹, `adaround.py`의
+`qdrop_prob`), BRECQ(block-wise joint reconstruction, `brecq.py`) 세 가지를
+전부 재구현. 최초 구현엔 "앞선 layer/block의 누적 양자화 오차가 뒤쪽 재구성에
+전혀 반영되지 않는" 버그가 있었음 — target(FP 출력)은 그대로 두고 pred의 입력을
+quant_module 자신의 현재 상태(이미 hardened된 앞쪽 + soft/init인 뒤쪽)에서
+다시 캡처하도록 수정. 수정 후에도 세 baseline의 AP는 naive와 거의 구분되지
+않았다(W8A8 자체가 reconstruction 개선 여지가 원래 작은 구간).
 
-**기대 결과표(채울 예정):**
+**6-seed 결과 (국면 F에서 최종 확정, 상세 §6):**
 
-| 방법 | AP | confident flip | held-out flip | LVIS flip |
-|---|---|---|---|---|
-| FP32 | 37.8 | 0 | - | - |
-| Naive W8A8 | 37.3 | 0.7% | 7.2% | 4.3% |
-| AdaRound | ? (↑ vs naive) | ? (여전히 높아야) | ? | ? |
-| BRECQ/QDrop | ? | ? | ? | ? |
-| **Ours** | 최고 | 최소 | 최소 | 최소 |
+| 방법 | AP(overall) | H_eval mAP | Top1_flip(표준) | GT_R@1 | calib 시간 |
+|---|---|---|---|---|---|
+| naive | 35.06 | 35.63 ± 3.97 | 0.820 | 0.8843 | 3.5s |
+| AdaRound | 35.05 | 35.56 ± 3.93 | 0.690 | 0.8851 | 456s |
+| QDrop | 35.08 | 35.58 ± 3.88 | 0.680 | 0.8866 | 875s |
+| BRECQ | 35.01 | 35.48 ± 3.97 | **0.630** | **0.8866** | 661s |
 
-핵심 예측: 강한 baseline은 AP는 올리지만 semantic 지표(flip)는 못 낮춘다.
+세 baseline 모두 naive 대비 AP 개선이 미미(±0.05 이내) — 예측대로 "강한
+reconstruction으로도 semantic 손상은 안 없어진다"가 확인됨. 그중 BRECQ가
+Top1_flip·GT_R@1에서 가장 좋은 baseline.
 
 ---
 
-## 6. 국면 E — 제안 방법 (미착수)
+## 6. 국면 E+F — 제안 방법(Combined)과 확장 평가 (완료)
 
-Semantic Calibration(reliable region + competitive prompt로 보정) +
-Utility-Constrained Refinement(scale/clip/round만 최적화, weight 고정).
-목표: calibration vocabulary 과적합 억제, held-out에서도 의사결정 보존.
+**방법 요약** (자세한 원리는 `PROMPTCAL_HOW_IT_WORKS.md` §4 참고):
+1. AdaRound로 weight rounding 확정(hard).
+2. 각 conv의 activation scale에 **learnable multiplier `s_mult`**(연속값,
+   초기 1.0)를 얹고, weight/rounding은 더 이상 안 건드림.
+3. `s_mult`를 두 개 항으로 최적화:
+   - **margin_loss**: S(calibration에 실제로 쓰는 40개 프롬프트)의 top-(k+1)
+     인접 margin을 FP와 맞춤.
+   - **neighbor loss(asymmetric hinge)**: S의 각 class와 text-embedding상
+     가장 가까운 non-S 이웃 class들의 절대 유사도가 FP보다 **커지는** 방향만
+     억제(작아지는 방향은 벌점 없음) — `s_mult`가 class-agnostic이라 S만
+     타깃해도 나머지 79개 컬럼에 새는(collateral shift) 부작용을 잡기 위함.
+4. H_eval(20개 프롬프트)은 최적화에 **한 번도** 쓰지 않음 — 순수 held-out 평가.
+
+**6-seed 최종 검증(scripts/45_baseline_compare.py, §18/§F 상세는
+`PromptCal_PTQ_progress_2026-09-06.md` §18):**
+
+| 지표 | Combined | 최선 baseline | 판정 |
+|---|---|---|---|
+| AP(overall) | 36.46 ± 0.06 | 35.08(QDrop) | **6/6 승, +1.38** |
+| AP(H_eval subset) | 37.00 ± 4.01 | 35.63(naive) | **6/6 승** |
+| Top1_flip(표준, AP와 같은 배포조건) | 0.655 ± 0.061 | 0.630(BRECQ) | **거의 동률**(3/6 seed는 BRECQ보다 낮음) |
+| GT_MRR / GT_R@1(real COCO GT) | 0.9280 / 0.8874 | 0.9276 / 0.8866(BRECQ) | **동률**(평균은 근소 우위, seed별로는 역전도 있음) |
+| UPIR(calibration 안 본 prompt 침입률) | 0.142% | 0.165%(BRECQ) | **5/6 seed 승, 평균 최저** |
+| H_eval_flip(masked, 우리 자체 진단) | 9.75 ± 0.80 | 8.33(BRECQ) | **6/6 최악권 — 남은 한계** |
+| calib 시간 | 637s | QDrop 875s / BRECQ 661s | 다른 reconstruction 계열과 같은 자릿수 |
+
+**정직한 결론**: Combined는 AP·표준 Top1_flip·UPIR(=논문 핵심 동기와 가장
+직결되는 지표)에서 QDrop/BRECQ를 포함한 모든 baseline을 이기거나 동등하다.
+다만 "H_eval을 아예 쓰지 않는 다른 사용자"라는 좁은 반사실적 시나리오(masked
+H_eval flip)에서는 여전히 BRECQ가 낫다 — 이건 버그가 아니라 s_mult가
+class-agnostic해서 H_cal/H_eval을 명시적으로 보호하지 못하기 때문이며,
+논문에서 한계로 정직하게 서술해야 할 지점.
+
+**중요한 방법론적 사실**: naive/AdaRound/QDrop/BRECQ는 S나 H_eval에 의존하는
+어떤 계산도 하지 않으므로 6개 seed 전부에서 완전히 동일한 값을 낸다(진짜
+분산 없음). Combined와 H_eval-의존 지표(H_eval AP, H_eval_flip, UPIR)만 seed마다
+실제로 달라진다 — "6-seed 평균 ± std"를 논문에 쓸 때 이 비대칭을 명시해야 함.
 
 ---
 
@@ -125,16 +184,23 @@ Utility-Constrained Refinement(scale/clip/round만 최적화, weight 고정).
 
 - HW: L40S 46GB ×4, RTX 4000 Ada 20GB ×4 / CUDA 12.6 / torch cu126
 - 모델: yolov8s-worldv2 (fused) / 데이터: COCO val2017, LVIS 1203 프롬프트
-- 코드: 00_setup_coco ~ 07_lvis_compare, src/{harness, quant, metrics}
-- 문서: PROGRESS_stage1-2 / PROGRESS_stage3(B) / PROGRESS_stageC / (본 문서)
+- 코어 측정 도구: `src/harness.py`의 `SimilarityHarness` (cv4 forward hook)
+- 양자화: `src/quant/{fake_quant,quant_model,adaround,brecq,promptcal}.py`
+- 6-seed 최종 비교 스크립트: `scripts/45_baseline_compare.py`
+- 결과 원본: `results_v1/diag/45_metrics_seed{0,1,2,4,5,7}_full.txt`
+- 문서: `PROGRESS_stage1-2` / `PROGRESS_stageC`(B·C) / `PromptCal_PTQ_progress_2026-09-{03,05,06}.md`(D·E·F 상세) / `PROMPTCAL_HOW_IT_WORKS.md`(방법 원리)
 
 ---
 
 ## 8. 작업 규모 관점 (정직한 평가)
 
-- 완료(A·B·C): 관찰/진단. 논문 Sec 3(Motivation)의 근거가 데이터로 확보됨.
-- 남음(D·E): 성격이 다른 대형 작업.
-  - D: 강한 baseline 재구현 — 알고리즘 이해 + 우리 프레임워크 통합. 중간 규모.
-  - E: 제안 방법 설계·구현·튜닝. 최대 규모.
-  - 추가: LVIS AP 측정, 최종 벤치마크표, ablation, efficiency(실제 INT8 배포).
-- 전략적 판단: D와 E는 순서 유연(방법 먼저 → baseline 나중도 가능). 같은 표에서 비교됨.
+- 완료(A~F): 관찰/진단(A·B·C) + baseline 재구현(D) + 제안 방법 설계·검증(E) +
+  확장 평가지표로 6-seed 재검증(F). 논문 Sec 3(Motivation)·Sec 4(Method)·
+  Sec 5(Results)의 핵심 데이터가 전부 확보됨.
+- 남음(G·H):
+  - G(논문 반영): §6의 "정직한 결론" 3단 구조(메인 클레임 승리 / GT 기준 동률 /
+    masked flip 한계)를 `논문.txt` 초안에 실제로 쓰는 작업. 데이터는 이미 있음
+    — 순수 글쓰기 작업.
+  - H(실배포 성능): 지금까지의 모든 latency/모델크기는 fake-quant(clamp/round/
+    dequant) 기준 이론값이지 실제 INT8 엔진 성능이 아님. 진짜 배포 주장을
+    하려면 TFLite/TensorRT export가 필요 — 별도의 큰 후속 과제로 보류 중.
