@@ -239,6 +239,13 @@ class-agnostic해서 H_cal/H_eval을 명시적으로 보호하지 못하기 때�
     1.0 미만으로 수렴 -- "재학습 없는 이식" 특유의 문제가 아니라 neighbor-hinge
     설계(conv당 단일 스칼라) 자체의 구조적 한계로 확정. s_mult ablation
     (`scripts/52_smult_ablation.py`)도 s_mult=1로 되돌리면 AdaRound와 AP가
-    소수점까지 일치함을 확인해 인과관계를 직접 증명. **재설계 착수 확정** —
-    우선순위: (1) `(s_mult-1)^2` 정규화 추가(구조 변경 없음, 최우선 시도),
-    (2) 부족하면 per-channel 벡터화 + 적용 범위를 cv4 직전 layer로 축소.
+    소수점까지 일치함을 확인해 인과관계를 직접 증명.
+    **(s_mult-1)^2 정규화 6-seed 검증 결과(09-07, 실패)**: calib 크기를
+    8배 늘려도 원인이 아님을 확인(`scripts/55`) 후 정규화(`scale_reg_weight=200`)를
+    6-seed 전체 지표로 검증(`scripts/54`) — LVIS AP는 naive를 근소하게만
+    넘고 baseline 최선(AdaRound/BRECQ)에는 못 미치며 LVIS lost는 오히려
+    6개 중 최악. 그 대가로 COCO-80에서 Combined의 핵심 결과였던 UPIR
+    (0.142%, 5개 중 최선)이 0.225%로 baseline 수준까지 후퇴 -- "핵심 주장을
+    포기하고 LVIS에서 그저 그런 성적"이라는 나쁜 트레이드오프로 확정, 정규화만으로는
+    불충분. **다음 단계: per-channel 재설계**(s_mult를 conv당 스칼라 -> `[out_channels]`
+    벡터, 적용 범위를 cv4 직전 layer로 축소) 착수.

@@ -371,6 +371,63 @@ scripts/48_w4a4_probe.py            -- W4A4 스모크 테스트(완전 붕괴, A
 scripts/49_lvis_ap.py               -- zero-shot 이식, 실제 LVIS GT AP(lvis-api)
 scripts/50_lvis_native.py           -- LVIS-native 재학습, 전체 지표
 scripts/51_lvis_transplant_full.py  -- zero-shot 이식, 전체 적용 가능 지표(AP+flip+GT)
+scripts/52_smult_ablation.py        -- s_mult=1 강제 ablation, 인과관계 확정
+scripts/53_scale_reg_sweep.py       -- (s_mult-1)^2 정규화 강도 스윕(1-seed)
+scripts/54_combined_reg_6seed.py    -- 정규화판 Combined 6-seed 전체 검증
+scripts/55_calib_size_sweep.py      -- calib 크기 스윕(정규화 없는 원본, 대안 가설 검증)
 /data/taeho/lvis_datasets/annotations/lvis_v1_val.json -- 공식 LVIS v1 val GT(신규 다운로드)
-runs/{47_lvis,48_w4a4,49_lvis_ap,50_lvis_native,51_lvis_transplant}/ -- 각 실행 로그
+runs/{47_lvis,48_w4a4,49_lvis_ap,50_lvis_native,51_lvis_transplant,52_smult_ablation,54_combined_reg_6seed,55_calib_size_sweep*}/ -- 각 실행 로그
 ```
+
+---
+
+## 8. 정규화 접근의 6-seed 검증 — 부족하다는 결론
+
+### 8.1 대안 가설 기각 — calib 크기는 원인이 아님
+
+`scripts/55_calib_size_sweep.py`(정규화 없는 원본 Combined, calib 32/64/128/256,
+seed 2)로 "s_mult 드리프트가 단순히 calibration 데이터 부족 때문 아닐까"를
+확인. 결과: calib을 8배(32→256) 늘려도 s_mult 평균이 1.0에 가까워지지 않고
+오히려 더 멀어짐(0.988→0.958~0.964, 뚜렷한 추세 없이 등락). LVIS AP도
+calib=128에서 반짝 좋았다가(0.2297) calib=256에서 다시 낮아져서(0.2211)
+일관된 개선 추세가 아니라 노이즈로 판단됨. **calibration 부족은 원인이
+아니고, §7.5~7.7의 구조적 진단(conv당 단일 스칼라)이 재확인됨.**
+
+### 8.2 (s_mult-1)^2 정규화 6-seed 검증 — 트레이드오프이지 해법이 아님
+
+`scripts/54_combined_reg_6seed.py`(`scale_reg_weight=200`, 1-seed 스윕에서
+가장 유망했던 값)을 COCO-80 6-seed 표준 세트로 전체 지표 재검증:
+
+```
+COCO-80 (6-seed)          AP      UPIR%   GT_MRR   lost   Top1_flip%
+naive                    35.06    0.232   0.9267   41.0   0.820
+AdaRound                 35.05    0.218   0.9272   35.0   0.690
+QDrop                    35.08    0.207   0.9274   35.0   0.680
+BRECQ                    35.01    0.165   0.9276   30.0   0.630
+Combined(rw=0, 원조합)    36.46    0.142*  0.9280*  31.2   0.655
+Combined(rw=200)         35.31    0.225   0.9266   36.8   0.646
+(* = 5개 중 최선)
+
+LVIS(6-seed)              AP        Top1_flip%   lost
+naive                    0.2175     5.68         113
+AdaRound                 0.2232*    5.19         116
+QDrop                    0.2202     5.03         113
+BRECQ                    0.2217     4.90         120
+Combined(rw=200)         0.2191     5.10         121.3(6개 중 최악)
+```
+
+**결론: 정규화는 문제를 "해결"한 게 아니라 트레이드오프를 이동시켰을 뿐이다.**
+LVIS AP는 naive를 근소하게 넘지만(+0.0016) AdaRound/QDrop/BRECQ에는 여전히
+못 미치고 LVIS lost는 오히려 6개 중 최악이다. 그 대가로 COCO-80에서 Combined의
+**가장 강력한 원래 결과였던 UPIR(0.142%, 5개 중 최선)이 0.225%로 뛰어
+baseline 수준으로 후퇴**했고 GT_MRR/lost도 더 이상 최선이 아니다. 즉
+"논문의 핵심 주장(UPIR 최선)을 포기하고 LVIS에서 그저 그런 성적을 받는"
+교환이 되어, 논문에 실을 만한 결과가 아니라는 게 6-seed 규모로 확정됨.
+
+**원인**: §7.6에서 예견한 대로, `(s_mult-1)^2` 정규화는 conv당 단일 스칼라의
+근본 제약(class-selective 조정 불가)을 없애지 못하고 그 스칼라가 움직일 수
+있는 "폭"만 줄인다 -- 이득과 부작용이 같은 자유도를 공유하는 한, 정규화는
+둘을 동시에 줄이는 다이얼일 뿐 둘을 분리하는 스위치가 될 수 없다.
+
+**다음**: per-channel 재설계(§7.6의 옵션 1+2: s_mult를 conv당 스칼라에서
+`[out_channels]` 벡터로, 적용 범위를 cv4 직전 layer로 축소) 착수.
