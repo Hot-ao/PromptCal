@@ -24,9 +24,10 @@ semantic decision preservation 문제다.**
 | F. 평가지표 확장 | Top1_flip/GT MRR·R@1·UPIR/비용까지 포함한 6-seed 재검증 | ✅ 완료 |
 | G. 논문 반영 | 위 결과를 실제 초안(`논문.txt`)에 서술 | ⏳ 미착수 |
 | H. 실배포 성능 | 실제 INT8 엔진(TFLite/TensorRT) latency/메모리 | ⏳ 보류(별도 과제) |
+| I. 일반성(LVIS/v2) | Combined를 LVIS-1203 vocabulary·v2 체크포인트에서도 검증 | ⏳ 착수(09-07) |
 
-현재 위치: **핵심 실험(A~F)은 전부 완료**, 남은 건 논문 서술과 (선택적으로) 실제
-하드웨어 배포 성능 측정.
+현재 위치: **COCO-80/v1 기준 핵심 실험(A~F)은 완료**, 09-07부터 국면 I(LVIS
+vocabulary·v2 일반성)를 시작. 논문 서술(G)과 실제 하드웨어 배포 성능(H)은 별도로 남음.
 
 ---
 
@@ -183,7 +184,20 @@ class-agnostic해서 H_cal/H_eval을 명시적으로 보호하지 못하기 때�
 ## 7. 실험 환경 / 코드베이스
 
 - HW: L40S 46GB ×4, RTX 4000 Ada 20GB ×4 / CUDA 12.6 / torch cu126
-- 모델: yolov8s-worldv2 (fused) / 데이터: COCO val2017, LVIS 1203 프롬프트
+- 모델: 국면 A~C(motivation)는 **yolov8s-worldv2**(fused) 기준. 국면 D~F(baseline
+  재구현·Combined·6-seed 검증, `scripts/43` 이후 전부)는 **yolov8s-world(v1)**
+  기준 — `yolov8s-world.pt`와 `yolov8s-worldv2.pt`는 실제로 다른 체크포인트
+  (해시 다름, 파라미터 13.38M vs 12.76M)인데, D 이후 스크립트들이 전부
+  `--model` 기본값을 `yolov8s-world.pt`로 물려써서 그렇게 됐다(09-07에 뒤늦게
+  확인). `PROGRESS_v1_D.md`가 "다음: 국면 E"로 미완으로 남겨뒀던 v1에서의
+  제안 방법 검증이, 라벨 없이 사실상 이미 6-seed로 끝나 있었던 셈 — v1이
+  v2보다 양자화 취약성이 커서(`PROGRESS_v1_D.md` 표 참고) 더 어려운 조건이라는
+  점은 결과 해석에 유리하게 작용하지만, **Combined를 v2에서 명시적으로
+  검증한 적은 아직 없다**(§8 국면 I 참고).
+- 데이터: COCO val2017(AP·flip·GT 지표 전부), LVIS 1203 프롬프트(국면 C-3
+  motivation 한정 — 실제 LVIS 이미지/annotation이 아니라 COCO 이미지에 LVIS
+  vocabulary만 얹어서 씀, `ultralytics/cfg/datasets/lvis.yaml`의 class name
+  리스트 재사용. 국면 I도 같은 방식.)
 - 코어 측정 도구: `src/harness.py`의 `SimilarityHarness` (cv4 forward hook)
 - 양자화: `src/quant/{fake_quant,quant_model,adaround,brecq,promptcal}.py`
 - 6-seed 최종 비교 스크립트: `scripts/45_baseline_compare.py`
@@ -204,3 +218,12 @@ class-agnostic해서 H_cal/H_eval을 명시적으로 보호하지 못하기 때�
   - H(실배포 성능): 지금까지의 모든 latency/모델크기는 fake-quant(clamp/round/
     dequant) 기준 이론값이지 실제 INT8 엔진 성능이 아님. 진짜 배포 주장을
     하려면 TFLite/TensorRT export가 필요 — 별도의 큰 후속 과제로 보류 중.
+  - I(일반성 — LVIS/v2, 09-07 착수): A~F 전부가 **COCO-80 vocabulary + v1
+    체크포인트** 기준이었다는 게 뒤늦게 확인됨(위 §7). 두 가지가 미검증으로
+    남아 있었음: (1) Combined를 훨씬 촘촘하고 큰 vocabulary(LVIS-1203)에
+    배포했을 때도 이점이 유지되는가 — 국면 C-3가 "vocabulary가 커질수록 naive
+    손상이 증폭된다"를 보였으니, 그 더 어려운 조건에서 Combined가 여전히
+    통하는지가 논문 완성도에 중요함. (2) v2 체크포인트에서도 Combined가
+    통하는가. (1)은 `scripts/07_lvis_compare.py`의 방식(실제 LVIS 이미지/GT
+    없이, COCO 이미지에 LVIS-1203 vocabulary만 얹어 flip/margin 측정)을 5개
+    조건(naive/AdaRound/QDrop/BRECQ/Combined) 전부로 확장해서 착수.
