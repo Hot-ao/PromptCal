@@ -1,0 +1,92 @@
+[lvis] loading GT /data/taeho/lvis_datasets/annotations/lvis_v1_val.json
+[pool] frequent bucket 405개 class를 S/H_cal/H_eval 분할 대상으로 사용
+[filter] probe 500장 중 LVIS val에 있는 489장만 사용
+[split] S=202 H_cal=101 H_eval=102 (seed 2)
+[build] FP (LVIS-1203 native vocab)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 33.9 GFLOPs
+[build] naive
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 33.9 GFLOPs
+[build] adaround
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 33.9 GFLOPs
+[build] qdrop
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 33.9 GFLOPs
+[build] brecq
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 33.9 GFLOPs
+[build] combined
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 33.9 GFLOPs
+[09/07 14:59:08] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 15:00:04] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 15:00:58] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 15:01:53] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 15:02:43] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 15:03:35] lvis.results WARNING: Assuming user provided the results in correct format.
+[promptcal-C+neighbor] 128 calib, prompt subset 202개, neighbor 445개(k=5), s_mult 71개, margin(k=5) neighbor_weight=1.0
+  [150/1500] margin_loss=0.1227 neighbor_loss=0.1214 s_mult 평균=0.954 변화=0.0741
+  [300/1500] margin_loss=0.0704 neighbor_loss=0.0304 s_mult 평균=0.955 변화=0.0967
+  [450/1500] margin_loss=0.1509 neighbor_loss=0.0632 s_mult 평균=0.949 변화=0.0875
+  [600/1500] margin_loss=0.3262 neighbor_loss=0.2332 s_mult 평균=0.955 변화=0.0924
+  [750/1500] margin_loss=0.1306 neighbor_loss=0.0837 s_mult 평균=0.955 변화=0.0960
+  [900/1500] margin_loss=0.1819 neighbor_loss=0.1578 s_mult 평균=0.968 변화=0.0951
+  [1050/1500] margin_loss=0.0921 neighbor_loss=0.0523 s_mult 평균=0.973 변화=0.0959
+  [1200/1500] margin_loss=0.1078 neighbor_loss=0.0439 s_mult 평균=0.965 변화=0.0949
+  [1350/1500] margin_loss=0.0843 neighbor_loss=0.0406 s_mult 평균=0.966 변화=0.0918
+  [1500/1500] margin_loss=0.1539 neighbor_loss=0.0597 s_mult 평균=0.971 변화=0.0961
+[promptcal-C+neighbor] 완료 (s_mult 총 변화=6.824)
+
+[gt] FP sim 계산 + LVIS GT anchor 매칭 (489장)
+  매칭된 GT anchor 수=5012
+[predict+AP] FP32 ...
+  FP32: AP=0.2205  S_AP=0.2136  H_eval_AP=0.2838
+       naive: H_eval_flip=14.01%(n=5869)  Top1_flip=6.34%(n=31214)  GT_MRR=0.5373  GT_R@1=0.4206  lost=117  gained=75  UPIR=0.81%(n=1481)
+[predict+AP] naive ...
+  naive: AP=0.2159  S_AP=0.2140  H_eval_AP=0.2756
+    adaround: H_eval_flip=12.25%(n=5869)  Top1_flip=5.53%(n=31214)  GT_MRR=0.5356  GT_R@1=0.4176  lost=134  gained=77  UPIR=1.15%(n=1481)
+[predict+AP] adaround ...
+  adaround: AP=0.2162  S_AP=0.2096  H_eval_AP=0.2800
+       qdrop: H_eval_flip=12.57%(n=5869)  Top1_flip=5.43%(n=31214)  GT_MRR=0.5365  GT_R@1=0.4196  lost=122  gained=75  UPIR=1.08%(n=1481)
+[predict+AP] qdrop ...
+  qdrop: AP=0.2172  S_AP=0.2086  H_eval_AP=0.2802
+       brecq: H_eval_flip=12.30%(n=5869)  Top1_flip=5.20%(n=31214)  GT_MRR=0.5375  GT_R@1=0.4210  lost=122  gained=82  UPIR=1.22%(n=1481)
+[predict+AP] brecq ...
+  brecq: AP=0.2130  S_AP=0.2067  H_eval_AP=0.2765
+    combined: H_eval_flip=12.61%(n=5869)  Top1_flip=5.69%(n=31214)  GT_MRR=0.5365  GT_R@1=0.4190  lost=118  gained=68  UPIR=2.16%(n=1481)
+[predict+AP] combined ...
+  combined: AP=0.2149  S_AP=0.2145  H_eval_AP=0.2773
+
+====================================================================================================
+ LVIS-native AP (전체/S/H_eval subset, real GT) -- seed 2, 489장
+====================================================================================================
+           |      AP |    AP50 |    S_AP | H_eval_AP
+      FP32 |  0.2205 |  0.3059 |  0.2136 |    0.2838
+     naive |  0.2159 |  0.3004 |  0.2140 |    0.2756
+  adaround |  0.2162 |  0.3088 |  0.2096 |    0.2800
+     qdrop |  0.2172 |  0.3051 |  0.2086 |    0.2802
+     brecq |  0.2130 |  0.3009 |  0.2067 |    0.2765
+  combined |  0.2149 |  0.3047 |  0.2145 |    0.2773
+
+====================================================================================================
+ flip / GT 지표 (real GT) -- seed 2
+====================================================================================================
+           | Heval_flip | Top1_flip |  GT_MRR |  GT_R@1 |  lost | gained |    UPIR
+     naive |     14.01% |     6.34% |  0.5373 |  0.4206 |   117 |     75 |   0.81%
+  adaround |     12.25% |     5.53% |  0.5356 |  0.4176 |   134 |     77 |   1.15%
+     qdrop |     12.57% |     5.43% |  0.5365 |  0.4196 |   122 |     75 |   1.08%
+     brecq |     12.30% |     5.20% |  0.5375 |  0.4210 |   122 |     82 |   1.22%
+  combined |     12.61% |     5.69% |  0.5365 |  0.4190 |   118 |     68 |   2.16%
+
+====================================================================================================
+ 비용/크기
+====================================================================================================
+  양자화 weight 이론 크기: 14.33 MiB
+       naive | calib     11.5s
+    adaround | calib    673.2s
+       qdrop | calib   1111.8s
+       brecq | calib    712.0s
+    combined | calib    803.0s
+
+판정:
+  Combined의 S/H_eval AP·Top1_flip·UPIR이 baseline보다 나으면 -> LVIS를
+     native로 놓고 처음부터 계산해도 설계 원리가 통한다(재설계 불필요,
+     49번의 문제는 '재학습 없는 이식'이라는 시나리오 자체의 한계였음).
+  여기서도 Combined가 최악이면 -> 촘촘한 vocabulary에서는 방법 설계
+     자체(margin+neighbor 보존)가 원래 안 통한다는 뜻 -> 재설계 필요.

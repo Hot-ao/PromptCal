@@ -1,0 +1,79 @@
+[lvis] loading GT /data/taeho/lvis_datasets/annotations/lvis_v1_val.json
+[filter] probe 500장 중 LVIS val에 있는 484장만 사용
+[build] FP (COCO-80 vocab, 학습 전용)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] naive (COCO-80 calibration/training)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] adaround (COCO-80 calibration/training)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] qdrop (COCO-80 calibration/training)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] brecq (COCO-80 calibration/training)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] combined (COCO-80 calibration/training)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[09/07 14:48:40] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 14:49:37] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 14:50:29] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 14:51:17] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 14:52:10] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 14:52:32] lvis.results WARNING: Assuming user provided the results in correct format.
+[promptcal-C+neighbor] 32 calib, prompt subset 40개, neighbor 35개(k=5), s_mult 71개, margin(k=5) neighbor_weight=1.0
+  [150/1500] margin_loss=0.1229 neighbor_loss=0.0239 s_mult 평균=0.980 변화=0.0544
+  [300/1500] margin_loss=0.0855 neighbor_loss=0.0026 s_mult 평균=0.973 변화=0.0667
+  [450/1500] margin_loss=0.0757 neighbor_loss=0.0006 s_mult 평균=0.966 변화=0.0756
+  [600/1500] margin_loss=0.1458 neighbor_loss=0.0123 s_mult 평균=0.969 변화=0.0745
+  [750/1500] margin_loss=0.4102 neighbor_loss=0.0241 s_mult 평균=0.961 변화=0.0727
+  [900/1500] margin_loss=0.3340 neighbor_loss=0.0035 s_mult 평균=0.981 변화=0.0715
+  [1050/1500] margin_loss=0.2162 neighbor_loss=0.0346 s_mult 평균=0.982 변화=0.0828
+  [1200/1500] margin_loss=0.1374 neighbor_loss=0.1514 s_mult 평균=0.987 변화=0.0820
+  [1350/1500] margin_loss=0.0628 neighbor_loss=0.0138 s_mult 평균=0.978 변화=0.0832
+  [1500/1500] margin_loss=0.0778 neighbor_loss=0.0291 s_mult 평균=0.988 변화=0.0899
+[promptcal-C+neighbor] 완료 (s_mult 총 변화=6.379)
+
+[switch] 전부 LVIS-1203 vocab으로 이식(재학습 없음)
+[gt] FP sim 계산 + LVIS GT anchor 매칭 (484장)
+  매칭된 GT anchor 수=4812
+       naive: Top1_flip=5.68%(n=31012)  GT_MRR=0.5346  GT_R@1=0.4219  lost=113  gained=81
+[predict+AP] naive ...
+  naive: AP=0.2175 AP50=0.3024
+    adaround: Top1_flip=5.19%(n=31012)  GT_MRR=0.5332  GT_R@1=0.4192  lost=116  gained=71
+[predict+AP] adaround ...
+  adaround: AP=0.2232 AP50=0.3135
+       qdrop: Top1_flip=5.03%(n=31012)  GT_MRR=0.5318  GT_R@1=0.4175  lost=113  gained=60
+[predict+AP] qdrop ...
+  qdrop: AP=0.2202 AP50=0.3099
+       brecq: Top1_flip=4.90%(n=31012)  GT_MRR=0.5331  GT_R@1=0.4177  lost=120  gained=68
+[predict+AP] brecq ...
+  brecq: AP=0.2217 AP50=0.3112
+    combined: Top1_flip=5.33%(n=31012)  GT_MRR=0.5375  GT_R@1=0.4237  lost=97  gained=74
+[predict+AP] combined ...
+  combined: AP=0.2161 AP50=0.3071
+[predict+AP] FP32 ...
+
+====================================================================================================
+ COCO-80 캘리브레이션 -> LVIS-1203 이식(zero-shot) -- seed 2, 484장
+====================================================================================================
+           |      AP |    AP50 | Top1_flip |  GT_MRR |  GT_R@1 |  lost | gained
+      FP32 |  0.2259 |  0.3152 |         - |       - |       - |     - |      -
+     naive |  0.2175 |  0.3024 |     5.68% |  0.5346 |  0.4219 |   113 |     81
+  adaround |  0.2232 |  0.3135 |     5.19% |  0.5332 |  0.4192 |   116 |     71
+     qdrop |  0.2202 |  0.3099 |     5.03% |  0.5318 |  0.4175 |   113 |     60
+     brecq |  0.2217 |  0.3112 |     4.90% |  0.5331 |  0.4177 |   120 |     68
+  combined |  0.2161 |  0.3071 |     5.33% |  0.5375 |  0.4237 |    97 |     74
+
+====================================================================================================
+ 비용/크기
+====================================================================================================
+  양자화 weight 이론 크기: 14.33 MiB
+       naive | calib      5.2s
+    adaround | calib    468.8s
+       qdrop | calib    887.5s
+       brecq | calib    649.5s
+    combined | calib    607.0s
+
+주의: 이 표는 50_lvis_native.py(같은 시각 실행)와 짝을 이룬다.
+  이식(여기) vs native(50번) 둘 다에서 Combined가 나쁘면 -> neighbor-hinge
+     설계 자체의 구조적 한계(재설계 필요).
+  이식에서만 나쁘고 native에서는 괜찮으면 -> '재학습 없는 이식'이라는
+     시나리오의 한계일 뿐, 설계 원리는 유효(스코프 명시로 충분).

@@ -234,5 +234,11 @@ class-agnostic해서 H_cal/H_eval을 명시적으로 보호하지 못하기 때�
     하나뿐이라 neighbor_loss의 "COCO 이웃만 조준"하려던 의도가 구조적으로
     불가능하고, 전역적 하향 편향(학습 후 s_mult 평균 0.97~0.99, 1.0 미만)으로
     새어나가 존재도 몰랐던 LVIS class 전체에 무차별 적용됨 — 재설계가
-    필요할 수 있는 근거. LVIS-native 재학습(같은 문제가 이식 특유인지 설계
-    자체의 한계인지 가르는 대조 실험)은 진행 중.
+    필요할 수 있는 근거. **LVIS-native 재학습 대조 실험 완료(09-07)**: s_mult가
+    COCO-80 native(0.977)/이식(0.988)/LVIS-native(0.971) 세 시나리오 전부에서
+    1.0 미만으로 수렴 -- "재학습 없는 이식" 특유의 문제가 아니라 neighbor-hinge
+    설계(conv당 단일 스칼라) 자체의 구조적 한계로 확정. s_mult ablation
+    (`scripts/52_smult_ablation.py`)도 s_mult=1로 되돌리면 AdaRound와 AP가
+    소수점까지 일치함을 확인해 인과관계를 직접 증명. **재설계 착수 확정** —
+    우선순위: (1) `(s_mult-1)^2` 정규화 추가(구조 변경 없음, 최우선 시도),
+    (2) 부족하면 per-channel 벡터화 + 적용 범위를 cv4 직전 layer로 축소.
