@@ -153,7 +153,7 @@ def main():
                                           neighbor_weight=args.neighbor_weight,
                                           asymmetric=True, scale_reg_weight=rw, verbose=True)
         ada_convs = list_adaround_convs(cb.model)
-        smean = float(np.mean([float(c.s_mult.detach()) for c in ada_convs]))
+        smean = float(np.mean([float(c.s_mult.detach().mean()) for c in ada_convs]))
 
         # COCO-80 AP(전체) -- margin_loss 효과가 안 깎였는지 확인
         coco_ap, coco_ap50 = measure_ap(cb, args.data, args.imgsz, args.device)
