@@ -326,8 +326,8 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
         opt.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
-            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
-            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            sd = sum(float((s.detach()-s0i).abs().mean()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach().mean()) for s in smults) / len(smults)
             print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
                   f"s_mult 평균={smean:.3f} 변화={sd:.4f}")
 
@@ -336,7 +336,7 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
 
     q_cap.close()
     if verbose:
-        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        tot = sum(float((s.detach()-s0i).abs().sum()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C] 완료 (s_mult 총 변화={tot:.3f})")
 
 
@@ -462,8 +462,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
         opt.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
-            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
-            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            sd = sum(float((s.detach()-s0i).abs().mean()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach().mean()) for s in smults) / len(smults)
             extra = f" scale_reg={float(sr.detach()):.5f}" if scale_reg_weight > 0 else ""
             print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
                   f"neighbor_loss={float(nl.detach()):.4f} "
@@ -474,7 +474,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
 
     q_cap.close()
     if verbose:
-        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        tot = sum(float((s.detach()-s0i).abs().sum()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C+neighbor] 완료 (s_mult 총 변화={tot:.3f})")
 
 
@@ -586,8 +586,8 @@ def optimize_promptcal_scale_neighbor_utility(quant_model, fp_model, calib_tenso
         opt.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
-            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
-            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            sd = sum(float((s.detach()-s0i).abs().mean()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach().mean()) for s in smults) / len(smults)
             phase = "utility" if it >= stage2_start else "calib"
             extra = (f" thresh={float(l_thresh.detach()):.4f} box={float(l_box.detach()):.4f}"
                     if l_thresh is not None else "")
@@ -600,5 +600,5 @@ def optimize_promptcal_scale_neighbor_utility(quant_model, fp_model, calib_tenso
 
     q_cap.close(); q_cv2_cap.close()
     if verbose:
-        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        tot = sum(float((s.detach()-s0i).abs().sum()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C+neighbor+utility] 완료 (s_mult 총 변화={tot:.3f})")
