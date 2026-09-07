@@ -227,3 +227,12 @@ class-agnostic해서 H_cal/H_eval을 명시적으로 보호하지 못하기 때�
     통하는가. (1)은 `scripts/07_lvis_compare.py`의 방식(실제 LVIS 이미지/GT
     없이, COCO 이미지에 LVIS-1203 vocabulary만 얹어 flip/margin 측정)을 5개
     조건(naive/AdaRound/QDrop/BRECQ/Combined) 전부로 확장해서 착수.
+    **중간 결과(실제 LVIS GT 확보 후, `PromptCal_PTQ_progress_2026-09-07.md`
+    §7 상세)**: COCO-80 학습 -> LVIS 재학습 없이 이식하면 Combined의 실제
+    LVIS AP가 naive보다도 낮다(6개 조건 중 최악) — flip 증가가 무해한 재배치가
+    아니라 진짜 검출 품질 저하. 메커니즘 추정: `s_mult`가 conv당 스칼라
+    하나뿐이라 neighbor_loss의 "COCO 이웃만 조준"하려던 의도가 구조적으로
+    불가능하고, 전역적 하향 편향(학습 후 s_mult 평균 0.97~0.99, 1.0 미만)으로
+    새어나가 존재도 몰랐던 LVIS class 전체에 무차별 적용됨 — 재설계가
+    필요할 수 있는 근거. LVIS-native 재학습(같은 문제가 이식 특유인지 설계
+    자체의 한계인지 가르는 대조 실험)은 진행 중.

@@ -194,3 +194,105 @@ scripts/46_v1_metrics_check.py      -- v1(naive/promptcal alpha) 전용 새 지�
 runs/46_v1/seed{0,1,2,4,5,7}.log    -- 원본 stdout
 results_v1/diag/46_v1_metrics_seed{0,1,2,4,5,7}_full.txt -- 관례 경로 복사본
 ```
+
+---
+
+## 7. 국면 I: LVIS 일반성 검증과 메커니즘 규명
+
+### 7.1 배경 — MASTER_SUMMARY §8 국면 I 착수
+
+§6까지의 검증(6-seed, COCO-80)이 끝난 뒤, 사용자가 "우리 model이 v1(YOLO-World
+v1 체크포인트)/LVIS 확장에 대해서도 검증했었나?"를 물어서 확인한 결과:
+`MASTER_SUMMARY.md`가 09-03 시점 이후 갱신되며 원래 있던 "LVIS AP 측정" 항목이
+누락돼 있었고, D 이후 스크립트가 전부 `yolov8s-world.pt`(v1) 기본값을 쓰는데
+환경 설명은 여전히 v2로 남아있었던 것도 발견 — 둘 다 `MASTER_SUMMARY.md`에서
+수정(국면 I 신설).
+
+### 7.2 실험 1 — zero-shot 이식 (47/49번, COCO-80 학습 -> LVIS 배포)
+
+COCO-80으로 학습한 Combined를 재학습 없이 LVIS-1203 vocabulary로 바꿔 배포.
+- 47번(pseudo-label flip/margin, 진짜 GT 없음): LVIS에서 Combined(5.33%)가
+  naive(5.65%)보다는 낫지만 AdaRound(5.17%)/QDrop(5.02%)/BRECQ(4.88%) 전부보다 못함.
+- 사용자 지적: "COCO의 dog가 LVIS의 Yorkshire Terrier로 갈리는 것도 flip으로
+  잡히는데, 이게 무해한 세부 재배치인지 진짜 손상인지 flip만으로는 못 가른다.
+  AP가 있어야 안다" -> 진짜 LVIS GT 필요.
+- **LVIS 진짜 annotation 확보(09-07)**: 다른 사용자(`seunghyuk`) 소유 파일을
+  쓰지 않고, 공식 https://dl.fbaipublicfiles.com/LVIS/lvis_v1_val.json.zip 을
+  새로 받아 `/data/taeho/lvis_datasets/annotations/`에 배치. `lvis-api`
+  설치(`pip install lvis`, numpy 2.x 호환을 위해 `np.float = float` 패치 필요
+  -- 2020년 배포된 패키지). ultralytics `lvis.yaml`의 `names[i]`가 실제 LVIS
+  `category_id = i+1`과 정확히 대응함을 확인(별도 remap 불필요). 우리 probe
+  이미지(COCO val2017)와 LVIS val split(19809장, COCO val2017과 다른 split)의
+  교집합은 ~97%.
+- **49번(실제 GT AP, seed 2, 484장)**: Combined(AP 0.2109)가 **6개 조건 중 최악**
+  — naive(0.2175)보다도 낮음. AdaRound(0.2232)가 최선. **결론: flip 증가가
+  무해한 재배치가 아니라 진짜 검출 품질 저하와 같이 간다 — 한계가 진짜다.**
+
+### 7.3 메커니즘 규명 — s_mult는 왜 LVIS에서 해가 되는가 (사용자 주도 추론)
+
+사용자가 제기한 가설과 검증 과정(중요도 순 아님, 대화 순서):
+
+1. "AdaRound 혼자(5.17%)가 Combined(5.33%)보다 나은 걸 보면, Combined의 이득은
+   AdaRound 성분이 떠받치고 neighbor-scale 성분은 LVIS에서 오히려 해가 되는
+   것 아닌가?" — 데이터가 정확히 이 패턴을 보임.
+2. "neighbor_loss가 원래 COCO 이웃의 절대 유사도만 억제하려던 건데, s_mult가
+   전역 스칼라라서 억제가 새어나가는 것 아닌가?" — 검증: 45번(COCO-80 native,
+   verbose=True) 로그에서 Combined의 `s_mult 평균`이 학습 내내 **1.0 미만
+   (0.97~0.99, 최종 0.977)** 으로 수렴함을 확인. asymmetric hinge가 "경쟁자
+   점수가 FP32보다 오르면만" 벌점을 주므로, 전역 스칼라를 살짝 줄이는 게
+   가장 값싼 해법이 되어 이런 하향 편향이 생김.
+3. "근데 그건 LVIS를 안 쓴 실험이니까 LVIS 세부 클래스 전환을 억제하는지는
+   모르는 것 아닌가?" — 정확한 지적. s_mult<1은 순수 COCO-80 학습 결과이지
+   LVIS에 대한 직접 증거가 아님. 인과관계 확정에는 별도 확인(예: 이식 시
+   s_mult를 강제로 1로 되돌리는 ablation)이 필요하다고 정리.
+4. "neighbor 유사도는 원래 전체 클래스 기준 아니었나? COCO->LVIS 확장 땐 전체
+   클래스를 모르는데 neighbor_loss가 어떻게 쓰이나?" — **결정적 확인**:
+   `text_neighbor_order(txt_feats)`의 `txt_feats`는 학습 시점(항상 COCO-80)의
+   text embedding이라 `[80,512]`뿐이고, 실제 로그도 "neighbor 35개(k=5)"로
+   80-class 공간 안에서만 계산됐음을 보여줌. **neighbor_loss는 LVIS 배포
+   시점에는 아예 계산되지 않는다** — 학습 후 남는 건 얼어붙은 s_mult 스칼라
+   뿐이고, 그 스칼라는 태생적으로 "35개만 조준"이 불가능해서(conv당 숫자
+   하나뿐) 전역적 억제로 새어나갔고, 그 전역 편향이 존재도 몰랐던 LVIS
+   1203개 클래스에도 무차별 적용된다.
+
+**결론(재설계 방향의 근거)**: 문제는 "학습 vocabulary가 좁아서"가 아니라
+**"s_mult가 conv당 스칼라 하나뿐이라 애초에 class-selective한 조정이 구조적으로
+불가능하다"**는 파라미터화 자체의 한계로 보인다. margin_loss·neighbor_loss
+둘 다 이 하나의 자유도를 놓고 경쟁하고, 어느 쪽이 이기든 "전체를 같이 늘리거나
+줄이는" 것 말고는 할 수 있는 게 없다 -- pre-sigmoid 공간에서 단일 곱셈
+스칼라는 모든 class 쌍의 margin을 동일 비율로만 조정하기 때문(개별 조정 불가).
+
+### 7.4 대조 실험 — native calibration이 이 문제를 피할 수 있는가 (진행 중)
+
+같은 메커니즘이 "재학습 없는 이식"이라는 시나리오 특유의 문제인지, 애초에
+LVIS처럼 촘촘한 vocabulary에 처음부터(native) 맞춰 학습해도 반복되는
+구조적 한계인지 가르기 위해 두 실험을 GPU 2개에서 동시 실행(둘 다
+`verbose=True`로 s_mult 로그 확보):
+
+- `scripts/50_lvis_native.py`(GPU 7): LVIS-1203을 처음부터 native vocabulary로
+  놓고 S/H_cal/H_eval을 LVIS frequent bucket(405개, rare/common은 val 이미지가
+  너무 적어 calibration 신호가 없음)에서 다시 분할, calib=128, 전체 지표
+  (AP+S/H_eval subset+Top1_flip+H_eval_flip+GT_MRR/R@1/lost/gained/UPIR+비용).
+- `scripts/51_lvis_transplant_full.py`(GPU 6): 47/49와 같은 이식 시나리오를
+  하나로 합치고 진짜 GT 기반 GT_MRR/R@1/lost/gained까지 추가(단, H_eval_flip/
+  UPIR/subset AP는 구조적으로 이식 시나리오에 적용 불가 -- 스크립트 docstring에
+  근거 명시).
+
+**해석 기준**: 두 실험 모두에서 Combined가 최악이면 -> neighbor-hinge
+설계(§7.3의 단일 스칼라 파라미터화) 자체의 구조적 한계 -> 재설계 필요.
+이식에서만 나쁘고 native에서는 괜찮으면 -> "재학습 없는 이식" 시나리오의
+한계일 뿐, 설계 원리는 유효 -> 스코프 명시로 충분.
+
+(결과는 두 실험 완료 후 본 문서 또는 후속 문서에 추가 예정.)
+
+## 코드 구조 (§6 이후 추가분)
+
+```
+scripts/47_lvis_generality.py       -- zero-shot 이식, pseudo-label flip/margin
+scripts/48_w4a4_probe.py            -- W4A4 스모크 테스트(완전 붕괴, AP=0 확인 후 폐기)
+scripts/49_lvis_ap.py               -- zero-shot 이식, 실제 LVIS GT AP(lvis-api)
+scripts/50_lvis_native.py           -- LVIS-native 재학습, 전체 지표
+scripts/51_lvis_transplant_full.py  -- zero-shot 이식, 전체 적용 가능 지표(AP+flip+GT)
+/data/taeho/lvis_datasets/annotations/lvis_v1_val.json -- 공식 LVIS v1 val GT(신규 다운로드)
+runs/{47_lvis,48_w4a4,49_lvis_ap,50_lvis_native,51_lvis_transplant}/ -- 각 실행 로그
+```
