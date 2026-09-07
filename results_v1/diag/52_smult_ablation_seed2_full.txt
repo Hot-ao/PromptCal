@@ -1,0 +1,52 @@
+[lvis] loading GT /data/taeho/lvis_datasets/annotations/lvis_v1_val.json
+[filter] probe 500장 중 LVIS val에 있는 484장만 사용
+[build] FP (COCO-80)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] adaround (참조)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[build] combined (rounding + s_mult 둘 다 학습)
+YOLOv8s-world summary: 249 layers, 164,650,217 parameters, 151,277,313 gradients, 32.7 GFLOPs
+[09/07 14:40:48] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 14:41:14] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 14:41:38] lvis.results WARNING: Assuming user provided the results in correct format.
+[09/07 14:41:59] lvis.results WARNING: Assuming user provided the results in correct format.
+[promptcal-C+neighbor] 32 calib, prompt subset 40개, neighbor 35개(k=5), s_mult 71개, margin(k=5) neighbor_weight=1.0
+  [150/1500] margin_loss=0.1229 neighbor_loss=0.0239 s_mult 평균=0.980 변화=0.0544
+  [300/1500] margin_loss=0.0855 neighbor_loss=0.0026 s_mult 평균=0.973 변화=0.0667
+  [450/1500] margin_loss=0.0757 neighbor_loss=0.0006 s_mult 평균=0.966 변화=0.0756
+  [600/1500] margin_loss=0.1458 neighbor_loss=0.0123 s_mult 평균=0.969 변화=0.0745
+  [750/1500] margin_loss=0.4102 neighbor_loss=0.0241 s_mult 평균=0.961 변화=0.0727
+  [900/1500] margin_loss=0.3340 neighbor_loss=0.0035 s_mult 평균=0.981 변화=0.0715
+  [1050/1500] margin_loss=0.2162 neighbor_loss=0.0346 s_mult 평균=0.982 변화=0.0828
+  [1200/1500] margin_loss=0.1374 neighbor_loss=0.1514 s_mult 평균=0.987 변화=0.0820
+  [1350/1500] margin_loss=0.0628 neighbor_loss=0.0138 s_mult 평균=0.978 변화=0.0832
+  [1500/1500] margin_loss=0.0778 neighbor_loss=0.0291 s_mult 평균=0.988 변화=0.0899
+[promptcal-C+neighbor] 완료 (s_mult 총 변화=6.379)
+
+[s_mult] 학습 직후 평균=0.9879 (min=0.3129, max=1.1932)
+
+[switch] 전부 LVIS-1203 vocab으로 이식
+[predict+AP] adaround ...
+  adaround: AP=0.2232
+[predict+AP] combined ...
+  combined: AP=0.2161
+
+[ablation] combined의 s_mult를 전부 1.0으로 강제(rounding은 그대로)
+[predict+AP] combined_smult1 ...
+  combined_smult1: AP=0.2232
+
+[predict+AP] FP32 (참고) ...
+
+================================================================================
+ s_mult ablation -- LVIS-1203 이식, seed 2, 484장
+================================================================================
+                   |      AP |    AP50
+              FP32 |  0.2259 |  0.3152
+          adaround |  0.2232 |  0.3135
+          combined |  0.2161 |  0.3071
+   combined_smult1 |  0.2232 |  0.3135
+
+판정:
+  AdaRound=0.2232  Combined(그대로)=0.2161  Combined(s_mult=1)=0.2232
+  -> s_mult=1로 되돌리니 AdaRound 수준으로 회복 == s_mult 드리프트가 범인 확정.
+     재설계는 s_mult 파라미터화(전역 스칼라)를 겨냥해야 함.
