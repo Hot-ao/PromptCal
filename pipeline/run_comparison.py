@@ -229,7 +229,8 @@ def quantized_weight_mib(model_module):
 
 
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
-          lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0,
+          lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5, neighbor_weight=1.0,
+          scale_reg_weight=10.0,
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5):
     m = model_cls(w)
     m.set_classes(names)
@@ -256,9 +257,10 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         convert_to_adaround(m.model)
         optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
         optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
-                                          lr=lr, k=k, neighbor_k=neighbor_k,
+                                          lr=lr, k=k, boundary_w=boundary_w, neighbor_k=neighbor_k,
                                           neighbor_weight=neighbor_weight,
-                                          asymmetric=True, verbose=True)
+                                          asymmetric=True, scale_reg_weight=scale_reg_weight,
+                                          verbose=True)
     return m
 
 
@@ -277,8 +279,13 @@ def main():
     ap.add_argument("--qdrop-prob", type=float, default=0.5)
     ap.add_argument("--lr", type=float, default=1e-2)
     ap.add_argument("--k", type=int, default=5)
+    ap.add_argument("--boundary-w", type=float, default=3.0)
     ap.add_argument("--neighbor-k", type=int, default=5)
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
+    ap.add_argument("--scale-reg-weight", type=float, default=10.0,
+                    help="09-08 official-data 6-seed 스윕으로 확정된 값. "
+                         "s_mult가 스칼라(구버전)가 아니라 per-channel 벡터일 때만 의미 있음 "
+                         "-- adaround.py의 AdaRoundQuantConv2d.s_mult 정의 참고.")
     ap.add_argument("--seed", type=int, default=2)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
@@ -316,7 +323,9 @@ def main():
         t0 = time.perf_counter()
         models[mode] = build(YOLOWorld, args.model, names, device, calib, mode, fp=fp,
                              iters=args.iters, pidx=pidx, lr=args.lr, k=args.k,
+                             boundary_w=args.boundary_w,
                              neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
+                             scale_reg_weight=args.scale_reg_weight,
                              recon_iters_ada=args.recon_iters_ada,
                              recon_iters_strong=args.recon_iters_strong,
                              qdrop_prob=args.qdrop_prob)

@@ -31,8 +31,17 @@ class AdaRoundQuantConv2d(nn.Module):
         self.quantized = True
         self.soft = True                     # 최적화 중 soft, 추론 시 hard
         self.ste = False                     # PD-Quant end-to-end 시 activation STE
-        # 방향 C: learnable activation scale multiplier (초기 1.0, 연속 최적화용)
-        self.s_mult = nn.Parameter(torch.tensor(1.0))
+        # 방향 C: learnable activation scale multiplier (초기 1.0, 연속 최적화용).
+        # 09-07 재설계: conv당 스칼라 하나(구버전)는 class-selective 조정이
+        # 구조적으로 불가능해서(§7.5~7.8) LVIS 등 calibration 밖 vocabulary에
+        # 무차별 적용되는 전역 편향으로 수렴함이 확인됨(정규화로도 트레이드오프만
+        # 이동, 해결 안 됨). in_channels별 벡터로 바꿔 채널마다 다른 조정이
+        # 가능하게 함 -- text embedding이 채널마다 다른 가중치를 갖는다는 사실을
+        # 활용해, 특정 채널만 조정하고 나머지는 안 건드리는 것이 원리적으로 가능해짐.
+        # torch.ones(N)은 기본 CPU 텐서라 명시적으로 device를 맞춰야 함 -- 스칼라
+        # 버전(torch.tensor(1.0))은 0-dim이라 cuda 텐서와 섞여도 PyTorch가 암묵적으로
+        # 허용해줬지만(스칼라 특례), 벡터는 그 특례가 없어 device mismatch로 즉시 드러남.
+        self.s_mult = nn.Parameter(torch.ones(self.conv.in_channels, device=self.conv.weight.device))
         self.use_smult = False               # True일 때만 s_mult 적용(scale 학습 모드)
 
         w = self.conv.weight.detach()
@@ -69,9 +78,11 @@ class AdaRoundQuantConv2d(nn.Module):
 
     def _quantize_smult(self, x):
         """learnable scale multiplier로 activation 양자화. s_mult에 grad가 흐르도록,
-        round만 STE로 통과시키고 scale 곱셈은 graph에 유지."""
+        round만 STE로 통과시키고 scale 곱셈은 graph에 유지. s_mult가 in_channels별
+        벡터이므로 [1,C,1,1]로 view해서 채널마다 다른 배율을 브로드캐스트한다."""
         qmin, qmax = 0, 2 ** self.a_obs.bits - 1
-        scale = self.a_obs.scale * self.s_mult.clamp(min=0.1, max=10.0)
+        mult = self.s_mult.clamp(min=0.1, max=10.0).view(1, -1, 1, 1)
+        scale = self.a_obs.scale * mult
         zp = self.a_obs.zero_point
         x_s = x / scale
         # round를 STE로: forward=round, backward=identity (scale 경로는 유지)

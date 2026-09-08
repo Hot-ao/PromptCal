@@ -326,8 +326,8 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
         opt.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
-            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
-            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            sd = sum(float((s.detach()-s0i).abs().mean()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach().mean()) for s in smults) / len(smults)
             print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
                   f"s_mult 평균={smean:.3f} 변화={sd:.4f}")
 
@@ -336,14 +336,14 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
 
     q_cap.close()
     if verbose:
-        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        tot = sum(float((s.detach()-s0i).abs().sum()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C] 완료 (s_mult 총 변화={tot:.3f})")
 
 
 def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, device,
                                       prompt_idx, iters=1000, lr=1e-2, k=5,
-                                      neighbor_k=5, neighbor_weight=1.0,
-                                      asymmetric=False,
+                                      boundary_w=3.0, neighbor_k=5, neighbor_weight=1.0,
+                                      asymmetric=False, scale_reg_weight=0.0,
                                       conf_thres=0.25, verbose=True, eval_hook=None):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
@@ -376,6 +376,19 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     안전해짐)은 전혀 벌점을 주지 않고, "높아지는" 방향(경쟁자가 FP보다 강해져서
     실제로 top-1을 빼앗을 위험이 커짐)만 억제한다. semantic_calib.py의
     utility_refinement_terms(threshold-crossing hinge)와 같은 스타일.
+
+    scale_reg_weight (09-07, LVIS 일반성 검증 이후 추가): s_mult가 conv당
+    스칼라 하나뿐이라 "이웃 컬럼만 조준"이 구조적으로 불가능하고, asymmetric
+    hinge를 값싸게 만족시키는 가장 쉬운 해법이 "전체를 조금씩 낮추는" 전역
+    편향으로 수렴한다는 게 확인됨(COCO-80/LVIS-이식/LVIS-native 세 시나리오
+    모두에서 s_mult 평균이 1.0 미만으로 수렴 -- PromptCal_PTQ_progress_
+    2026-09-07.md §7.3~7.7). 이 편향은 계산에 쓴 vocabulary뿐 아니라 배포
+    시점의 임의의(학습이 전혀 모르는) vocabulary에도 무차별 적용되어 실제
+    AP·UPIR을 해친다(s_mult=1로 되돌리면 AdaRound 수준으로 정확히 회복됨,
+    `scripts/52_smult_ablation.py`로 인과관계 확정). scale_reg_weight>0이면
+    `mean((s_mult-1)^2)`을 손실에 더해 "값싸게 전역적으로 줄이는" 지름길에
+    비용을 매겨서, 최적화가 margin/neighbor 목적에 실제로 필요한 만큼만
+    s_mult를 움직이도록 유도한다. 기본값 0.0(기존 동작 유지, opt-in).
     """
     ada = list_adaround_convs(quant_model)
     for ac in ada:
@@ -432,7 +445,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             B, P, H, W = q_cap.buf[i].shape
             parts.append(q_cap.buf[i].reshape(B, P, H*W))
         sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
-        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k)
+        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w)
         if asymmetric:
             # 경쟁자가 FP보다 강해지는 방향(sim_q > sim_fp)만 억제. 약해지는
             # 방향은 벌점 없음 -- 우연히 유익한 흔들림(예: seed 0)을 보존.
@@ -441,23 +454,27 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
         else:
             nl = F.mse_loss(sim_q[aidx][:, neighbor_cols], sim_fp[aidx][:, neighbor_cols])
         loss = ml + neighbor_weight * nl
+        if scale_reg_weight > 0:
+            sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
+            loss = loss + scale_reg_weight * sr
         loss.backward()
         torch.nn.utils.clip_grad_norm_(smults, max_norm=1.0)
         opt.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
-            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
-            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            sd = sum(float((s.detach()-s0i).abs().mean()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach().mean()) for s in smults) / len(smults)
+            extra = f" scale_reg={float(sr.detach()):.5f}" if scale_reg_weight > 0 else ""
             print(f"  [{it+1}/{iters}] margin_loss={float(ml.detach()):.4f} "
                   f"neighbor_loss={float(nl.detach()):.4f} "
-                  f"s_mult 평균={smean:.3f} 변화={sd:.4f}")
+                  f"s_mult 평균={smean:.3f} 변화={sd:.4f}{extra}")
 
         if eval_hook is not None and (it + 1) % max(1, iters // 10) == 0:
             eval_hook(it + 1, quant_model)
 
     q_cap.close()
     if verbose:
-        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        tot = sum(float((s.detach()-s0i).abs().sum()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C+neighbor] 완료 (s_mult 총 변화={tot:.3f})")
 
 
@@ -569,8 +586,8 @@ def optimize_promptcal_scale_neighbor_utility(quant_model, fp_model, calib_tenso
         opt.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
-            sd = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0)) / len(smults)
-            smean = sum(float(s.detach()) for s in smults) / len(smults)
+            sd = sum(float((s.detach()-s0i).abs().mean()) for s, s0i in zip(smults, s0)) / len(smults)
+            smean = sum(float(s.detach().mean()) for s in smults) / len(smults)
             phase = "utility" if it >= stage2_start else "calib"
             extra = (f" thresh={float(l_thresh.detach()):.4f} box={float(l_box.detach()):.4f}"
                     if l_thresh is not None else "")
@@ -583,5 +600,5 @@ def optimize_promptcal_scale_neighbor_utility(quant_model, fp_model, calib_tenso
 
     q_cap.close(); q_cv2_cap.close()
     if verbose:
-        tot = sum(float((s.detach()-s0i).abs()) for s, s0i in zip(smults, s0))
+        tot = sum(float((s.detach()-s0i).abs().sum()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C+neighbor+utility] 완료 (s_mult 총 변화={tot:.3f})")
