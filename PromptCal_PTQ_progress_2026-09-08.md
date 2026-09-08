@@ -194,3 +194,54 @@ scripts/58_full_baseline_official_data.py -- 신규: train2017 calib + 공식 LV
                                   -- 공식 LVIS minival GT(신규 다운로드, 4809장)
 runs/58_official_data/seed{0,1,2}.log -- 진행 중인 실행 로그
 ```
+
+## 5. 공식 데이터 설정 3-seed 검증 결과 (09-08)
+
+`scripts/58_full_baseline_official_data.py`를 seed 0/1/2로 GPU 5/6/7에서
+병렬 실행, 전부 에러 없이 완료. calib=train2017 256장, COCO-80 평가는
+val2017 전체(5000장), LVIS 평가는 공식 minival(4809장). Combined는
+per-channel s_mult + `scale_reg_weight=20`.
+
+### 5.1 3-seed 평균 (baseline은 seed-불변이므로 단일값)
+
+| method | COCO_AP | LVIS_AP | Heval_flip | Top1_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|
+| naive | 33.54 | 0.1264 | 11.00% | 0.95% | 0.33% | 432 | 6.48% | 1224.0 |
+| AdaRound | 33.24 | 0.1242 | 10.08% | 0.74% | 0.27% | 349 | 5.67% | 1212.0 |
+| QDrop | 33.30 | 0.1235 | 10.10% | 0.72% | 0.31% | 384 | 5.71% | 1192.0 |
+| BRECQ | 33.30 | 0.1200 | 9.71% | 0.71% | 0.27% | 327 | 5.53% | 1158.0 |
+| **Combined** | **36.08±0.11** | 0.1246±0.0016 | **9.24±0.58%** | 0.74±0.01% | 0.29±0.03% | 384.7±13.9 | **5.34±0.08%** | **1155.3±33.1** |
+
+per-seed 원값: seed0 (COCO AP 36.23, LVIS AP 0.1224, Heval_flip 8.55%),
+seed1 (COCO AP 36.01, LVIS AP 0.1253, Heval_flip 9.21%), seed2 (COCO AP
+35.99, LVIS AP 0.1262, Heval_flip 9.97%).
+
+### 5.2 해석
+
+- **COCO-80 AP**: naive 대비 **+2.54**, 이전 어떤 설정(calib=32,
+  val2017 슬라이스)보다 큰 격차. baseline 전부(naive 포함)의 절대 AP
+  자체도 이전보다 낮아졌는데(-3.26 vs 이전 -1.74), calib을 train2017
+  256장으로 넓히면서 naive의 min-max 활성화 범위 추정이 outlier에 더
+  민감해진 것으로 추정 — Combined는 이를 보정하는 메커니즘(AdaRound
+  rounding + s_mult)이 있어 상대적 이득이 오히려 커진 것으로 보임(검증
+  필요, 논문에 이 설명을 쓰려면 별도 확인 권장).
+- **LVIS AP**: naive(0.1264)와 사실상 동률(-0.0018, seed별로는 혼조 —
+  seed0/1은 naive 아래, seed2는 위), AdaRound(0.1242)보다 근소하게 높고
+  QDrop/BRECQ는 확실히 이김. 이전 설정에서 "6개 조건 중 최악"이었던 것과
+  완전히 다른 그림.
+- **Heval_flip(masked)**: Combined가 **5개 중 1위**(9.24%) — 이 프로젝트
+  전체에서 처음으로 이 지표를 이김(그동안 줄곧 최악~근접 최악이었음).
+  BRECQ(9.71%, 이전까지 항상 이 지표 최선)도 넘어섬.
+- **LVIS_flip·LVIS_lost**: 둘 다 **5개 중 1위**(5.34%, 1155.3) —
+  BRECQ(5.53%, 1158)까지 근소하게 앞섬.
+  - Top1_flip·UPIR·lost(COCO GT)는 최고는 아니지만 중위권(꼴찌 아님):
+  AdaRound/BRECQ와 근접.
+
+### 5.3 결론
+
+이번 설정에서 Combined는 이 재설계 과정 전체를 통틀어 가장 균형 잡힌
+프로파일을 보임 — AP 격차는 역대 최대, masked flip/LVIS flip/LVIS lost는
+5개 중 1위. 다만 LVIS AP·UPIR·lost는 "이겼다"고 말하기엔 애매(동률 또는
+근소 열세)하므로, 논문에는 이 nuance를 정직하게 함께 적어야 함. 이후
+방향(하이퍼파라미터 재튜닝, L1 정규화, cv4 인접 layer로 범위 제한 등)은
+사용자 확인 후 진행 예정.

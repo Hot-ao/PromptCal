@@ -261,5 +261,15 @@ class-agnostic해서 H_cal/H_eval을 명시적으로 보호하지 못하기 때�
     이 정도가 논문에 실을 만한지 최종 판단하기 위해, **calibration을 train2017
     256장으로, LVIS 평가를 공식 minival(4809장, ultralytics 공식 배포 --
     확인 결과 "COCO val2017 ∩ LVIS val"과 정확히 일치)로 바꾼 "논문 방식"
-    데이터 설정으로 재검증 진행 중**(`scripts/58_full_baseline_official_data.py`,
-    seed 0/1/2를 GPU 3개에 병렬 실행).
+    데이터 설정으로 재검증 완료(09-08)**(`scripts/58_full_baseline_official_data.py`,
+    seed 0/1/2를 GPU 3개에 병렬 실행, 3-seed 전부 에러 없이 완료).
+    **결과(상세는 `PromptCal_PTQ_progress_2026-09-08.md` §5)**: 이 재설계
+    과정 전체를 통틀어 가장 균형 잡힌 프로파일 확보. COCO-80 AP는 naive
+    대비 **+2.54**(이전 최대였던 +1.4보다 큰 폭, 역대 최대 격차),
+    masked H_eval_flip 9.24%(5개 조건 중 **1위**, BRECQ의 9.71%까지 넘어섬
+    -- 이 지표를 이긴 것은 프로젝트 전체에서 처음), LVIS_flip 5.34%·
+    LVIS_lost 1155.3 둘 다 **5개 중 1위**. 다만 LVIS AP(0.1246)는 naive
+    (0.1264)와 사실상 동률(근소 열세)이고 UPIR·COCO lost는 중위권(최선은
+    아니나 최악도 아님) -- "전부 최고"는 아니지만 핵심 지표에서 확실한
+    우위를 보인 첫 결과. 다음 단계(추가 하이퍼파라미터 튜닝 여부)는
+    사용자 확인 대기 중.
