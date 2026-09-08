@@ -67,7 +67,10 @@ def letterbox(im, new=640, color=(114, 114, 114)):
 def preprocess(path, imgsz, device):
     im = letterbox(cv2.imread(path), imgsz)
     im = np.ascontiguousarray(im[:, :, ::-1].transpose(2, 0, 1))
-    return torch.from_numpy(im).float().unsqueeze(0) / 255.0
+    t = torch.from_numpy(im).unsqueeze(0).float()
+    t.div_(255.0)          # in-place: out-of-place `/255.0`는 이미지당 여분의
+    return t                # float32 버퍼를 만들고 버려서, probe 5000장 기준
+                            # RSS가 이론치(~24GB)의 2배(~47GB)로 부풀었었다(09-08 발견).
 
 
 def switch_vocab(model, names, device):
