@@ -249,3 +249,17 @@ class-agnostic해서 H_cal/H_eval을 명시적으로 보호하지 못하기 때�
     포기하고 LVIS에서 그저 그런 성적"이라는 나쁜 트레이드오프로 확정, 정규화만으로는
     불충분. **다음 단계: per-channel 재설계**(s_mult를 conv당 스칼라 -> `[out_channels]`
     벡터, 적용 범위를 cv4 직전 layer로 축소) 착수.
+    **per-channel + 정규화 6-seed 결과(09-08)**: `PromptCal_PTQ_progress_
+    2026-09-08.md` 참고. per-channel(자유도 확대) 단독으로는 여전히 LVIS를
+    못 이겼으나(과적합 추정), `scale_reg_weight=20`과 결합하니 지금까지 나온
+    Combined 변형 중 처음으로 균형 잡힌 프로파일 확보: COCO-80 AP 36.10
+    (naive 대비 +1.04, 원래 스칼라 이득 +1.4의 79% 유지, baseline 전부보다
+    우위), LVIS AP 0.2211(naive·QDrop보다 우위, BRECQ와 거의 동률, AdaRound
+    에만 근소하게 못 미침 -- 두 baseline보다 못했던 이전 두 실패작과 다름),
+    UPIR 0.191(naive·AdaRound·QDrop보다 우위, BRECQ에만 못 미침). "전부
+    최고"는 아니지만 "어디서도 최악이 아닌" 첫 조건. 완벽한 방식은 아니지만
+    이 정도가 논문에 실을 만한지 최종 판단하기 위해, **calibration을 train2017
+    256장으로, LVIS 평가를 공식 minival(4809장, ultralytics 공식 배포 --
+    확인 결과 "COCO val2017 ∩ LVIS val"과 정확히 일치)로 바꾼 "논문 방식"
+    데이터 설정으로 재검증 진행 중**(`scripts/58_full_baseline_official_data.py`,
+    seed 0/1/2를 GPU 3개에 병렬 실행).
