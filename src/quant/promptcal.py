@@ -342,8 +342,9 @@ def optimize_promptcal_scale(quant_model, fp_model, calib_tensors, device,
 
 def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, device,
                                       prompt_idx, iters=1000, lr=1e-2, k=5,
-                                      neighbor_k=5, neighbor_weight=1.0,
+                                      boundary_w=3.0, neighbor_k=5, neighbor_weight=1.0,
                                       asymmetric=False, scale_reg_weight=0.0,
+                                      exclude_from_neighbors=None,
                                       conf_thres=0.25, verbose=True, eval_hook=None):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
@@ -412,10 +413,17 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     txt_feats = get_txt_feats(fp_model).to(device)
     neighbor_order = text_neighbor_order(txt_feats)
     pidx_set = set(prompt_idx)
+    # 09-09 버그 수정: neighbor 후보 풀에서 S(pidx_set)만 제외하면, H_eval(순수
+    # held-out이어야 할 프롬프트)이 text-embedding상 S와 가까울 경우 neighbor_cols에
+    # 그대로 섞여 들어가 asymmetric hinge로 간접 학습돼버린다("H_eval은 최적화에
+    # 한 번도 안 씀"이 깨짐 -- 실측 seed=0 기준 H_eval 20개 중 18개가 포함돼
+    # 있었음). exclude_from_neighbors로 H_eval도 같이 제외해서 진짜 held-out을
+    # 보장한다. None이면 기존 동작(버그 있는 채로) 유지 -- 하위 호환용.
+    exclude_set = pidx_set | (set(exclude_from_neighbors) if exclude_from_neighbors else set())
     neighbor_set = set()
     for c in prompt_idx:
         order = neighbor_order[c].tolist()
-        picked = [o for o in order if o not in pidx_set][:neighbor_k]
+        picked = [o for o in order if o not in exclude_set][:neighbor_k]
         neighbor_set.update(picked)
     neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
 
@@ -445,7 +453,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             B, P, H, W = q_cap.buf[i].shape
             parts.append(q_cap.buf[i].reshape(B, P, H*W))
         sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
-        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k)
+        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w)
         if asymmetric:
             # 경쟁자가 FP보다 강해지는 방향(sim_q > sim_fp)만 억제. 약해지는
             # 방향은 벌점 없음 -- 우연히 유익한 흔들림(예: seed 0)을 보존.

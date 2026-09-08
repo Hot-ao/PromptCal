@@ -342,6 +342,7 @@ def quantized_weight_mib(model_module):
 
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
           lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=0.0,
+          h_eval=None,
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5):
     m = model_cls(w)
     m.set_classes(names)
@@ -371,6 +372,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           lr=lr, k=k, neighbor_k=neighbor_k,
                                           neighbor_weight=neighbor_weight,
                                           asymmetric=True, scale_reg_weight=scale_reg_weight,
+                                          exclude_from_neighbors=h_eval,
                                           verbose=False)
     return m
 
@@ -457,7 +459,7 @@ def main():
         models[mode] = build(YOLOWorld, args.model, coco, device, calib, mode, fp=fp,
                              iters=args.iters, pidx=S, lr=args.lr, k=args.k,
                              neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
-                             scale_reg_weight=args.scale_reg_weight,
+                             scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
                              recon_iters_ada=args.recon_iters_ada,
                              recon_iters_strong=args.recon_iters_strong,
                              qdrop_prob=args.qdrop_prob)
