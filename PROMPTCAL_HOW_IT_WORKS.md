@@ -1,4 +1,4 @@
-# PromptCal-PTQ 작동 원리 상세 설명 (2026-09-07 기준, 현재 구현)
+# PromptCal-PTQ 작동 원리 상세 설명 (2026-09-08 갱신)
 
 `PROMPTCAL_METHOD_SPEC.md`는 세 번의 실패한 시도(alpha rounding만으로 margin을
 맞추려던 접근)를 기록한 문서라 지금 방법을 설명하지 않는다. 이 문서는 **지금
@@ -161,16 +161,17 @@ input=quant_module 현재 상태).
 버려두고, **그 위에 activation quantization의 scale factor에 learnable
 continuous multiplier를 하나 더 얹는다.**
 
-### 5.2 `s_mult` — learnable activation scale multiplier
+### 5.2 `s_mult` — learnable activation scale multiplier (09-08 기준: per-channel 벡터)
 
 `AdaRoundQuantConv2d`(`adaround.py`)의 필드:
 
 ```python
-self.s_mult = nn.Parameter(torch.tensor(1.0))   # 초기값 1.0
+self.s_mult = nn.Parameter(torch.ones(self.conv.in_channels, device=self.conv.weight.device))
 self.use_smult = False                          # True일 때만 적용
 
 def _quantize_smult(self, x):
-    scale = self.a_obs.scale * self.s_mult.clamp(0.1, 10.0)
+    mult = self.s_mult.clamp(min=0.1, max=10.0).view(1, -1, 1, 1)
+    scale = self.a_obs.scale * mult
     x_s = x / scale
     x_r = x_s + (round(x_s) - x_s).detach()      # round만 STE, scale은 grad 유지
     x_c = clamp(x_r + zp, qmin, qmax)
@@ -181,6 +182,19 @@ def _quantize_smult(self, x):
 남겨서 `s_mult`로 grad가 흐르게 한다. 즉 "이 레이어의 activation quantization
 격자 간격을 살짝 늘리거나 줄인다"를 연속적으로 학습하는 것 — round-to-nearest
 자체는 그대로 두고, 그 격자의 눈금 크기만 조정한다.
+
+**원래는 conv당 스칼라 하나(`torch.tensor(1.0)`, 0-dim)였다.** §7의 COCO-80
+6-seed 결과는 이 스칼라 버전 기준이다. 09-07~09-08에 LVIS-1203 vocabulary로
+일반성을 검증하다가 이 스칼라 설계 자체의 구조적 한계가 드러나서 **입력
+채널별 벡터(`[in_channels]`)로 재설계**했다 — 무엇이 문제였고 왜 이렇게
+바꿨는지는 §5.7에 전체 경위를 정리한다.
+
+(사소하지만 재현 시 주의할 점: `torch.tensor(1.0)`처럼 0-dim 텐서는 PyTorch가
+CUDA 텐서와의 연산에서 자동으로 device를 맞춰주는 예외 취급을 받아
+`.to(device)` 없이도 에러가 안 났다. `torch.ones(N)`처럼 1-dim 이상이 되는
+순간 이 예외가 사라져서 명시적으로 `device=...`를 안 주면 "Expected all
+tensors to be on the same device" 에러가 난다 — 벡터화하면서 실제로 겪은
+버그.)
 
 ### 5.3 S / H_cal / H_eval — 프롬프트 3분할 (실험 정직성의 핵심)
 
@@ -250,14 +264,16 @@ top-1을 빼앗을 위험이 커짐)만 억제한다. 41번 실험에서 symmetr
 3. optimize_adaround(model, fp_model, calib, iters=1000) # weight rounding 확정(hard)
 4. optimize_promptcal_scale_neighbor(model, fp_model, calib, pidx=S,
                                      iters=1500, k=5, neighbor_k=5,
-                                     neighbor_weight=1.0, asymmetric=True)
+                                     neighbor_weight=1.0, asymmetric=True,
+                                     scale_reg_weight=20.0)   # 09-08 기준 기본값
    → 이 단계에서 rounding(alpha)은 완전히 고정(requires_grad=False),
      s_mult만 학습(use_smult=True)
 ```
 
 즉 **"Combined" = AdaRound(weight rounding) + asymmetric neighbor-preserving
-continuous activation scale(s_mult)**. 두 최적화가 서로 다른 파라미터
-집합(alpha vs s_mult)을 순차적으로 건드리기 때문에 서로 간섭하지 않는다.
+continuous activation scale(s_mult, per-channel) + (s_mult-1)² 정규화**. 두
+최적화가 서로 다른 파라미터 집합(alpha vs s_mult)을 순차적으로 건드리기
+때문에 서로 간섭하지 않는다. `scale_reg_weight`가 왜 필요해졌는지는 §5.7.
 
 `optimize_promptcal_scale_neighbor_utility`(같은 파일)는 여기에 논문 §4.3
 utility constraint(threshold-crossing + box consistency, `semantic_calib.py`의
@@ -265,6 +281,82 @@ utility constraint(threshold-crossing + box consistency, `semantic_calib.py`의
 가중치에서는 중립적(뚜렷한 추가 이득 없음, `scripts/44_utility_ap_check.py`).
 현재 6-seed 최종 비교(`45_baseline_compare.py`)는 utility 없는
 `optimize_promptcal_scale_neighbor`만 사용한다.
+
+### 5.7 LVIS 일반성 문제와 재설계 (09-07~09-08) — s_mult가 스칼라에서 벡터로 바뀐 이유
+
+§7의 6-seed 결과는 전부 **COCO-80 vocabulary**(calibration에 쓴 40개 S
+프롬프트가 최종 배포 vocabulary와 같은 80개 중 일부)에서 나온 것이다. 논문의
+일반성 주장을 위해 훨씬 촘촘하고 큰 vocabulary(LVIS-1203, 논문이 "80개짜리
+좁은 세계에서만 통하는 트릭이 아니다"를 보여야 하는 지점)에 그대로 배포했을
+때도 이점이 유지되는지 검증하다가, 원래 설계(conv당 스칼라 s_mult)의
+구조적 한계가 드러났다.
+
+**5.7.1 무엇이 문제였나.** COCO-80에서 학습한 Combined 모델을 재학습 없이
+LVIS-1203 vocabulary로 바꿔서 배포하면, 실제 LVIS AP가 **naive보다도
+낮았다**(naive/AdaRound/QDrop/BRECQ/Combined 5개 조건 중 최악). flip이
+늘어나는 게 "무해한 재배치"가 아니라 진짜 검출 품질 저하라는 뜻이었다.
+
+**5.7.2 원인 진단.** §5.5에서 이미 짚었듯 `s_mult`는 **class-agnostic**하다
+— 원래(스칼라) 버전은 conv 하나당 숫자 하나뿐이라, "S(COCO 40개 프롬프트)의
+neighbor만 조준해서 억제한다"는 neighbor loss의 의도 자체가 **구조적으로
+불가능**했다: 그 컨볼루션을 지나는 activation 전체에 스칼라 하나가 곱해지니,
+"S의 이웃 ~35개 컬럼이 안 커지게" 만족시키는 유일한 방법은 그 conv의
+activation scale 전체를 획일적으로 낮추는 것뿐이고, 그러면 calibration에서
+아예 존재도 몰랐던 LVIS의 나머지 1100여개 class까지 무차별적으로 위축된다.
+실제로 학습 후 s_mult 평균이 항상 1.0 미만(0.97~0.99)으로 수렴했다 — "전역
+하향 편향"이 새어나가고 있었다는 직접 증거.
+
+**5.7.3 인과관계 확정 (ablation).** `scripts/52_smult_ablation.py`: 이미
+학습된 Combined 모델의 `s_mult`를 학습 후에 강제로 1.0으로 되돌리면
+(`s_mult.fill_(1.0)`), 그 모델의 AP가 **AdaRound와 소수점까지 일치**했다
+(`combined_smult1` AP == AdaRound AP). 즉 Combined와 AdaRound의 유일한 차이가
+`s_mult`이고, LVIS 손상의 원인이 정확히 `s_mult`의 하향 편향이라는 걸 직접
+증명한 것.
+
+**5.7.4 "재학습 없는 이식" 탓이 아니라 설계 자체의 한계임을 확인.** 혹시
+"COCO에서 학습해서 LVIS로 재학습 없이 옮긴" 것 자체가 문제였을 수도 있으니,
+LVIS-1203을 **처음부터 native로 calibration/학습**한 대조 실험도 돌렸다.
+결과: COCO-80 native(s_mult 평균 0.977) / COCO→LVIS 이식(0.988) /
+LVIS-native(0.971) **세 시나리오 전부**에서 s_mult가 1.0 미만으로
+수렴했다 — 재학습 여부와 무관하게 conv당 스칼라라는 파라미터화 자체의
+한계로 확정.
+
+**5.7.5 1차 대응: 정규화만으로는 부족.** 가장 싼 대응인 `(s_mult-1)²`
+정규화(scale_reg_weight, §5.6 코드 참고)를 스칼라 버전에 추가하고
+`scale_reg_weight=200`으로 6-seed 검증했더니, LVIS AP는 naive를 근소하게만
+넘었지만(AdaRound/BRECQ에는 못 미침) 그 대가로 COCO-80에서 Combined의 핵심
+결과였던 UPIR(0.142%, 5개 중 최선)이 0.225%로 baseline 수준까지 후퇴했다 —
+"핵심 주장을 포기하고 LVIS에서 그저 그런 성적"이라는 나쁜 트레이드오프.
+정규화 하나로는 class-agnostic이라는 근본 원인을 못 없앤다는 뜻.
+
+**5.7.6 2차 대응(현재 채택): per-channel 벡터화 + 가벼운 정규화.** §5.2의
+`s_mult`를 conv당 스칼라에서 **입력 채널별 벡터**(`[in_channels]`)로
+바꿨다 — 채널마다 다른 값을 학습할 자유도를 주면, "S의 이웃만 죽이고 나머지는
+안 건드린다"는 원래 의도를 최소한 부분적으로는 채널 단위로 분산시켜 달성할
+여지가 생긴다. 벡터화만으로는 자유도가 커진 만큼 오히려 calibration set에
+과적합하는 경향이 보였는데(단독으로는 여전히 LVIS baseline을 다 못 이김),
+가벼운 정규화(`scale_reg_weight=20`, 스칼라 버전에 썼던 200보다 훨씬 작은
+값 — 벡터는 채널마다 다른 값을 가지므로 훨씬 약한 벌점으로도 충분)를 같이
+쓰니 지금까지 나온 Combined 변형 중 가장 균형 잡힌 프로파일이 나왔다:
+COCO-80 AP 우위를 거의 그대로 유지하면서, LVIS AP가 처음으로 baseline들과
+동급(naive와 사실상 동률, AdaRound/QDrop/BRECQ보다 우위)이 됐다.
+
+**5.7.7 "논문 방식" 데이터로 최종 검증 (진행 중, 09-08).** calibration을
+val2017 슬라이스(32~256장, 평가 데이터와 겹침)에서 **train2017 256장**으로,
+LVIS 평가를 임시 484장 부분집합에서 **공식 `lvis_v1_minival.json`
+(4809장, ultralytics 공식 배포 — "COCO val2017 ∩ LVIS val"과 정확히 일치함을
+확인)** 으로 바꾼, 논문 실험 관행에 더 가까운 설정으로 재검증했다
+(`scripts/58_full_baseline_official_data.py`). 3-seed 결과: COCO-80 AP가
+naive 대비 **+2.54**(역대 최대 격차), masked H_eval_flip에서 **처음으로
+5개 조건 중 1위**(이전까지 이 지표는 줄곧 Combined의 최대 약점이었음),
+LVIS_flip·LVIS_lost도 5개 중 1위. LVIS AP만 naive와 근소하게 동률(뚜렷한
+승리는 아님). 상세 표는 `MASTER_SUMMARY.md` §8 국면 I,
+`PromptCal_PTQ_progress_2026-09-08.md` §5 참고.
+
+**현재 상태(09-08, 진행 중)**: 이 결과에 쓴 `scale_reg_weight=20`은 예전
+데이터 스케일(calib=32)에서 고른 값을 그대로 가져온 것이라, 이 새 데이터
+스케일(calib=256)에서 재스윕(`scripts/59_rw_sweep_official_data.py`,
+rw∈{10,20,30,50})과 6-seed 확장 검증이 진행 중.
 
 ---
 
@@ -342,6 +434,9 @@ semantic error가 함께 개선되는지 봐야 한다"고 명시적으로 경�
 > 이기거나 동등하다. GT_MRR/R@1은 BRECQ와 사실상 동률. masked H_eval_flip(우리가
 > 만든 반사실적 진단)에서만 BRECQ보다 못하다 — 이건 실제 배포 조건과 다른
 > 시나리오를 재는 지표라서 발생하는, 메커니즘이 밝혀진 한계다.
+
+(이 §7 결과는 COCO-80 vocabulary·스칼라 s_mult 기준이다. LVIS-1203로
+일반화했을 때 이 스칼라 설계가 어떻게 무너지고 어떻게 재설계했는지는 §5.7.)
 
 ---
 
