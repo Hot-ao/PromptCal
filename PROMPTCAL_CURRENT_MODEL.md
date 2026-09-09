@@ -490,11 +490,45 @@ COCO-80 쪽 지표(COCO_AP·Heval_flip·lost)는 boundary_w=2가 최선, LVIS �
 지표(LVIS_AP·LVIS_flip·LVIS_lost)는 boundary_w=5가 최선인 **트레이드오프**
 패턴 — 버그 수정 전과 동일한 양상. boundary_w=3(현재값)은 그 중간.
 
-**다음**: k/boundary_w는 각각 top 2 후보(k∈{5,8}, boundary_w∈{3,5},
-neighbor_k는 사실상 동치라 5로 고정)로 4-combo 그리드(`scripts/61_
-combo_grid_official_data.py`)를 돌려서 상호작용을 확인 중 — 이전에
-k=8+boundary_w=5 조합에서 negative interaction이 관찰된 적 있어서
-(§9 참고), 이번에도 그런 부작용이 있는지가 관건. 결과는 §8.6에 추가 예정.
+### 8.6 4-combo 그리드 — k x boundary_w 상호작용 재확인 (2026-09-10, 1-seed)
+
+§8.5의 top 2 후보(k∈{5,8}, boundary_w∈{3,5}, neighbor_k=5 고정)로
+`scripts/61_combo_grid_official_data.py`를 돌려 상호작용을 확인했다.
+동기: 버그 수정 **전** 같은 조합(k=8+boundary_w=5)에서 negative
+interaction이 관찰된 적 있음(개별로는 LVIS_AP가 각각 0.1278/0.1279였는데
+조합하니 0.1242로 더 나빠짐) — 그게 버그 수정 후에도 재현되는지가 관건.
+
+| method | COCO_AP | LVIS_AP | Heval_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|
+| **k5_bw3(현재값)** | **36.38** | 0.1246 | **8.55%** | 0.30% | **369** | 5.45% | 1139 |
+| k5_bw5 | 36.39 | 0.1250 | 8.88% | 0.31% | 401 | 5.36% | 1107 |
+| k8_bw3 | 36.22 | 0.1223 | 8.77% | 0.27% | 415 | 5.56% | 1141 |
+| k8_bw5 | 36.29 | **0.1254** | 8.83% | **0.27%** | 373 | **5.44%** | **1133** |
+
+*k5_bw3/k5_bw5/k8_bw3는 각각 §8.5의 개별 k/boundary_w 스윕과 정확히
+같은 설정이라 값도 동일함(재현성 확인 겸용) — 이 그리드에서 새로 얻은
+정보는 k8_bw5 하나뿐.*
+
+**핵심 발견 — negative interaction이 재현되지 않음**: 버그 수정 전엔
+k8+bw5 조합이 개별 효과보다 더 나빴는데, 수정 후엔 정반대로 **k8_bw5가
+LVIS_AP(0.1254)·UPIR(0.27%)·LVIS_flip(5.44%)·LVIS_lost(1133) 4개 지표
+모두 4개 조합 중 최고**를 기록했다 — k8 단독(0.1223)이나 bw5 단독(0.1250)
+보다도 LVIS_AP가 높다(mild positive interaction). k8 단독의 약점이었던
+lost 폭증(415)도 bw5와 합치니 373으로 완화됨.
+
+**그렇다고 k8_bw5로 바꿔야 하나 — 아니다**: COCO-80 쪽 지표(COCO_AP
+36.38→36.29, Heval_flip 8.55%→8.83%, lost 369→373)는 오히려 현재값이
+근소하게 낫다. 정리하면 **"현재값(k5,bw3)은 COCO-80 쪽 우위, k8_bw5는
+LVIS 쪽 우위"인 또 다른 트레이드오프**일 뿐, 어느 한쪽이 확실히 이기는
+게 아니다. 게다가 이건 1-seed 트렌드일 뿐 6-seed 검증을 거친 게 아니라서,
+이 정도 마진(LVIS_AP +0.0008, lost -32 등)으로 확정 하이퍼파라미터를
+바꾸는 근거로는 약하다.
+
+**최종 결론**: `k=5, neighbor_k=5, boundary_w=3.0, scale_reg_weight=10`
+**확정값 유지**. H_eval 리크 수정이 하이퍼파라미터 최적점 자체를 크게
+흔들지는 않았다(k/boundary_w 트레이드오프 패턴 동일, neighbor_k는 오히려
+더 단순해짐 - 5 이상 전부 동치). k8_bw5는 "LVIS 쪽을 더 밀고 싶으면"
+쓸 수 있는 대안으로 기록만 해두고, 실제 채택은 안 함.
 
 ---
 
