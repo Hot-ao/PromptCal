@@ -20,7 +20,7 @@ naive/AdaRound/QDrop/BRECQ는 이 스크립트 안에서 매 seed 다시 빌드�
         --model yolov8s-world.pt --coco-root /data/taeho/coco_datasets \
         --data configs/coco_local.yaml \
         --lvis-ann /data/taeho/lvis_datasets/labels_dl/extracted/lvis/annotations/lvis_v1_minival.json \
-        --calib 256 --scale-reg-weight 20.0 --seed 0 --device 0
+        --calib 256 --scale-reg-weight 10.0 --seed 0 --device 0
 """
 import argparse, glob, os, sys, time
 import cv2, numpy as np, torch
@@ -207,7 +207,7 @@ def build_gt_targets(fp_sims, img_paths, gt_by_path, grid_specs, imgsz):
 
 def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None):
     recip_ranks = []
-    lost = gained = 0
+    lost = gained = lateral = 0
     upir_num = upir_den = 0
     for i in range(len(fp_sims)):
         sf = fp_sims[i]; sq = q_sims[i]
@@ -220,6 +220,13 @@ def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None):
                 lost += 1
             if fp_rank != 1 and q_rank == 1:
                 gained += 1
+            # lateral: 이 GT-anchor에서 FP/quant 둘 다 오답인데, quant의 예측
+            # 자체가 FP와 다르게 바뀐 경우(오답->다른 오답 flip). lost/gained만
+            # 보면 "GT-anchor에서 일어난 flip 중 실제로 정답이 되는 비율"을
+            # 못 재는데(분모에 이 lateral이 빠짐), 이걸 포함해야
+            # corrective_rate = gained/(lost+gained+lateral)이 정확해진다.
+            if fp_rank != 1 and q_rank != 1 and int(fp_s.argmax()) != int(q_s.argmax()):
+                lateral += 1
             if H_eval_set is not None and fp_rank == 1 and cls not in H_eval_set:
                 upir_den += 1
                 if int(q_s.argmax()) in H_eval_set:
@@ -227,7 +234,10 @@ def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None):
     n = len(recip_ranks)
     mrr = sum(recip_ranks) / max(n, 1)
     r1 = sum(1 for r in recip_ranks if r == 1.0) / max(n, 1)
-    out = dict(mrr=mrr, r1=r1, lost=lost, gained=gained, n=n)
+    total_flips = lost + gained + lateral
+    corrective_rate = gained / max(total_flips, 1) * 100
+    out = dict(mrr=mrr, r1=r1, lost=lost, gained=gained, lateral=lateral,
+              total_flips=total_flips, corrective_rate=corrective_rate, n=n)
     if H_eval_set is not None:
         out["upir"] = upir_num / max(upir_den, 1) * 100
         out["upir_n"] = upir_den
@@ -277,6 +287,7 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
     tot = {m: 0 for m in h_models}; fl = {m: 0 for m in h_models}
     recip = {m: [] for m in h_models}
     lost = {m: 0 for m in h_models}; gained = {m: 0 for m in h_models}
+    lateral = {m: 0 for m in h_models}
 
     for i, p in enumerate(probe_paths):
         t = preprocess(p, imgsz, "cpu")
@@ -323,6 +334,8 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
                     lost[mode] += 1
                 if fp_rank != 1 and q_rank == 1:
                     gained[mode] += 1
+                if fp_rank != 1 and q_rank != 1 and int(fp_s.argmax()) != int(q_s.argmax()):
+                    lateral[mode] += 1        # 오답->다른 오답 flip (§scripts/58 gt_metrics_for_method와 동일 정의)
 
         if (i + 1) % 500 == 0:
             print(f"    streaming {i+1}/{len(probe_paths)}장 처리")
@@ -333,8 +346,12 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
         mrr = sum(recip[mode]) / max(n, 1)
         r1 = sum(1 for x in recip[mode] if x == 1.0) / max(n, 1)
         top1_flip = fl[mode] / max(tot[mode], 1) * 100
+        total_flips = lost[mode] + gained[mode] + lateral[mode]
+        corrective_rate = gained[mode] / max(total_flips, 1) * 100
         out[mode] = dict(top1_flip=top1_flip, n_flip=tot[mode],
-                         mrr=mrr, r1=r1, lost=lost[mode], gained=gained[mode], n=n)
+                         mrr=mrr, r1=r1, lost=lost[mode], gained=gained[mode],
+                         lateral=lateral[mode], total_flips=total_flips,
+                         corrective_rate=corrective_rate, n=n)
     return out
 
 
@@ -400,7 +417,7 @@ def main():
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--neighbor-k", type=int, default=5)
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
-    ap.add_argument("--scale-reg-weight", type=float, default=20.0)
+    ap.add_argument("--scale-reg-weight", type=float, default=10.0)
     ap.add_argument("--eval-cap", type=int, default=0,
                     help="스모크 테스트용: probe(COCO val2017/LVIS minival) 이미지 수를 이만큼으로 "
                          "제한. 0이면 제한 없음(실제 실행 기본값 -- val2017 전체 5000장).")
@@ -498,7 +515,8 @@ def main():
         print(f"  [COCO-80][{mode}] AP={coco_ap:.2f} S_AP={s_ap:.2f} H_eval_AP={heval_ap:.2f} "
               f"Heval_flip={heval_flip:.2f}% Top1_flip={top1_flip:.2f}% "
               f"GT_MRR={coco_gt_res['mrr']:.4f} GT_R@1={coco_gt_res['r1']:.4f} "
-              f"lost={coco_gt_res['lost']} gained={coco_gt_res['gained']} UPIR={coco_gt_res['upir']:.2f}%")
+              f"lost={coco_gt_res['lost']} gained={coco_gt_res['gained']} lateral={coco_gt_res['lateral']} "
+              f"corrective_rate={coco_gt_res['corrective_rate']:.2f}% UPIR={coco_gt_res['upir']:.2f}%")
         results[mode] = dict(coco_ap=coco_ap, s_ap=s_ap, heval_ap=heval_ap, heval_flip=heval_flip,
                              top1_flip=top1_flip, coco_gt=coco_gt_res, calib_time=calib_time[mode])
 
@@ -530,7 +548,8 @@ def main():
     for mode in conditions:
         r = lvis_stream_res[mode]
         print(f"  [LVIS-flip/GT][{mode}] Top1_flip={r['top1_flip']:.2f}%(n={r['n_flip']}) "
-              f"GT_MRR={r['mrr']:.4f} GT_R@1={r['r1']:.4f} lost={r['lost']} gained={r['gained']}")
+              f"GT_MRR={r['mrr']:.4f} GT_R@1={r['r1']:.4f} lost={r['lost']} gained={r['gained']} "
+              f"lateral={r['lateral']} corrective_rate={r['corrective_rate']:.2f}%")
 
     for mode in conditions:
         print(f"[predict+AP] {mode} (minival {len(lvis_probe_paths)}장) ...")
@@ -544,7 +563,8 @@ def main():
                              lvis_apr=lvis_ap_res.get("APr", 0.0), lvis_apc=lvis_ap_res.get("APc", 0.0),
                              lvis_apf=lvis_ap_res.get("APf", 0.0),
                              lvis_top1_flip=r["top1_flip"],
-                             lvis_gt=dict(mrr=r["mrr"], r1=r["r1"], lost=r["lost"], gained=r["gained"]))
+                             lvis_gt=dict(mrr=r["mrr"], r1=r["r1"], lost=r["lost"], gained=r["gained"],
+                                         lateral=r["lateral"], corrective_rate=r["corrective_rate"]))
 
     print("\n[predict+AP] FP32 (참고, LVIS) ...")
     preds_fp = predict_lvis_results(fp, lvis_probe_paths, lvis_probe_ids, args.imgsz, device)
@@ -565,12 +585,14 @@ def main():
     print(" flip / GT / UPIR / 비용")
     print("=" * 100)
     print(f"{'':>10} | {'Heval_flip':>10} | {'Top1_flip':>9} | {'UPIR':>6} | {'lost':>5} | "
-          f"{'LVIS_flip':>9} | {'LVIS_lost':>9} | {'calib(s)':>9}")
+          f"{'CorrRate':>8} | {'LVIS_flip':>9} | {'LVIS_lost':>9} | {'L_CorrR':>8} | {'calib(s)':>9}")
     for mode in conditions:
         r = results[mode]
         print(f"{mode:>10} | {r['heval_flip']:>9.2f}% | {r['top1_flip']:>8.2f}% | "
               f"{r['coco_gt']['upir']:>5.2f}% | {r['coco_gt']['lost']:>5} | "
-              f"{r['lvis_top1_flip']:>8.2f}% | {r['lvis_gt']['lost']:>9} | {r['calib_time']:>9.1f}")
+              f"{r['coco_gt']['corrective_rate']:>7.2f}% | "
+              f"{r['lvis_top1_flip']:>8.2f}% | {r['lvis_gt']['lost']:>9} | "
+              f"{r['lvis_gt']['corrective_rate']:>7.2f}% | {r['calib_time']:>9.1f}")
 
     print(f"\n이론적 모델 크기: {model_mib:.2f} MiB")
 
