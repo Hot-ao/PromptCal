@@ -200,6 +200,43 @@ H_eval = perm[60:80]   # 20개 -- 최적화에 전혀 안 씀, 순수 평가 전
 
 핵심 원칙: 측정할 프롬프트(H_eval)는 학습에 절대 넣지 않는다.
 
+### 5.4.1 버그 수정(09-09) — H_eval이 실제로는 완전히 held-out이 아니었음
+
+**발견 경위**: "H_eval은 최적화에 한 번도 안 씀"이라는 위 원칙이 실제로
+지켜지는지 코드를 다시 보다가, neighbor 후보 선정(§5.3 (b))이 **S만
+제외하고 H_cal+H_eval을 통째로 후보 풀로 쓰고 있었다는 걸 발견**했다:
+
+```python
+# 수정 전
+picked = [o for o in order if o not in pidx_set][:neighbor_k]   # pidx_set = S만
+```
+
+즉 S의 어떤 class와 text embedding상 가까우면, 그게 H_eval이어도 그냥
+neighbor_cols에 뽑혀서 asymmetric hinge(§5.3 (b))로 간접 학습됐다. **실측
+(seed=0)**: neighbor_cols 35개 중 H_cal 17개, **H_eval 18개(20개 중 90%)**
+가 포함돼 있었다 — UPIR·Heval_flip 같은 "H_eval은 순수 held-out"을 전제로
+하는 지표들이 실제로는 오염된 조건에서 측정되고 있었다는 뜻.
+
+**수정**: neighbor 후보 풀에서 H_eval도 같이 제외하도록
+`exclude_from_neighbors` 인자를 추가.
+
+```python
+# 수정 후
+exclude_set = pidx_set | set(exclude_from_neighbors)   # exclude_from_neighbors=H_eval
+picked = [o for o in order if o not in exclude_set][:neighbor_k]
+```
+*`src/quant/promptcal.py:422` (`optimize_promptcal_scale_neighbor`), `scripts/58_full_baseline_official_data.py`의
+`build()`가 `exclude_from_neighbors=H_eval`로 호출*
+
+수정 후 실측(seed=0): neighbor_set이 35개(H_cal 17+H_eval 18)에서
+**20개(H_cal 20, H_eval 0)로 정확히 줄어듦** — 이제 H_eval은 정말로 학습에
+전혀 안 쓰인다.
+
+**영향 범위**: 이 버그는 학습 자체(어떤 컬럼이 neighbor-hinge 대상인지)를
+바꾸는 거라, s_mult가 다르게 학습되고 **COCO_AP/LVIS_AP를 포함한 Combined의
+모든 수치가 재검증 대상**이 된다 — UPIR 하나만 다시 재면 되는 게 아니다.
+1-seed(seed=0) 재검증 결과와 진행 상황은 §8.3 참고.
+
 ### 5.5 현재 하이퍼파라미터 (공식 데이터 설정 기준값)
 
 | 파라미터 | 값 | 비고 |
@@ -342,7 +379,36 @@ BRECQ(10.48%)를 확실히 이겨서 핵심 스토리가 유지된다. 연산 �
 사이에 실질적 차이 없음(§5.5 하이퍼파라미터 표, 실측 빌드시간 1030~1080초
 안팎으로 동일 수준). **`scale_reg_weight=10`을 최종 채택값으로 확정.**
 
-### 8.3 참고 — 이전(다른 규모) 실험과 헷갈리지 않도록
+### 8.3 H_eval 순수성 버그 수정 후 재검증 — **진행 중(1/6 seed)**
+
+§5.4.1의 버그 수정(neighbor 후보에서 H_eval도 제외) 이후 재검증. 아직
+seed=0 하나만 완료됐고 seed=1이 진행 중 — **이 표의 "수정 후" 행은 잠정치이며
+6-seed 완료 전까지 §8.1의 메인 결과를 이걸로 교체하지 않는다.**
+
+| method | COCO_AP | LVIS_AP | Heval_flip | Top1_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|
+| BRECQ(참고, 최선 baseline) | 33.30 | 0.1200 | 8.55~12.67%(10.48%) | 0.71% | 0.11~0.33%(0.23%) | 327 | 5.53% | 1158 |
+| Combined, 수정 전(seed0) | 36.38 | 0.1259 | 8.57% | 0.71% | 0.27% | 353 | 5.26% | 1067 |
+| **Combined, 수정 후(seed0)** | **36.38** | 0.1246 | 8.55% | 0.75% | **0.30%** | 369 | 5.45% | 1139 |
+
+*원본: `runs/58_official_data/neighborfix_seed0.log`(수정 후), `runs/59_rw_sweep/rw_sweep_seed0.log`(수정 전, rw10 seed0)*
+
+**seed0 기준 관찰**:
+- COCO_AP는 수정 전후로 **완전히 동일**(36.38) — 우연일 수도 있지만, 이
+  버그가 COCO_AP 자체를 왜곡하진 않았다는 최소한의 안심 포인트.
+- UPIR·lost·LVIS_flip·LVIS_lost·Top1_flip은 전부 소폭 **나빠짐** — 예상대로
+  버그가 이 지표들을 실제보다 좋게 보이게 했었다는 뜻.
+- 그럼에도 BRECQ 대비 우위는 유지됨: Heval_flip(8.55%<8.99%),
+  LVIS_flip(5.45%<5.53%), LVIS_lost(1139<1158) — 다만 LVIS_lost 마진이
+  91(1067 vs 1158)에서 19(1139 vs 1158)로 크게 줄었다.
+- UPIR은 BRECQ(0.23%)·AdaRound(0.25%)보다 못한 수준으로 내려감(0.30%) —
+  버그가 있을 때보다 중위권에서 더 아래로 내려온 셈.
+
+**다음**: seed 1~5 마저 채워서 이 마진들이 seed 전반에서 유지되는지 확인
+필요. 완료되면 §8.1을 이 결과로 교체하고, §8.2(rw10 vs rw20 비교)도
+재검증할지 판단.
+
+### 8.4 참고 — 이전(다른 규모) 실험과 헷갈리지 않도록
 
 `PROMPTCAL_HOW_IT_WORKS.md` §7의 "6-seed 최종 결과"는 **이 문서와 다른
 실험**이다 — calib=32(val2017 슬라이스, 평가셋과 일부 겹침), scalar `s_mult`,
@@ -362,11 +428,24 @@ LVIS 미검증 상태 기준. 그 표의 절대 수치(AP 36.46 등)를 이 문�
 - **UPIR·lost가 최선이 아님**: AdaRound/BRECQ가 이 두 지표는 더 낮음(=더 좋음).
   Combined가 "전부 최고"는 아니라는 점을 논문에 정직하게 써야 함.
 - **rw 재스윕**: §8.2, 6-seed(0~5) 완료. `scale_reg_weight=10` 확정.
+  (§8.3의 H_eval 버그 수정 후 rw10/rw20 비교를 다시 해야 할 수도 있음 — 아직
+  미착수.)
+- **H_eval 순수성 버그(09-09 발견·수정)**: §5.4.1/§8.3 참고. neighbor 후보
+  선정이 H_eval을 제외 안 해서 UPIR 등 held-out 지표가 실제보다 좋게
+  나오고 있었음. 수정 완료, 6-seed 재검증 진행 중(1/6).
 - **H_cal(20개) 미사용**: 3분할 중 H_cal은 현재 Combined 학습에서 전혀
   안 쓰인다 — 향후 활용 여지(예: H_cal도 neighbor 대상에 포함) 남아 있음.
-- **`pipeline/` 디렉토리 최신화 안 됨**: 재현용으로 만들어둔 `pipeline/quant/adaround.py`는
-  아직 스칼라 버전 그대로라, 이 문서의 per-channel 설계와 다르다 — 논문
-  최종 방법이 확정되면 동기화 필요.
+  애초에 margin_loss만 있다면 S/H 분할 자체가 COCO→LVIS 실험엔 필수가
+  아니고(LVIS 신규 클래스 자체가 held-out 역할), S/H 분할이 실질적으로
+  필요한 이유는 neighbor-hinge가 "직접 안 건드리는 클래스" 풀을 필요로
+  하기 때문 — 이 관점에서는 H_cal/H_eval을 구분할 이유가 없고 그냥
+  "S(40) vs H(40, neighbor 후보 풀)" 2분할로 단순화하는 게 더 정확한
+  설명일 수 있음(아직 코드 리팩터링은 안 함).
+- **`pipeline/` 디렉토리**: 09-08~09-09에 per-channel `s_mult`,
+  `scale_reg_weight` 정규화, H_eval 버그 수정까지 전부 동기화 완료
+  (`src/quant/{adaround,promptcal}.py`와 diff 없음 확인, 09-09).
+  calibration/평가 데이터 소스만 아직 예전 방식(val2017 슬라이스) — 공식
+  데이터 설정으로는 이식 안 함.
 
 ---
 
