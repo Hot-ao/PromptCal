@@ -10,9 +10,29 @@ naive는 round(w/s)로 고정 반올림하지만, AdaRound는 floor(w/s) + h(alp
 """
 
 from __future__ import annotations
+import ctypes
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+try:
+    _LIBC = ctypes.CDLL("libc.so.6")
+except OSError:
+    _LIBC = None
+
+
+def free_cpu_mem():
+    """glibc malloc_trim으로 free된 CPU 메모리를 OS에 반환.
+    09-09 발견: optimize_adaround/optimize_brecq가 layer/block마다 256장짜리
+    fp16 CPU 버퍼(fp_buf/q_buf, in_buf/out_buf)를 만들고 버리는 걸 반복하는데,
+    Python 레퍼런스카운트로 즉시 해제돼도 glibc가 그 메모리를 arena에 들고
+    있고 OS에 바로 안 돌려줘서 RSS가 파편화로 누적된다(실측: 단일 job이
+    naive~qdrop 빌드 도중 RSS 68GB까지 상승 -- 그 시점엔 probe+calib+model
+    몇 개뿐이라 논리적 필요량은 30GB 미만이어야 함). malloc_trim은 계산
+    결과에 전혀 영향을 안 주는 순수 메모리 정리라 안전하다."""
+    if _LIBC is not None:
+        _LIBC.malloc_trim(0)
+
 
 GAMMA, ZETA = -0.1, 1.1   # rectified sigmoid 범위
 
@@ -230,6 +250,8 @@ def optimize_adaround(quant_module, fp_module, calib_tensors, device,
             conv01 = float(((h < 0.05) | (h > 0.95)).float().mean()) * 100
             print(f"  [{i+1}/{len(conv_pairs)}] layer opt done, "
                   f"h→0/1 수렴 {conv01:.0f}%")
+        del fp_buf, q_buf
+        free_cpu_mem()
 
     if verbose:
         print("[adaround] 전체 layer 최적화 완료 (hard 반올림 모드)")

@@ -20,7 +20,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from .adaround import AdaRoundQuantConv2d, list_adaround_convs, h_alpha
+from .adaround import AdaRoundQuantConv2d, list_adaround_convs, h_alpha, free_cpu_mem
 
 
 def _hpairs(qm, fm):
@@ -137,6 +137,8 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
                         for c in convs) / len(convs) * 100
             print(f"  [{ti+1}/{len(targets)}] {label} ({len(convs)} conv) "
                   f"done, h→0/1 {hconv:.0f}%")
+        del in_buf, out_buf
+        free_cpu_mem()
 
     if verbose:
         print("[brecq] 전체 재구성 완료 (hard 반올림 모드)")
