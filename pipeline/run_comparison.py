@@ -32,7 +32,7 @@ import cv2, numpy as np, torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import SimilarityHarness
 from quant.quant_model import wrap_convs, calibrate
-from quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d
+from quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d, free_cpu_mem
 from quant.fake_quant import QuantConv2d
 from quant.brecq import optimize_brecq
 from quant.promptcal import optimize_promptcal_scale_neighbor
@@ -62,7 +62,7 @@ def preprocess(path, imgsz, device):
 
 
 def measure_ap(model, data, imgsz, device):
-    metrics = model.val(data=data, imgsz=imgsz, device=device, save_json=False, verbose=False)
+    metrics = model.val(data=data, imgsz=imgsz, device=device, save_json=False, verbose=False, workers=0)
     overall = float(metrics.box.map) * 100, float(metrics.box.map50) * 100
     per_class = dict(zip(metrics.box.ap_class_index.tolist(),
                          (metrics.box.maps if hasattr(metrics.box, "maps") else metrics.box.all_ap[:, 0]).tolist()))
@@ -360,6 +360,8 @@ def main():
               f"GT_MRR={gt_results[mode]['mrr']:.4f}  GT_R@1={gt_results[mode]['r1']:.4f}  "
               f"lost={gt_results[mode]['lost']}  gained={gt_results[mode]['gained']}  "
               f"UPIR={gt_results[mode]['upir']:.2f}%(n={gt_results[mode]['upir_n']})")
+        del q_sims
+        free_cpu_mem()
 
     results = {}
     print(f"\n[ap] FP32 ..."); results["FP32"] = measure_ap(fp, args.data, args.imgsz, args.device)

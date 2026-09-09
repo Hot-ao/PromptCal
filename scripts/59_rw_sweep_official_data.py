@@ -28,7 +28,7 @@ if not hasattr(np, "float"):
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.harness import SimilarityHarness
 from src.quant.quant_model import wrap_convs, calibrate
-from src.quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d
+from src.quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d, free_cpu_mem
 from src.quant.fake_quant import QuantConv2d
 from src.quant.promptcal import optimize_promptcal_scale_neighbor
 
@@ -80,7 +80,7 @@ def switch_vocab(model, names, device):
 
 
 def measure_ap(model, data, imgsz, device):
-    metrics = model.val(data=data, imgsz=imgsz, device=device, save_json=False, verbose=False)
+    metrics = model.val(data=data, imgsz=imgsz, device=device, save_json=False, verbose=False, workers=0)
     overall = float(metrics.box.map) * 100, float(metrics.box.map50) * 100
     per_class = dict(zip(metrics.box.ap_class_index.tolist(),
                          (metrics.box.maps if hasattr(metrics.box, "maps") else metrics.box.all_ap[:, 0]).tolist()))
@@ -453,6 +453,8 @@ def main():
         heval_flip, n1 = group_flip(fp_sims, q_sims, H_eval)
         top1_flip, n2 = standard_flip(fp_sims, q_sims)
         coco_gt_res = gt_metrics_for_method(fp_sims, q_sims, coco_gt_targets, H_eval_set)
+        del q_sims
+        free_cpu_mem()
         (coco_ap, coco_ap50), coco_pc = measure_ap(models[mode], args.data, args.imgsz, args.device)
         s_ap = subset_map(coco_pc, S); heval_ap = subset_map(coco_pc, H_eval)
         print(f"  [COCO-80][{mode}] AP={coco_ap:.2f} S_AP={s_ap:.2f} H_eval_AP={heval_ap:.2f} "
