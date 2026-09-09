@@ -314,7 +314,9 @@ def main():
     calib_paths = imgs[:args.calib]
     probe_paths = imgs[args.calib:args.calib + args.eval]
     calib = [preprocess(p, args.imgsz, device) for p in calib_paths]
-    probe = [preprocess(p, args.imgsz, device) for p in probe_paths]
+    # probe를 미리 리스트로 들고 있지 않는다 -- 장당 ~4.9MB로 프로세스당 고정
+    # 메모리 비용이 되어 동시 실행 가능한 seed 수를 제한하는 주범이었다
+    # (scripts/58과 동일 문제, 09-10 확인). 필요할 때 preprocess()로 다시 읽는다.
 
     rng = np.random.default_rng(args.seed)
     perm = rng.permutation(80)
@@ -343,8 +345,9 @@ def main():
 
     print(f"\n[gt] FP sim 1회 계산(baseline 무관, 재사용) + {gt_ann} anchor 매칭 (probe {len(probe_paths)}장)")
     h_fp = SimilarityHarness(fp.model, device=device)
-    grid_specs = get_grid_specs(h_fp, probe[0])
-    fp_sims = [h_fp.run_image(t, i).sim for i, t in enumerate(probe)]
+    grid_specs = get_grid_specs(h_fp, preprocess(probe_paths[0], args.imgsz, "cpu"))
+    fp_sims = [h_fp.run_image(preprocess(p, args.imgsz, "cpu"), i).sim
+              for i, p in enumerate(probe_paths)]
     h_fp.close()
     gt_by_path = load_gt_by_path(gt_ann, probe_paths)
     gt_targets = build_gt_targets(fp_sims, probe_paths, gt_by_path, grid_specs, args.imgsz)
@@ -357,7 +360,8 @@ def main():
     gt_results = {}
     for mode in conditions:
         h_q = SimilarityHarness(models[mode].model, device=device)
-        q_sims = [h_q.run_image(t, i).sim for i, t in enumerate(probe)]
+        q_sims = [h_q.run_image(preprocess(p, args.imgsz, "cpu"), i).sim
+                 for i, p in enumerate(probe_paths)]
         h_q.close()
         flip_results[mode], n1 = group_flip(fp_sims, q_sims, H_eval)
         std_flip_results[mode], n2 = standard_flip(fp_sims, q_sims)

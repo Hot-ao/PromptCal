@@ -409,7 +409,9 @@ def main():
           f"{len(lvis_probe_paths)}장으로 LVIS 채점")
 
     calib = [preprocess(p, args.imgsz, device) for p in calib_paths]
-    probe = [preprocess(p, args.imgsz, device) for p in probe_paths]
+    # probe(5000장)를 미리 리스트로 들고 있지 않는다 -- 장당 ~4.9MB로 프로세스당
+    # ~24GB 고정 비용이 되어 동시 실행 가능한 seed 수를 제한하는 주범이었다
+    # (scripts/58과 동일 문제, 09-10 확인). 필요할 때 preprocess()로 다시 읽는다.
 
     coco_gt_by_path = load_coco_gt_by_path(gt_ann, probe_paths)
     lvis_gt_by_path = load_lvis_gt_by_path(lvis_gt, lvis_probe_paths, lvis_probe_ids)
@@ -438,8 +440,9 @@ def main():
 
     print(f"\n[gt] COCO-80 FP sim 계산 + anchor 매칭 ({len(probe_paths)}장)")
     h_fp = SimilarityHarness(fp.model, device=device)
-    grid_specs = get_grid_specs(h_fp, probe[0])
-    fp_sims = [h_fp.run_image(t, i).sim for i, t in enumerate(probe)]
+    grid_specs = get_grid_specs(h_fp, preprocess(probe_paths[0], args.imgsz, "cpu"))
+    fp_sims = [h_fp.run_image(preprocess(p, args.imgsz, "cpu"), i).sim
+              for i, p in enumerate(probe_paths)]
     h_fp.close()
     coco_gt_targets = build_gt_targets(fp_sims, probe_paths, coco_gt_by_path, grid_specs, args.imgsz)
     n_coco_gt = sum(len(t) for t in coco_gt_targets)
@@ -448,7 +451,8 @@ def main():
     results = {}
     for mode in conditions:
         h_q = SimilarityHarness(models[mode].model, device=device)
-        q_sims = [h_q.run_image(t, i).sim for i, t in enumerate(probe)]
+        q_sims = [h_q.run_image(preprocess(p, args.imgsz, "cpu"), i).sim
+                 for i, p in enumerate(probe_paths)]
         h_q.close()
         heval_flip, n1 = group_flip(fp_sims, q_sims, H_eval)
         top1_flip, n2 = standard_flip(fp_sims, q_sims)
