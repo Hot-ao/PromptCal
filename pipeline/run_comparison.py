@@ -56,9 +56,16 @@ def letterbox(im, new=640, color=(114, 114, 114)):
 
 
 def preprocess(path, imgsz, device):
+    # CPU 텐서로 반환 -- probe가 커지면 전부 GPU에 올릴 경우 VRAM이 부족해질 수
+    # 있고, out-of-place `/255.0`는 이미지당 여분의 float32 버퍼를 만들고 버려서
+    # RSS를 불필요하게 부풀린다(scripts/58에서 09-08 발견·수정한 것과 동일 패턴).
+    # run_image/calibrate/optimize_* 전부 내부에서 자체적으로 .to(device)를
+    # 하므로 여기서 미리 옮길 필요가 없다(device 인자는 호환성을 위해 남겨두되 안 씀).
     im = letterbox(cv2.imread(path), imgsz)
     im = np.ascontiguousarray(im[:, :, ::-1].transpose(2, 0, 1))
-    return torch.from_numpy(im).float().unsqueeze(0).to(device) / 255.0
+    t = torch.from_numpy(im).unsqueeze(0).float()
+    t.div_(255.0)
+    return t
 
 
 def measure_ap(model, data, imgsz, device):

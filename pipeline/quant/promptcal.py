@@ -491,7 +491,8 @@ def optimize_promptcal_scale_neighbor_utility(quant_model, fp_model, calib_tenso
                                               neighbor_k=5, neighbor_weight=1.0,
                                               stage2_frac=0.3, thresh_w=1.0, box_w=0.5,
                                               det_thres=0.25, margin_thres=0.5,
-                                              conf_thres=0.25, verbose=True, eval_hook=None):
+                                              conf_thres=0.25, verbose=True, eval_hook=None,
+                                              exclude_from_neighbors=None):
     """
     optimize_promptcal_scale_neighbor(asymmetric 고정) + 논문 §4.3
     Utility-Constrained Refinement(semantic_calib.py의 utility_refinement_terms:
@@ -537,10 +538,11 @@ def optimize_promptcal_scale_neighbor_utility(quant_model, fp_model, calib_tenso
     txt_feats = get_txt_feats(fp_model).to(device)
     neighbor_order = text_neighbor_order(txt_feats)
     pidx_set = set(prompt_idx)
+    exclude_set = pidx_set | (set(exclude_from_neighbors) if exclude_from_neighbors else set())
     neighbor_set = set()
     for c in prompt_idx:
         order = neighbor_order[c].tolist()
-        picked = [o for o in order if o not in pidx_set][:neighbor_k]
+        picked = [o for o in order if o not in exclude_set][:neighbor_k]
         neighbor_set.update(picked)
     neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
 

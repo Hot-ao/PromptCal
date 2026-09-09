@@ -20,7 +20,7 @@ naive/AdaRound/QDrop/BRECQ는 이 파라미터들과 무관하므로(Combined �
         --calib 256 --scale-reg-weight 10.0 \
         --param neighbor_k --values 3,5,8,10 --seed 0 --device 0
 """
-import argparse, glob, os, sys, time
+import argparse, copy, glob, os, sys, time
 import cv2, numpy as np, torch
 
 if not hasattr(np, "float"):
@@ -334,9 +334,10 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
     return out
 
 
-def build_combined(model_cls, w, names, device, calib, fp, scale_reg_weight, iters=1500,
-                   pidx=None, lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5, neighbor_weight=1.0,
-                   h_eval=None, recon_iters_ada=1000):
+def build_adaround_base(model_cls, w, names, device, calib, fp, recon_iters_ada=1000):
+    """AdaRound 단계까지만 빌드 -- neighbor_k/k/boundary_w 스윕과 무관하게 항상
+    bit-identical 결과이므로, 스윕 값마다 매번 다시 만들지 않고 한 번만 만들어서
+    deepcopy로 재사용한다(스윕 포인트가 N개면 이전엔 AdaRound를 N번, 지금은 1번만 돎)."""
     m = model_cls(w)
     m.set_classes(names)
     m.fuse()
@@ -345,6 +346,13 @@ def build_combined(model_cls, w, names, device, calib, fp, scale_reg_weight, ite
     calibrate(m.model, calib, device=device)
     convert_to_adaround(m.model)
     optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
+    return m
+
+
+def build_combined_from_base(base_model, fp, calib, device, scale_reg_weight, iters=1500,
+                             pidx=None, lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5,
+                             neighbor_weight=1.0, h_eval=None):
+    m = copy.deepcopy(base_model)
     optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                       lr=lr, k=k, boundary_w=boundary_w, neighbor_k=neighbor_k,
                                       neighbor_weight=neighbor_weight,
@@ -431,19 +439,30 @@ def main():
     fp.set_classes(coco)
     fp.fuse(); fp.model.to(device).eval()
 
+    print("[build] AdaRound base (스윕 파라미터와 무관, 1회만 빌드)")
+    t0 = time.perf_counter()
+    base_model = build_adaround_base(YOLOWorld, args.model, coco, device, calib, fp,
+                                     recon_iters_ada=args.recon_iters_ada)
+    base_build_time = time.perf_counter() - t0
+    print(f"  base 빌드 {base_build_time:.1f}s")
+
     conditions = [f"combined_{args.param}{v:g}" for v in sweep_values]
     models, calib_time = {}, {}
     for v, mode in zip(sweep_values, conditions):
         kw = dict(iters=args.iters, pidx=S, lr=args.lr, k=args.k, boundary_w=args.boundary_w,
                   neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
-                  h_eval=H_eval, recon_iters_ada=args.recon_iters_ada)
+                  h_eval=H_eval)
         kw[args.param] = v          # 스윕 대상 하나만 덮어쓰기, 나머지는 확정값 그대로
         print(f"[build] {mode} ({args.param}={v})")
         t0 = time.perf_counter()
-        models[mode] = build_combined(YOLOWorld, args.model, coco, device, calib, fp,
-                                      args.scale_reg_weight, **kw)
+        models[mode] = build_combined_from_base(base_model, fp, calib, device,
+                                                args.scale_reg_weight, **kw)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
+
+    del base_model  # 모든 스윕 조건이 deepcopy로 떨어져 나갔으니 원본은 더 필요 없음
+    torch.cuda.empty_cache()
+    free_cpu_mem()
 
     print(f"\n[gt] COCO-80 FP sim 계산 + anchor 매칭 ({len(probe_paths)}장)")
     h_fp = SimilarityHarness(fp.model, device=device)
