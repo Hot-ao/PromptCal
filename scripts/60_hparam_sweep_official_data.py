@@ -1,23 +1,24 @@
 """
-scale_reg_weight 재스윕 (09-08) -- official-data 설정(calib=train2017 256장,
-COCO-80 평가=val2017 전체, LVIS 평가=공식 minival)에서 rw=20이 여전히 최적
-근방인지 확인. rw=20은 이전(calib=32, val2017 슬라이스) 스케일에서 고른
-값이라, 새 데이터 스케일에서 재검증 없이 그대로 쓰는 건 근거가 약함.
+나머지 하이퍼파라미터 재스윕 (09-08, scale_reg_weight=10 확정 이후) --
+official-data 설정에서 `neighbor_k`/`k`/`boundary_w` 중 하나만 골라 스윕한다.
+전부 예전(스칼라 s_mult, calib=32) 단계에서 고른 값을 그대로 물려받았고
+지금 최종 설정(per-channel, calib=256, rw=10)에서 재검증된 적이 없다.
 
-naive/AdaRound/QDrop/BRECQ는 rw에 의존하지 않고 이미
-`results_v1/diag/58_official_data_seed0.log`에 seed=0 기준 값이 있으므로
-다시 빌드하지 않는다(이 스크립트도 --seed 0 고정 -- S/H_eval 분할을 그
-로그와 맞추기 위함). Combined만 여러 scale_reg_weight로 빌드해서 비교한다.
+방법론(scripts/59와 동일한 원칙): 한 번에 파라미터 하나만 바꾸고 나머지는
+전부 현재 확정값(scale_reg_weight=10, k=5, neighbor_k=5, boundary_w=3.0)에
+고정한다 -- 안 그러면 뭐 때문에 좋아졌는지 알 수 없다. 1 seed로 트렌드만
+보고, 승자가 뚜렷하면 scripts/58로 6-seed 최종 검증한다.
 
-스윕은 1 seed로 충분(방법론 합의, 09-08) -- 여기서 트렌드를 보고 승자 하나를
-고른 뒤, 그 값만 scripts/58로 6-seed 최종 검증한다.
+naive/AdaRound/QDrop/BRECQ는 이 파라미터들과 무관하므로(Combined 전용) 다시
+안 빌드하고 seed=0 기준 참고값(BASELINE_REF)을 그대로 쓴다.
 
-실행:
-    CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=7 python scripts/59_rw_sweep_official_data.py \
+실행 (예: neighbor_k 스윕):
+    CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=5 python scripts/60_hparam_sweep_official_data.py \
         --model yolov8s-world.pt --coco-root /data/taeho/coco_datasets \
         --data configs/coco_local.yaml \
         --lvis-ann /data/taeho/lvis_datasets/labels_dl/extracted/lvis/annotations/lvis_v1_minival.json \
-        --calib 256 --rw-list 10,20,30,50 --seed 0 --device 0
+        --calib 256 --scale-reg-weight 10.0 \
+        --param neighbor_k --values 3,5,8,10 --seed 0 --device 0
 """
 import argparse, glob, os, sys, time
 import cv2, numpy as np, torch
@@ -334,7 +335,7 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
 
 
 def build_combined(model_cls, w, names, device, calib, fp, scale_reg_weight, iters=1500,
-                   pidx=None, lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0,
+                   pidx=None, lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5, neighbor_weight=1.0,
                    h_eval=None, recon_iters_ada=1000):
     m = model_cls(w)
     m.set_classes(names)
@@ -345,7 +346,7 @@ def build_combined(model_cls, w, names, device, calib, fp, scale_reg_weight, ite
     convert_to_adaround(m.model)
     optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
     optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
-                                      lr=lr, k=k, neighbor_k=neighbor_k,
+                                      lr=lr, k=k, boundary_w=boundary_w, neighbor_k=neighbor_k,
                                       neighbor_weight=neighbor_weight,
                                       asymmetric=True, scale_reg_weight=scale_reg_weight,
                                       exclude_from_neighbors=h_eval,
@@ -366,10 +367,15 @@ def main():
     ap.add_argument("--recon-iters-ada", type=int, default=1000)
     ap.add_argument("--lr", type=float, default=1e-2)
     ap.add_argument("--k", type=int, default=5)
+    ap.add_argument("--boundary-w", type=float, default=3.0)
     ap.add_argument("--neighbor-k", type=int, default=5)
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
-    ap.add_argument("--rw-list", default="10,20,30,50",
-                    help="비교할 scale_reg_weight 후보 (콤마 구분)")
+    ap.add_argument("--scale-reg-weight", type=float, default=10.0,
+                    help="확정값(09-08). --param으로 이것 자체를 스윕하려면 scripts/59 사용.")
+    ap.add_argument("--param", required=True, choices=["neighbor_k", "k", "boundary_w"],
+                    help="스윕할 파라미터 하나. 나머지는 위 기본값(현재 확정값)에 고정된다.")
+    ap.add_argument("--values", required=True,
+                    help="비교할 후보값(콤마 구분). neighbor_k/k는 정수, boundary_w는 실수로 파싱.")
     ap.add_argument("--eval-cap", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
@@ -378,7 +384,8 @@ def main():
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
-    rw_list = [float(x) for x in args.rw_list.split(",")]
+    cast = float if args.param == "boundary_w" else int
+    sweep_values = [cast(x) for x in args.values.split(",")]
 
     torch.manual_seed(args.torch_seed)
     torch.cuda.manual_seed_all(args.torch_seed)
@@ -424,15 +431,17 @@ def main():
     fp.set_classes(coco)
     fp.fuse(); fp.model.to(device).eval()
 
-    conditions = [f"combined_rw{rw:g}" for rw in rw_list]
+    conditions = [f"combined_{args.param}{v:g}" for v in sweep_values]
     models, calib_time = {}, {}
-    for rw, mode in zip(rw_list, conditions):
-        print(f"[build] {mode}")
+    for v, mode in zip(sweep_values, conditions):
+        kw = dict(iters=args.iters, pidx=S, lr=args.lr, k=args.k, boundary_w=args.boundary_w,
+                  neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
+                  h_eval=H_eval, recon_iters_ada=args.recon_iters_ada)
+        kw[args.param] = v          # 스윕 대상 하나만 덮어쓰기, 나머지는 확정값 그대로
+        print(f"[build] {mode} ({args.param}={v})")
         t0 = time.perf_counter()
-        models[mode] = build_combined(YOLOWorld, args.model, coco, device, calib, fp, rw,
-                                      iters=args.iters, pidx=S, lr=args.lr, k=args.k,
-                                      neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
-                                      h_eval=H_eval, recon_iters_ada=args.recon_iters_ada)
+        models[mode] = build_combined(YOLOWorld, args.model, coco, device, calib, fp,
+                                      args.scale_reg_weight, **kw)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
 
@@ -495,7 +504,9 @@ def main():
                              lvis_gt=dict(mrr=r["mrr"], r1=r["r1"], lost=r["lost"], gained=r["gained"]))
 
     print("\n" + "=" * 100)
-    print(f" scale_reg_weight 스윕 (calib=train2017 {len(calib_paths)}장, LVIS=공식 minival) -- seed {args.seed}")
+    print(f" {args.param} 스윕(나머지 고정: scale_reg_weight={args.scale_reg_weight}, k={args.k}, "
+          f"boundary_w={args.boundary_w}, neighbor_k={args.neighbor_k}) "
+          f"(calib=train2017 {len(calib_paths)}장, LVIS=공식 minival) -- seed {args.seed}")
     print("=" * 100)
     print(f"{'method':>16} | {'COCO_AP':>8} | {'LVIS_AP':>8} | {'Heval_flip':>10} | "
           f"{'Top1_flip':>9} | {'UPIR':>6} | {'lost':>5} | {'LVIS_flip':>9} | {'LVIS_lost':>9}")

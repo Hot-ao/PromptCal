@@ -230,7 +230,7 @@ def quantized_weight_mib(model_module):
 
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
           lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5, neighbor_weight=1.0,
-          scale_reg_weight=10.0,
+          scale_reg_weight=10.0, h_eval=None,
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5):
     m = model_cls(w)
     m.set_classes(names)
@@ -260,6 +260,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           lr=lr, k=k, boundary_w=boundary_w, neighbor_k=neighbor_k,
                                           neighbor_weight=neighbor_weight,
                                           asymmetric=True, scale_reg_weight=scale_reg_weight,
+                                          exclude_from_neighbors=h_eval,
                                           verbose=True)
     return m
 
@@ -325,7 +326,7 @@ def main():
                              iters=args.iters, pidx=pidx, lr=args.lr, k=args.k,
                              boundary_w=args.boundary_w,
                              neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
-                             scale_reg_weight=args.scale_reg_weight,
+                             scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
                              recon_iters_ada=args.recon_iters_ada,
                              recon_iters_strong=args.recon_iters_strong,
                              qdrop_prob=args.qdrop_prob)
