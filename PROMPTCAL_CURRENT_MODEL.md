@@ -442,6 +442,60 @@ COCO_AP/LVIS_AP/lost/LVIS_flip/LVIS_lost는 seed 무관 상수(§8.4 seed-결정
 LVIS 미검증 상태 기준. 그 표의 절대 수치(AP 36.46 등)를 이 문서의 표와
 직접 비교하지 말 것 — 데이터 소스와 s_mult 설계 자체가 다르다.
 
+### 8.5 H_eval 버그 수정 후 k/neighbor_k/boundary_w 재스윕 (2026-09-10, 1-seed)
+
+§5.4.1의 리크 수정으로 neighbor-hinge 후보 풀이 줄었으니(35→20, H_cal만),
+neighbor_k 등 관련 하이퍼파라미터의 최적값이 바뀌었을 수 있어서 재확인했다.
+방법론은 기존과 동일(OFAT, `scripts/60`, 1-seed 트렌드 체크, seed=0,
+scale_reg_weight=10 고정).
+
+**k 스윕** (나머지 고정: neighbor_k=5, boundary_w=3.0):
+
+| method | COCO_AP | LVIS_AP | Heval_flip | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|
+| BRECQ | 33.30 | 0.1200 | 8.99% | 327 | 5.53% | 1158 |
+| combined_k3 | 36.16 | 0.1207 | 8.86% | 369 | 5.26% | 1138 |
+| **combined_k5(현재)** | **36.38** | **0.1246** | **8.55%** | 369 | **5.45%** | 1139 |
+| combined_k8 | 36.22 | 0.1223 | 8.77% | 415 | 5.56% | 1141 |
+
+k=5(현재값)가 COCO_AP·LVIS_AP 둘 다 최고, k=8은 lost가 369→415로 눈에 띄게
+나빠짐. **k=5 유지가 맞음.**
+
+**neighbor_k 스윕** (나머지 고정: k=5, boundary_w=3.0) — **핵심 발견**:
+
+| method | COCO_AP | LVIS_AP | Heval_flip | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|
+| combined_neighbor_k3 | 36.38 | 0.1205 | 8.63% | 377 | 5.18% | 1092 |
+| **combined_neighbor_k5(현재)** | 36.38 | 0.1246 | 8.55% | 369 | 5.45% | 1139 |
+| combined_neighbor_k8 | 36.38 | 0.1246 | 8.55% | 369 | 5.45% | 1139 |
+| combined_neighbor_k10 | 36.38 | 0.1246 | 8.55% | 369 | 5.45% | 1139 |
+
+**neighbor_k=5, 8, 10이 완전히 동일한 값**이 나왔다 — 이유가 명확하다:
+버그 수정 후 neighbor 후보 풀이 H_cal 20개뿐인데, 40개 S 클래스 각각에서
+neighbor_k=5개씩만 뽑아도 합집합(neighbor_set)이 이미 H_cal 20개 전체를
+커버해버린다(§5.4.1 실측: 수정 후 neighbor_set=20). 그래서 neighbor_k를
+8, 10으로 올려도 "더 뽑을 후보가 없어서" 결과가 똑같다. **neighbor_k>=5는
+사실상 동치 클래스이고, neighbor_k=5(현재값) 유지가 맞다.**
+
+**boundary_w 스윕** (나머지 고정: k=5, neighbor_k=5):
+
+| method | COCO_AP | LVIS_AP | Heval_flip | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|
+| combined_boundary_w1 | 36.26 | 0.1217 | 8.41% | 382 | 5.42% | 1187 |
+| combined_boundary_w2 | 36.46 | 0.1242 | 8.24% | 361 | 5.37% | 1177 |
+| **combined_boundary_w3(현재)** | 36.38 | 0.1246 | 8.55% | 369 | 5.45% | 1139 |
+| combined_boundary_w5 | 36.39 | 0.1250 | 8.88% | 401 | 5.36% | 1107 |
+
+COCO-80 쪽 지표(COCO_AP·Heval_flip·lost)는 boundary_w=2가 최선, LVIS 쪽
+지표(LVIS_AP·LVIS_flip·LVIS_lost)는 boundary_w=5가 최선인 **트레이드오프**
+패턴 — 버그 수정 전과 동일한 양상. boundary_w=3(현재값)은 그 중간.
+
+**다음**: k/boundary_w는 각각 top 2 후보(k∈{5,8}, boundary_w∈{3,5},
+neighbor_k는 사실상 동치라 5로 고정)로 4-combo 그리드(`scripts/61_
+combo_grid_official_data.py`)를 돌려서 상호작용을 확인 중 — 이전에
+k=8+boundary_w=5 조합에서 negative interaction이 관찰된 적 있어서
+(§9 참고), 이번에도 그런 부작용이 있는지가 관건. 결과는 §8.6에 추가 예정.
+
 ---
 
 ## 9. 알아둘 점 / 한계 / 열린 이슈
