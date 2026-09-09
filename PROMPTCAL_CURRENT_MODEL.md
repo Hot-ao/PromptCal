@@ -559,6 +559,10 @@ COCO_AP·LVIS_AP는 "진짜" 표준 detection 지표(논문에 실릴 숫자)고
   `lost`는 6-seed 전부 BRECQ보다 나쁨 — Combined가 "전부 최고"는 아니라는
   점을 논문에 정직하게 써야 함. (§8.3에 미검증 가설: 이 비용이 COCO-80
   vocabulary 국소적 트레이드오프이고 LVIS 일반화에는 안 묻어난다는 해석.)
+  **검증 진행 중(09-10)**: `gt_metrics_for_method`에 S/H_cal/H_eval
+  그룹별 `lost` 분해를 추가(`lost_rate_by_group`, 각 그룹의 fp_rank==1
+  분모로 정규화)해서 이 가설을 직접 확인 중 — 1-seed(seed=0, calib=256)
+  실행이 GPU7에서 진행 중, 결과 나오면 이 항목과 §8.3에 반영 예정.
 - **rw 재스윕**: §8.2, 6-seed(0~5) 완료했지만 **H_eval 버그 수정 전
   데이터 기준**. 버그 수정판으로 재검증은 **하지 않기로 판단**(09-10) —
   `scale_reg_weight`는 s_mult 크기를 누르는 전역 정규화 강도이고, H_eval
