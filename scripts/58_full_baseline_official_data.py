@@ -205,10 +205,17 @@ def build_gt_targets(fp_sims, img_paths, gt_by_path, grid_specs, imgsz):
     return targets
 
 
-def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None):
+def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None, S_set=None, H_cal_set=None):
     recip_ranks = []
     lost = gained = lateral = 0
     upir_num = upir_den = 0
+    # S/H_cal/H_eval 그룹별 lost 분해 -- "COCO-80 lost가 H_eval(비보호
+    # 클래스)에 몰리는가"라는 가설(§9)을 직접 확인하기 위함. denom은
+    # "FP32는 맞혔던(fp_rank==1) GT-anchor 수"(그룹별) -- lost가 나올 수
+    # 있는 최대 후보군이라 이걸로 나눠야 그룹 크기(S=40,H_cal=20,H_eval=20)
+    # 차이를 보정한 공정한 비율이 나온다.
+    lost_by_group = {"S": 0, "H_cal": 0, "H_eval": 0}
+    denom_by_group = {"S": 0, "H_cal": 0, "H_eval": 0}
     for i in range(len(fp_sims)):
         sf = fp_sims[i]; sq = q_sims[i]
         for (aidx, cls) in gt_targets[i]:
@@ -216,8 +223,19 @@ def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None):
             fp_rank = int((fp_s > fp_s[cls]).sum()) + 1
             q_rank = int((q_s > q_s[cls]).sum()) + 1
             recip_ranks.append(1.0 / q_rank)
+            group = None
+            if S_set is not None and cls in S_set:
+                group = "S"
+            elif H_cal_set is not None and cls in H_cal_set:
+                group = "H_cal"
+            elif H_eval_set is not None and cls in H_eval_set:
+                group = "H_eval"
             if fp_rank == 1 and q_rank != 1:
                 lost += 1
+                if group is not None:
+                    lost_by_group[group] += 1
+            if group is not None and fp_rank == 1:
+                denom_by_group[group] += 1
             if fp_rank != 1 and q_rank == 1:
                 gained += 1
             # lateral: 이 GT-anchor에서 FP/quant 둘 다 오답인데, quant의 예측
@@ -241,6 +259,12 @@ def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None):
     if H_eval_set is not None:
         out["upir"] = upir_num / max(upir_den, 1) * 100
         out["upir_n"] = upir_den
+    if S_set is not None and H_cal_set is not None:
+        out["lost_by_group"] = lost_by_group
+        out["denom_by_group"] = denom_by_group
+        out["lost_rate_by_group"] = {
+            g: lost_by_group[g] / max(denom_by_group[g], 1) * 100 for g in lost_by_group
+        }
     return out
 
 
@@ -472,8 +496,9 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     perm = rng.permutation(80)
-    S = perm[:40].tolist(); H_eval = perm[60:80].tolist()
+    S = perm[:40].tolist(); H_cal = perm[40:60].tolist(); H_eval = perm[60:80].tolist()
     H_eval_set = set(H_eval)
+    S_set = set(S); H_cal_set = set(H_cal)
 
     print("[build] FP (COCO-80)")
     fp = build(YOLOWorld, args.model, coco, device, calib, "fp")
@@ -513,18 +538,24 @@ def main():
         h_q.close()
         heval_flip, n1 = group_flip(fp_sims, q_sims, H_eval)
         top1_flip, n2 = standard_flip(fp_sims, q_sims)
-        coco_gt_res = gt_metrics_for_method(fp_sims, q_sims, coco_gt_targets, H_eval_set)
+        coco_gt_res = gt_metrics_for_method(fp_sims, q_sims, coco_gt_targets, H_eval_set,
+                                            S_set=S_set, H_cal_set=H_cal_set)
         del q_sims          # measure_ap()이 model.val() 내부에서 DataLoader worker를
         free_cpu_mem()      # fork하므로, 그 전에 이 조건의 13GB짜리 q_sims부터 비워둔다
         (coco_ap, coco_ap50), coco_pc = measure_ap(models[mode], args.data, args.imgsz, args.device)
         s_ap = subset_map(coco_pc, S); heval_ap = subset_map(coco_pc, H_eval)
+        lrg = coco_gt_res["lost_rate_by_group"]; lbg = coco_gt_res["lost_by_group"]; dbg = coco_gt_res["denom_by_group"]
         print(f"  [COCO-80][{mode}] AP={coco_ap:.2f} S_AP={s_ap:.2f} H_eval_AP={heval_ap:.2f} "
               f"Heval_flip={heval_flip:.2f}% Top1_flip={top1_flip:.2f}% "
               f"GT_MRR={coco_gt_res['mrr']:.4f} GT_R@1={coco_gt_res['r1']:.4f} "
               f"lost={coco_gt_res['lost']} gained={coco_gt_res['gained']} lateral={coco_gt_res['lateral']} "
               f"corrective_rate={coco_gt_res['corrective_rate']:.2f}% UPIR={coco_gt_res['upir']:.2f}%")
+        print(f"    [lost by group] S={lbg['S']}/{dbg['S']}({lrg['S']:.2f}%) "
+              f"H_cal={lbg['H_cal']}/{dbg['H_cal']}({lrg['H_cal']:.2f}%) "
+              f"H_eval={lbg['H_eval']}/{dbg['H_eval']}({lrg['H_eval']:.2f}%)")
         results[mode] = dict(coco_ap=coco_ap, s_ap=s_ap, heval_ap=heval_ap, heval_flip=heval_flip,
-                             top1_flip=top1_flip, coco_gt=coco_gt_res, calib_time=calib_time[mode])
+                             top1_flip=top1_flip, coco_gt=coco_gt_res, calib_time=calib_time[mode],
+                             lost_rate_by_group=lrg)
 
     # FP32 COCO-80 AP -- 반드시 fp의 vocabulary를 LVIS로 바꾸기 전에 재야 함
     # (바꾼 뒤 COCO 80-class validator에 넣으면 confusion matrix index가 깨짐)
@@ -599,6 +630,14 @@ def main():
               f"{r['coco_gt']['corrective_rate']:>7.2f}% | "
               f"{r['lvis_top1_flip']:>8.2f}% | {r['lvis_gt']['lost']:>9} | "
               f"{r['lvis_gt']['corrective_rate']:>7.2f}% | {r['calib_time']:>9.1f}")
+
+    print("\n" + "=" * 100)
+    print(" lost 그룹별 분해 (S/H_cal/H_eval) -- \"lost가 H_eval에 몰리는가\" 가설 확인용")
+    print("=" * 100)
+    print(f"{'':>10} | {'lost_rate_S':>11} | {'lost_rate_H_cal':>15} | {'lost_rate_H_eval':>16}")
+    for mode in conditions:
+        lrg = results[mode]["lost_rate_by_group"]
+        print(f"{mode:>10} | {lrg['S']:>10.2f}% | {lrg['H_cal']:>14.2f}% | {lrg['H_eval']:>15.2f}%")
 
     print(f"\n이론적 모델 크기: {model_mib:.2f} MiB")
 
