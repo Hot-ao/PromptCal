@@ -608,6 +608,28 @@ LVIS_lost)를 더 개선하면서 COCO_AP는 baseline 대비 여전히 압도적
   돌릴 때 이 메모리 때문에 OOM으로 프로세스가 죽은 사례 있음(seed3).
   *`scripts/58_full_baseline_official_data.py:59` 부근*
 - **LVIS_AP 잔여 열세**: §8.1 참고 — naive 대비 -1.9%, 완전히 해소되진 않음.
+- **APr(rare class)에서 Combined가 5개 중 최하위 — 잠재적으로 심각한 문제(09-10 발견)**:
+  LVIS_AP는 aggregate라 안 보였는데, rare/common/frequent로 쪼개보면 얘기가
+  다르다(seed=0, `runs/58_official_data/lostbygroup_seed0.log`):
+
+  | method | APr(rare) | APc(common) | APf(frequent) |
+  |---|---|---|---|
+  | naive | 0.0415 | 0.0835 | 0.1797 |
+  | AdaRound | 0.0328 | 0.0831 | 0.1771 |
+  | QDrop | 0.0311 | 0.0804 | 0.1783 |
+  | BRECQ | 0.0319 | 0.0734 | 0.1771 |
+  | **Combined** | **0.0270(5개 중 최하)** | 0.0789 | **0.1826(5개 중 최고)** |
+
+  Combined는 frequent class에서 최고, rare class에서 최하위 — **"흔한
+  카테고리 쪽으로 성능을 밀어주고 진짜 낯선 rare 카테고리는 오히려
+  손해보는" 패턴**으로 보인다. margin_loss/neighbor-hinge가 S/H_cal(전부
+  COCO의 흔한 카테고리)에만 최적화 압력을 주는 설계와 정확히 부합하는
+  메커니즘. **open-vocabulary 일반화라는 핵심 주장을 가장 엄격하게
+  검증하는 게 바로 rare class인데 거기서 최하위라는 건, 논문 리뷰
+  단계에서 지적받을 가능성이 높은 심각한 약점** — LVIS_AP aggregate
+  동률/우위보다 이게 더 중요한 이슈일 수 있음. neighbor_weight/
+  scale_reg_weight 탐색(§8.7 이하) 때 이 APr도 같이 확인 필요.
+  **아직 미해결, 후속 탐색 필요.**
 - **UPIR·lost가 최선이 아님**: BRECQ가 이 두 지표는 더 낮음(=더 좋음), 특히
   `lost`는 6-seed 전부 BRECQ보다 나쁨 — Combined가 "전부 최고"는 아니라는
   점을 논문에 정직하게 써야 함.
