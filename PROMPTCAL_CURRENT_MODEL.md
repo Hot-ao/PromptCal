@@ -546,6 +546,58 @@ COCO_AP·LVIS_AP는 "진짜" 표준 detection 지표(논문에 실릴 숫자)고
 더 단순해짐 - 5 이상 전부 동치). k8_bw5는 "LVIS 쪽을 더 밀고 싶으면"
 쓸 수 있는 대안으로 기록만 해두고, 실제 채택은 안 함.
 
+### 8.7 `neighbor_weight` 탐색 — LVIS_flip/LVIS_lost 개선 후보 (2026-09-10, 1-seed, **미확정**)
+
+CVPR 제출 기준으로, Combined가 baseline 중 최선(BRECQ/QDrop)에 못 미치는
+Top1_flip·LVIS_AP를 개선할 수 있는지 찾다가, 지금까지 한 번도 스윕 안 했던
+`neighbor_weight`(neighbor-hinge 항 가중치, 기본값 1.0)를 테스트했다. 이
+절의 값들은 **아직 1-seed(seed=0)이고 6-seed 검증 전이라 확정값이
+아니다** — §8.1의 "Combined(확정, neighbor_weight=1.0)"와는 별개로 기록.
+
+| method | COCO_AP | LVIS_AP | Heval_flip | Top1_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|
+| naive | 33.54 | 0.1264 | 10.51% | 0.95% | 0.39% | 432 | 6.48% | 1224 |
+| AdaRound | 33.24 | 0.1242 | 9.20% | 0.74% | 0.26% | 349 | 5.67% | 1212 |
+| QDrop | 33.30 | 0.1235 | 9.25% | 0.72% | 0.33% | 384 | 5.71% | 1192 |
+| BRECQ | 33.30 | 0.1200 | 8.99% | 0.71% | 0.33% | 327 | 5.53% | 1158 |
+| **Combined, nw=0.25** | 36.19 | 0.1235 | 8.51% | 0.72% | 0.27% | 377 | **5.00%** | **1074** |
+| Combined, nw=0.5 | 36.19 | 0.1238 | 8.97% | 0.78% | 0.25% | 396 | 5.50% | 1179 |
+| Combined, nw=1.0(확정값) | 36.49 | 0.1229 | 8.18% | 0.72% | 0.25% | 373 | 5.17% | 1127 |
+| Combined, nw=2.0 | 36.36 | 0.1250 | 8.65% | 0.72% | 0.28% | 353 | 5.42% | 1144 |
+
+*원본: `runs/60_hparam_sweep/neighbor_weight_seed0.log`. `scripts/60_hparam_sweep_official_data.py`에
+`neighbor_weight`를 `--param` 선택지로 추가해서 실행(기존엔 k/neighbor_k/boundary_w만 지원했음).*
+
+**가설과 반대 방향으로 나옴**: "neighbor_weight를 낮추면 margin_loss의
+공격적 재구성이 덜 전파돼서 Top1_flip/lost가 개선될 것"이라 예상했는데,
+실제로는 **낮출수록(0.25→0.5) lost가 오히려 나빠지고(373→377→396)**,
+Top1_flip도 안 좋아짐(0.5에서 0.78%로 최악). Top1_flip/lost로 BRECQ/QDrop을
+이기는 데는 4개 값 다 실패.
+
+**대신 nw=0.25에서 LVIS_flip/LVIS_lost가 큰 폭으로 개선됨**: LVIS_flip
+5.17%→**5.00%**(4개 값 중 최고, BRECQ 5.53% 대비 마진이 더 벌어짐),
+LVIS_lost 1127→**1074**(역시 최고, BRECQ 1158 대비 마진 확대). LVIS_AP도
+0.1229→0.1235로 소폭 개선(QDrop과 동률, BRECQ는 이기지만 AdaRound·naive는
+여전히 못 이김 — §9 "LVIS_AP 잔여 열세"는 완전히 해소 안 됨).
+
+**비용**: COCO_AP -0.30(36.49→36.19) — 그래도 naive(33.54) 대비 +2.65로
+baseline 전부와 비교하면 여전히 압도적 우위, "baseline보다 나쁘다"는
+문제는 전혀 아니고 Combined 자체 내에서의 트레이드오프. Heval_flip은
+소폭 악화(8.18%→8.51%, 그래도 BRECQ 8.99%보다는 좋음), lost도 소폭
+악화(373→377, 거의 무시할 수준).
+
+**논문 관점에서의 판단**: §9에서 정리했듯 이 논문의 핵심 주장("reconstruction
+≠ decision preservation")에 가장 직접적으로 부합하는 지표는 LVIS_flip/
+LVIS_lost다(실제 novel vocabulary에서의 결정 보존, 외적 타당성이 가장
+높음) — COCO_AP는 논문이 "AP만 보면 안 된다"고 주장하는 지표라 오히려
+우선순위가 낮다. 이 기준으로 보면 nw=0.25는 **핵심 지표(LVIS_flip/
+LVIS_lost)를 더 개선하면서 COCO_AP는 baseline 대비 여전히 압도적**이라
+꽤 매력적인 후보. 다만 "COCO_AP를 왜 포기했는지"를 논문에 명시적으로
+논증해야 하고, 아직 1-seed라 seed 노이즈인지도 확인 필요.
+
+**다음**: 0.25 근방(예: 0.1/0.15/0.2/0.25) 더 세밀하게 스윕해서 이 방향이
+계속 개선되는지 확인 후, 유력하면 6-seed로 정식 검증.
+
 ---
 
 ## 9. 알아둘 점 / 한계 / 열린 이슈
