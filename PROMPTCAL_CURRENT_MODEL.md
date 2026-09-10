@@ -345,11 +345,12 @@ Top1_flip/Heval_flip도 뚜렷이 갈린다. **이 괴리 자체가 핵심 논�
   `lost`(360~383)는 6개 seed 전부 BRECQ(327)보다 나쁘고 폭도 좁아
   일관된 트레이드오프로 보임. UPIR은 평균으로는 BRECQ(0.23%)보다
   소폭 나쁘지만(0.25%) seed4/5에서는 역전(0.17%/0.16%)돼 있어 lost만큼
-  일관되진 않음. §8.3에 정리한 가설: neighbor-hinge의 부작용(H_eval
-  경계 손해)은 학습에 쓰인 COCO-80 vocabulary 안에서만 드러나는 비용이고,
-  s_mult의 이득은 vocabulary와 무관해서 LVIS로 넘어가면 비용 없이
-  이득만 남는다는 해석 — 아직 미검증이지만 lost/UPIR vs LVIS_flip/LVIS_lost의
-  방향이 갈리는 패턴과 부합함.
+  일관되진 않음. ~~§8.3에 정리한 가설: neighbor-hinge의 부작용(H_eval
+  경계 손해)은 학습에 쓰인 COCO-80 vocabulary 안에서만 드러나는
+  비용~~ — **09-10 그룹별 분해로 기각됨**(§9 참고): H_eval의 lost 악화폭이
+  S와 거의 같아서(둘 다 +15%) H_eval 국소적 비용이 아니라 COCO-80
+  전반에 걸친 일반적 트레이드오프로 보는 게 정확하다. neighbor-hinge가
+  실제 보호하는 H_cal만 상대적으로 덜 나빠짐(+9%)은 확인됨.
 
 **부수적 관찰 — naive가 AdaRound/QDrop/BRECQ보다 AP가 높은 이유**: 세 baseline
 모두 반올림 방향을 "layer 출력 재구성 MSE"를 줄이는 쪽으로 최적화하는데, 이건
@@ -424,12 +425,12 @@ COCO_AP/LVIS_AP/lost/LVIS_flip/LVIS_lost는 seed 무관 상수(§8.4 seed-결정
   일관된 트레이드오프로 보임. UPIR은 평균으로는 근소하게 나쁘지만(0.25%
   vs 0.23%) seed4/5에서는 오히려 역전(0.17%/0.16%)됨 — lost만큼 일관된
   패턴은 아님.
-- **가설(미검증)**: neighbor-hinge의 부작용(H_eval 경계 손해)은 학습에
-  쓰인 COCO-80 vocabulary 안에서만 드러나는 비용이고, s_mult의 이득은
-  vocabulary와 무관해서 LVIS로 넘어가면 비용 없이 이득만 남는다는 해석 —
-  `lost`/UPIR vs LVIS_flip/LVIS_lost의 방향이 갈리는 패턴과 부합하지만,
-  확인하려면 `lost`를 S/H_cal/H_eval 그룹별로 쪼개서 H_eval에 flip이
-  몰리는지 봐야 함(현재 로그엔 그 분해가 없어 재실행 필요).
+- **가설 검증 완료(09-10) — 기각됨**: "neighbor-hinge의 부작용(H_eval
+  경계 손해)이 COCO-80 vocabulary에 국소적"이라는 가설을 `lost`의
+  S/H_cal/H_eval 그룹별 분해로 직접 확인했다(1-seed). H_eval의 lost
+  악화폭(+15%)이 S의 악화폭(+15%)과 거의 같아서, H_eval 국소적 비용이
+  아니라 COCO-80 전반의 일반적 트레이드오프로 보는 게 정확하다. 상세는
+  §9 "UPIR·lost가 최선이 아님" 항목 참고.
 
 **다음**: §8.2(rw10 vs rw20 비교)는 버그 수정 전 데이터 기준이지만,
 재검증하지 않기로 판단(09-10, 근거는 §9 참고) — `scale_reg_weight=10`
@@ -557,12 +558,28 @@ COCO_AP·LVIS_AP는 "진짜" 표준 detection 지표(논문에 실릴 숫자)고
 - **LVIS_AP 잔여 열세**: §8.1 참고 — naive 대비 -1.9%, 완전히 해소되진 않음.
 - **UPIR·lost가 최선이 아님**: BRECQ가 이 두 지표는 더 낮음(=더 좋음), 특히
   `lost`는 6-seed 전부 BRECQ보다 나쁨 — Combined가 "전부 최고"는 아니라는
-  점을 논문에 정직하게 써야 함. (§8.3에 미검증 가설: 이 비용이 COCO-80
-  vocabulary 국소적 트레이드오프이고 LVIS 일반화에는 안 묻어난다는 해석.)
-  **검증 진행 중(09-10)**: `gt_metrics_for_method`에 S/H_cal/H_eval
-  그룹별 `lost` 분해를 추가(`lost_rate_by_group`, 각 그룹의 fp_rank==1
-  분모로 정규화)해서 이 가설을 직접 확인 중 — 1-seed(seed=0, calib=256)
-  실행이 GPU7에서 진행 중, 결과 나오면 이 항목과 §8.3에 반영 예정.
+  점을 논문에 정직하게 써야 함.
+  **가설 검증 완료(09-10) — 가설은 기각됨**: "이 비용이 H_eval(비보호
+  클래스)에 국소적으로 몰려있고 LVIS 일반화에는 안 묻어난다"는 가설을
+  세우고 `lost`를 S/H_cal/H_eval 그룹별로 쪼개서 확인했다(1-seed,
+  seed=0, calib=256, `runs/58_official_data/lostbygroup_seed0.log`).
+
+  | 그룹 | BRECQ lost_rate | Combined lost_rate | 변화(상대) |
+  |---|---|---|---|
+  | S | 1.23% | 1.42% | +15% |
+  | H_cal | 0.75% | 0.82% | +9% |
+  | H_eval | 1.41% | 1.62% | +15% |
+
+  **H_eval의 악화폭(+15%)이 S의 악화폭(+15%)과 거의 동일**하다 — 가설대로라면
+  H_eval만 훨씬 크게 나빠져야 하는데 그렇지 않다. 오히려 neighbor-hinge가
+  실제로 보호하는 **H_cal이 세 그룹 중 가장 적게 나빠졌다(+9%)** — 이건
+  메커니즘이 의도대로 작동한다는 신호. 즉 `lost` 악화는 H_eval에 국소적인
+  게 아니라 **S/H_eval에 고르게 나타나는 일반적인 트레이드오프**이고,
+  H_cal만 neighbor-hinge 덕에 상대적으로 덜 나빠진 것으로 보인다.
+  **결론: COCO-80-국소적 비용이라는 가설은 기각. `lost` 악화는 vocabulary
+  전반(H_eval 포함이지만 H_eval만은 아님)에 걸친 일반적 트레이드오프로
+  보는 게 더 정확한 서술.** 코드는 `scripts/58_full_baseline_official_data.py`의
+  `gt_metrics_for_method`(`lost_rate_by_group` 출력)에 남겨둠.
 - **rw 재스윕**: §8.2, 6-seed(0~5) 완료했지만 **H_eval 버그 수정 전
   데이터 기준**. 버그 수정판으로 재검증은 **하지 않기로 판단**(09-10) —
   `scale_reg_weight`는 s_mult 크기를 누르는 전역 정규화 강도이고, H_eval
