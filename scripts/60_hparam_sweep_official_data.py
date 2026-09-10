@@ -380,10 +380,11 @@ def main():
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
     ap.add_argument("--scale-reg-weight", type=float, default=10.0,
                     help="확정값(09-08). --param으로 이것 자체를 스윕하려면 scripts/59 사용.")
-    ap.add_argument("--param", required=True, choices=["neighbor_k", "k", "boundary_w"],
+    ap.add_argument("--param", required=True,
+                    choices=["neighbor_k", "k", "boundary_w", "neighbor_weight"],
                     help="스윕할 파라미터 하나. 나머지는 위 기본값(현재 확정값)에 고정된다.")
     ap.add_argument("--values", required=True,
-                    help="비교할 후보값(콤마 구분). neighbor_k/k는 정수, boundary_w는 실수로 파싱.")
+                    help="비교할 후보값(콤마 구분). neighbor_k/k는 정수, boundary_w/neighbor_weight는 실수로 파싱.")
     ap.add_argument("--eval-cap", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
@@ -392,7 +393,7 @@ def main():
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
-    cast = float if args.param == "boundary_w" else int
+    cast = float if args.param in ("boundary_w", "neighbor_weight") else int
     sweep_values = [cast(x) for x in args.values.split(",")]
 
     torch.manual_seed(args.torch_seed)
