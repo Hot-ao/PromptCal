@@ -381,7 +381,7 @@ def main():
     ap.add_argument("--scale-reg-weight", type=float, default=10.0,
                     help="확정값(09-08). --param으로 이것 자체를 스윕하려면 scripts/59 사용.")
     ap.add_argument("--param", required=True,
-                    choices=["neighbor_k", "k", "boundary_w", "neighbor_weight"],
+                    choices=["neighbor_k", "k", "boundary_w", "neighbor_weight", "scale_reg_weight"],
                     help="스윕할 파라미터 하나. 나머지는 위 기본값(현재 확정값)에 고정된다.")
     ap.add_argument("--values", required=True,
                     help="비교할 후보값(콤마 구분). neighbor_k/k는 정수, boundary_w/neighbor_weight는 실수로 파싱.")
@@ -393,7 +393,7 @@ def main():
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
-    cast = float if args.param in ("boundary_w", "neighbor_weight") else int
+    cast = float if args.param in ("boundary_w", "neighbor_weight", "scale_reg_weight") else int
     sweep_values = [cast(x) for x in args.values.split(",")]
 
     torch.manual_seed(args.torch_seed)
@@ -456,11 +456,15 @@ def main():
         kw = dict(iters=args.iters, pidx=S, lr=args.lr, k=args.k, boundary_w=args.boundary_w,
                   neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
                   h_eval=H_eval)
-        kw[args.param] = v          # 스윕 대상 하나만 덮어쓰기, 나머지는 확정값 그대로
+        srw = args.scale_reg_weight
+        if args.param == "scale_reg_weight":
+            srw = v                 # scale_reg_weight는 kw가 아니라 위치 인자라 따로 처리
+        else:
+            kw[args.param] = v      # 스윕 대상 하나만 덮어쓰기, 나머지는 확정값 그대로
         print(f"[build] {mode} ({args.param}={v})")
         t0 = time.perf_counter()
         models[mode] = build_combined_from_base(base_model, fp, calib, device,
-                                                args.scale_reg_weight, **kw)
+                                                srw, **kw)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
 
