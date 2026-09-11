@@ -152,14 +152,20 @@ vocabulary로 일반성을 검증하다가 구조적 한계가 드러났다:
 
 ```python
 def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
-    fp_top, _ = sim_fp.topk(k+1, dim=-1)
-    q_top, _  = sim_q.topk(k+1, dim=-1)
-    fp_m = fp_top[:, :-1] - fp_top[:, 1:]
+    kk = min(k + 1, sim_fp.shape[-1])
+    fp_top, _ = sim_fp.topk(kk, dim=-1)
+    q_top, _  = sim_q.topk(kk, dim=-1)
+    fp_m = fp_top[:, :-1] - fp_top[:, 1:]        # [A, kk-1]
     q_m  = q_top[:, :-1]  - q_top[:, 1:]
-    w = [1,1,1,1,3]                      # top-k 경계에 가중(boundary_w)
-    return mean((q_m - fp_m)^2 · w)
+    w = torch.ones(kk - 1, device=sim_fp.device)  # k에 맞춰 매번 새로 생성(길이 k)
+    w[-1] = boundary_w                            # 마지막(k번째) margin에만 가중
+    return ((q_m - fp_m).pow(2) * w).mean()
 ```
-*`src/quant/promptcal.py:36`*
+*`src/quant/promptcal.py:36`*. `w`는 `[1,1,1,1,3]`처럼 하드코딩된 리터럴이
+아니라 매번 `k`에 맞춰 길이 `k`로 새로 생성된다(k=5일 때만 `[1,1,1,1,
+boundary_w]`로 우연히 예전 스니펫과 일치) — 이전 버전 문서에 k=5 기준
+예시를 리터럴처럼 적어놔서 "k를 바꾸면 가중치 벡터 길이가 안 맞는 거
+아니냐"는 오해를 살 뻔함(09-12 확인, 실제로는 버그 없음).
 
 **(b) asymmetric neighbor hinge** — S 각 class의 text-embedding 최근접 이웃
 (non-S) `neighbor_k`개가 FP보다 **강해지는** 방향만 억제(collateral shift
