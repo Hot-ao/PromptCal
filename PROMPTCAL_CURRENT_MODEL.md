@@ -702,6 +702,41 @@ seed 전반에서 일관되게 나타나서 진짜 개선으로 보이는 유일
 
 ## 9. 알아둘 점 / 한계 / 열린 이슈
 
+- **"seed 효과"의 일부가 실제로는 GPU/실행환경 비결정성일 수 있음(09-12
+  발견)**: §8.9의 nw=0.25,rw=20 6-seed 결과에서 seed0(최선)·seed5(최악)의
+  Heval_flip/Top1_flip이 극단적으로 갈렸는데, 이게 진짜 seed(=S/H_eval
+  분할) 효과인지 확인하려고 **두 seed를 원래와 반대 GPU에서 재실행**했다
+  (seed0: GPU5→GPU7, seed5: GPU7→GPU5).
+
+  | | 원래 | GPU 교환 후 |
+  |---|---|---|
+  | seed0 | Heval_flip 8.01%, Top1_flip 0.69%, LVIS_flip 5.00%, **lost 355** | Heval_flip 8.98%, Top1_flip 0.79%, LVIS_flip 5.48%, **lost 387** |
+  | seed5 | Heval_flip 11.59%, Top1_flip 0.80%, LVIS_flip 5.55%, **lost 383** | Heval_flip 11.04%, Top1_flip 0.72%, LVIS_flip 5.12%, **lost 354** |
+
+  Heval_flip은 seed를 따라간다(seed0=8~9%대, seed5=11%대 유지 — S/H_eval
+  분할은 numpy permutation이라 GPU와 무관하게 결정론적이므로 당연함).
+  **그런데 `lost`는 GPU를 따라가는 것처럼 보인다** — GPU5에서 돈 두 번
+  (원래 seed0, 교환된 seed5)이 355/354로 거의 같고, GPU7에서 돈 두 번
+  (원래 seed5, 교환된 seed0)이 383/387로 거의 같다. seed가 바뀌었는데도
+  lost는 "어느 GPU였는지"를 따라간 것. Top1_flip/LVIS_flip도 원래 값보다
+  "같은 GPU를 썼던 반대쪽 seed의 원래 값"에 더 가까워지는 경향을 보였다.
+
+  **원인 추정**: 이전에 확인한 "동일 코드+동일 seed도 재실행하면 다르게
+  나오는" `optimize_promptcal_scale_neighbor`의 학습 비결정성(cudnn.
+  deterministic=True로 못 잡는 non-cuDNN 연산 추정, 09-10 발견)이 GPU
+  개체별로 다르게 발현되는 것으로 보인다 — 물리적으로 다른 GPU(같은
+  RTX4000 Ada 모델이라도)가 cuDNN 알고리즘 선택이나 부동소수점 연산
+  순서에서 미세하게 다르게 행동할 수 있음.
+
+  **영향**: 이번 세션 내내 보고한 "6-seed 범위(최소~최대)"가 순수하게
+  "어떤 S/H_eval 분할을 뽑았는가"만 반영하는 게 아니라, **GPU/실행환경
+  비결정성이 상당 부분 섞여 있을 수 있다.** 6-seed **평균**은 여전히
+  유효한 추정치(다양한 조합을 평균 내는 거라 노이즈가 상쇄됨)지만,
+  "seed 범위"를 "프롬프트 분할의 좋고 나쁨"으로 해석하는 건 과도할 수
+  있음 — 특히 §8.9에서 nw=0.25,rw=20의 seed0이 유독 좋았던 것도 순수
+  분할 효과가 아니라 이 비결정성이 상당히 기여했을 가능성이 있고, 이는
+  그 하이퍼파라미터 조합을 채택하지 않기로 한 결정을 더 강하게 뒷받침함
+  (평균도 안 낫고, 겉보기 개선의 일부는 노이즈였을 수 있으므로).
 - **메모리**: `scripts/58`/`59`의 `preprocess()`가 한때 `torch.from_numpy(im).float().unsqueeze(0) / 255.0`
   (out-of-place 나눗셈)를 써서 probe 5000장 기준 RSS가 이론치(~24GB)의 2배(~47GB)로
   부풀었었다 — in-place `.div_(255.0)`로 수정(09-08). 동시에 여러 조건을
