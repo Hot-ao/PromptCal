@@ -389,7 +389,7 @@ def quantized_weight_mib(model_module):
 
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
           lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=0.0,
-          h_eval=None,
+          h_eval=None, cal_idx=None, cal_weight=1.0,
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5):
     m = model_cls(w)
     m.set_classes(names)
@@ -420,6 +420,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           neighbor_weight=neighbor_weight,
                                           asymmetric=True, scale_reg_weight=scale_reg_weight,
                                           exclude_from_neighbors=h_eval,
+                                          cal_idx=cal_idx, cal_weight=cal_weight,
                                           verbose=False)
     return m
 
@@ -442,6 +443,10 @@ def main():
     ap.add_argument("--neighbor-k", type=int, default=5)
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
     ap.add_argument("--scale-reg-weight", type=float, default=10.0)
+    ap.add_argument("--cal-weight", type=float, default=0.0,
+                     help="H_cal(20개)에도 margin_loss 직접 적용(09-12 §9 확장). "
+                          "0.0=off(기존 동작), >0이면 S와 동일 margin_loss를 "
+                          "H_cal 컬럼에도 이 가중치로 추가하고 neighbor 후보 풀에서 제외.")
     ap.add_argument("--eval-cap", type=int, default=0,
                     help="스모크 테스트용: probe(COCO val2017/LVIS minival) 이미지 수를 이만큼으로 "
                          "제한. 0이면 제한 없음(실제 실행 기본값 -- val2017 전체 5000장).")
@@ -512,6 +517,8 @@ def main():
                              iters=args.iters, pidx=S, lr=args.lr, k=args.k,
                              neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
                              scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
+                             cal_idx=(H_cal if args.cal_weight > 0 else None),
+                             cal_weight=args.cal_weight,
                              recon_iters_ada=args.recon_iters_ada,
                              recon_iters_strong=args.recon_iters_strong,
                              qdrop_prob=args.qdrop_prob)

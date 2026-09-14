@@ -351,13 +351,14 @@ def build_adaround_base(model_cls, w, names, device, calib, fp, recon_iters_ada=
 
 def build_combined_from_base(base_model, fp, calib, device, scale_reg_weight, iters=1500,
                              pidx=None, lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5,
-                             neighbor_weight=1.0, h_eval=None):
+                             neighbor_weight=1.0, h_eval=None, cal_idx=None, cal_weight=1.0):
     m = copy.deepcopy(base_model)
     optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                       lr=lr, k=k, boundary_w=boundary_w, neighbor_k=neighbor_k,
                                       neighbor_weight=neighbor_weight,
                                       asymmetric=True, scale_reg_weight=scale_reg_weight,
                                       exclude_from_neighbors=h_eval,
+                                      cal_idx=cal_idx, cal_weight=cal_weight,
                                       verbose=False)
     return m
 
@@ -381,10 +382,13 @@ def main():
     ap.add_argument("--scale-reg-weight", type=float, default=10.0,
                     help="확정값(09-08). --param으로 이것 자체를 스윕하려면 scripts/59 사용.")
     ap.add_argument("--param", required=True,
-                    choices=["neighbor_k", "k", "boundary_w", "neighbor_weight", "scale_reg_weight"],
-                    help="스윕할 파라미터 하나. 나머지는 위 기본값(현재 확정값)에 고정된다.")
+                    choices=["neighbor_k", "k", "boundary_w", "neighbor_weight", "scale_reg_weight",
+                             "cal_weight"],
+                    help="스윕할 파라미터 하나. 나머지는 위 기본값(현재 확정값)에 고정된다. "
+                         "cal_weight면 H_cal(20개)에도 margin_loss를 함께 적용(09-12 §9 확장).")
     ap.add_argument("--values", required=True,
-                    help="비교할 후보값(콤마 구분). neighbor_k/k는 정수, boundary_w/neighbor_weight는 실수로 파싱.")
+                    help="비교할 후보값(콤마 구분). neighbor_k/k는 정수, boundary_w/neighbor_weight/"
+                         "cal_weight는 실수로 파싱.")
     ap.add_argument("--eval-cap", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
@@ -393,7 +397,7 @@ def main():
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
-    cast = float if args.param in ("boundary_w", "neighbor_weight", "scale_reg_weight") else int
+    cast = float if args.param in ("boundary_w", "neighbor_weight", "scale_reg_weight", "cal_weight") else int
     sweep_values = [cast(x) for x in args.values.split(",")]
 
     torch.manual_seed(args.torch_seed)
@@ -435,7 +439,7 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     perm = rng.permutation(80)
-    S = perm[:40].tolist(); H_eval = perm[60:80].tolist()
+    S = perm[:40].tolist(); H_cal = perm[40:60].tolist(); H_eval = perm[60:80].tolist()
     H_eval_set = set(H_eval)
 
     print("[build] FP (COCO-80)")
@@ -459,6 +463,9 @@ def main():
         srw = args.scale_reg_weight
         if args.param == "scale_reg_weight":
             srw = v                 # scale_reg_weight는 kw가 아니라 위치 인자라 따로 처리
+        elif args.param == "cal_weight":
+            kw["cal_idx"] = H_cal   # cal_weight 스윕일 때만 H_cal을 보호 대상으로 활성화
+            kw["cal_weight"] = v
         else:
             kw[args.param] = v      # 스윕 대상 하나만 덮어쓰기, 나머지는 확정값 그대로
         print(f"[build] {mode} ({args.param}={v})")

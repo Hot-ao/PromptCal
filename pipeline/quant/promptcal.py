@@ -345,6 +345,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       boundary_w=3.0, neighbor_k=5, neighbor_weight=1.0,
                                       asymmetric=False, scale_reg_weight=0.0,
                                       exclude_from_neighbors=None,
+                                      cal_idx=None, cal_weight=1.0,
                                       conf_thres=0.25, verbose=True, eval_hook=None):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
@@ -390,6 +391,17 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     `mean((s_mult-1)^2)`을 손실에 더해 "값싸게 전역적으로 줄이는" 지름길에
     비용을 매겨서, 최적화가 margin/neighbor 목적에 실제로 필요한 만큼만
     s_mult를 움직이도록 유도한다. 기본값 0.0(기존 동작 유지, opt-in).
+
+    cal_idx/cal_weight (09-12, APr(rare) 열위·lost 그룹 분해 이후 추가): 지금까지
+    S(prompt_idx, 40개)만 margin_loss로 직접 보호받고, H_cal(20개)은 "S의
+    neighbor로 우연히 뽑히면" asymmetric hinge로 간접·수동적으로만 억제됐다.
+    최적화 압력이 S에만 집중되면서 COCO-80 전체 lost/APr(rare-class)가
+    희생된다는 정황(§9)에 대응해, cal_idx(H_cal 인덱스)를 넘기면 S와 동일한
+    margin_loss를 H_cal 컬럼에도 별도로 적용해 S∪H_cal(60개, COCO-80의 75%)을
+    직접 보호 대상으로 넓힌다. cal_idx가 주어지면 해당 인덱스는 neighbor 후보
+    풀에서도 제외한다(이미 margin_loss로 직접 보호받으므로 이중 처리 방지).
+    cal_weight는 S 쪽 margin_loss 대비 H_cal 쪽 margin_loss의 상대 가중치.
+    cal_idx=None(기본)이면 기존 동작과 완전히 동일(opt-in).
     """
     ada = list_adaround_convs(quant_model)
     for ac in ada:
@@ -419,6 +431,18 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     # 한 번도 안 씀"이 깨짐 -- 실측 seed=0 기준 H_eval 20개 중 18개가 포함돼
     # 있었음). exclude_from_neighbors로 H_eval도 같이 제외해서 진짜 held-out을
     # 보장한다. None이면 기존 동작(버그 있는 채로) 유지 -- 하위 호환용.
+    #
+    # 09-12 버그 발견: cal_idx(H_cal)를 여기서도 제외하면(초안 -- "이미
+    # margin_loss로 보호하니 이중 처리 방지" 의도였음) S+H_cal+H_eval이 정확히
+    # COCO-80 80개 전부(40+20+20)라서 후보 풀이 통째로 0개가 되어 neighbor_cols가
+    # 항상 빈 텐서가 되고, F.mse_loss/relu(...).pow(2).mean()이 빈 텐서에 대해
+    # 조용히 nan을 반환한다(neighbor_weight*nan을 더해 loss 자체는 nan이 되지만,
+    # 빈 인덱싱의 backward는 실제로 0 gradient만 주므로 s_mult가 nan으로 오염되진
+    # 않음 -- 대신 neighbor-hinge 항 자체가 통째로 무효화된 채 조용히 실행됨,
+    # 재현: neighbor 0개/neighbor_loss=nan 로그로 확인). cal_idx는 neighbor 후보
+    # 풀에서 제외하지 않는다 -- cal_weight=0일 때 기존 동작과 완전히 동일해야
+    # 한다는 불변식(cal_idx가 주어져도 가중치 0이면 결과가 바뀌면 안 됨)도 이걸로
+    # 지켜진다.
     exclude_set = pidx_set | (set(exclude_from_neighbors) if exclude_from_neighbors else set())
     neighbor_set = set()
     for c in prompt_idx:
@@ -432,11 +456,14 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     s0 = [s.detach().clone() for s in smults]
     opt = torch.optim.Adam(smults, lr=lr)
     pidx = torch.tensor(prompt_idx, device=device)
+    cal_idx_list = list(cal_idx) if cal_idx else []
+    cidx = torch.tensor(cal_idx_list, device=device, dtype=torch.long) if cal_idx_list else None
 
     if verbose:
+        cal_msg = f", cal {len(cal_idx_list)}개(cal_weight={cal_weight})" if cidx is not None else ""
         print(f"[promptcal-C+neighbor] {len(fp_sims)} calib, prompt subset {len(prompt_idx)}개, "
               f"neighbor {len(neighbor_cols)}개(k={neighbor_k}), s_mult {len(ada)}개, "
-              f"margin(k={k}) neighbor_weight={neighbor_weight}")
+              f"margin(k={k}) neighbor_weight={neighbor_weight}{cal_msg}")
 
     n = len(calib_tensors)
     for it in range(iters):
@@ -454,6 +481,9 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             parts.append(q_cap.buf[i].reshape(B, P, H*W))
         sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
         ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w)
+        if cidx is not None:
+            ml_cal = margin_loss(sim_q[aidx][:, cidx], sim_fp[aidx][:, cidx], k=k, boundary_w=boundary_w)
+            ml = ml + cal_weight * ml_cal
         if asymmetric:
             # 경쟁자가 FP보다 강해지는 방향(sim_q > sim_fp)만 억제. 약해지는
             # 방향은 벌점 없음 -- 우연히 유익한 흔들림(예: seed 0)을 보존.
