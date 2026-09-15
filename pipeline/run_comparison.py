@@ -1,33 +1,53 @@
 """
-Baseline 종합 비교: AdaRound / QDrop / BRECQ vs Combined.
+"논문 방식"에 가까운 공식 데이터 설정으로 5개 조건(naive/AdaRound/QDrop/BRECQ/
+Combined) 전체 검증. `scripts/58_full_baseline_official_data.py`를 이 디렉토리
+전용으로 포팅한 것(로직 동일, import 경로만 harness.py/quant/*로 변경, 09-15).
+Combined는 현재 확정된 최종 설계 그대로다 — per-channel `s_mult` +
+`scale_reg_weight=10`(정규화) + `cal_weight=1.0`(H_cal 직접 보호) + H_eval을
+neighbor 후보 풀에서 제외(exclude_from_neighbors). 확정 경위와 전체
+하이퍼파라미터·6-seed 결과는 저장소 루트의 `PROMPTCAL_CURRENT_MODEL.md`
+(특히 §5.5/§8.1)가 단일 진실 공급원이다.
 
-pipeline/ 디렉토리의 유일한 실행 스크립트. scripts/45_baseline_compare.py와
-로직은 동일하고(그 스크립트로 낸 6-seed 결과가 논문/진행 문서의 근거), import
-경로만 이 디렉토리 안의 harness.py/quant/*로 바뀌었다 -- pipeline/README.md
-참고.
+데이터 설정(이전 val2017-슬라이스 방식에서 09-08에 교체):
+  - calibration: COCO **train2017**에서 256장(평가 데이터와 완전 분리).
+  - COCO-80 평가: COCO val2017 **전체**(5000장).
+  - LVIS 평가: 공식 **lvis_v1_minival.json**(ultralytics 공식 배포,
+    lvis-labels-segments.zip에 포함) — 확인 결과 "COCO val2017 ∩ LVIS val"과
+    정확히 일치하는 4809장.
 
-09_phase1_final_report_ko_v2.pdf(§1.3 평가 지표)의 표준 정의를 따라 확장:
-  - AP(전체 + S/H_eval subset)
-  - H_eval flip(우리가 만든 masked 버전 -- "H_eval을 안 쓰는 다른 사용자" 시나리오 진단용)
-  - Top-1 flip(Phase 1 표준: masking 없이 FP confident anchor의 raw top-1 일치율.
-    AP와 같은 배포 조건(전체 vocabulary)에서 결정 일치도를 직접 잼)
-  - GT MRR / GT R@1(실제 COCO ground truth 기준. FP32를 pseudo-GT로 안 쓰고 진짜 정답 사용)
-  - GT top-1 loss / gained(FP에서 정답이 1위였다가 양자화 후 잃은/얻은 수)
-  - UPIR(calibration에서 안 본 prompt가 정답 위로 침입한 비율, GT가 S/H_cal일 때만 집계)
-  - calibration 시간(wall-clock), 이론적 모델 크기(양자화 weight 8bit 기준)
+측정 지표:
+  - COCO_AP(전체+S/H_eval subset), LVIS_AP(+APr/APc/APf, 실제 LVIS GT)
+  - Heval_flip(masked, 우리 진단용) / Top1_flip(표준, AP와 동일 배포 조건)
+  - GT_MRR/R@1, lost/gained/lateral/corrective_rate, UPIR (COCO·LVIS 양쪽)
+  - lost의 S/H_cal/H_eval 그룹별 분해(neighbor-hinge·cal_weight가 의도대로
+    작동하는지 진단)
+  - calibration 시간, 이론적 모델 크기
 
-GT 앵커 매칭: COCO 원본 GT 박스를 letterbox 변환으로 640 공간에 옮긴 뒤, 3개 FPN
+GT 앵커 매칭: GT 박스를 letterbox 변환으로 640 공간에 옮긴 뒤, 3개 FPN
 level(80x80/40x40/20x20, stride 8/16/32)에서 그리드 셀 중심이 박스 안에 드는
 후보를 모으고, 그중 FP32가 정답 class에 가장 confident한 anchor 하나를 GT의
 대표 anchor로 선택한다(공식 TaskAlignedAssigner와 완전히 동일하지 않은 근사).
 
-실행:
+LVIS(P=1203) 쪽은 probe 전체(4809장)의 sim 행렬을 리스트로 들고 있으면 CPU
+RAM이 터지므로(fp_sims 하나만 이론상 ~194GB) `compute_lvis_flip_gt_streaming`이
+이미지 한 장씩 처리해서 즉시 소비·폐기하는 스트리밍 방식으로 flip/GT 지표를
+누적한다. AP 자체는 lvis-api(`LVISEval`)로 별도 채점.
+
+실행(GPU 3개에 각각 다른 --seed로, 기존 6-seed는 0~5):
     CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=7 python pipeline/run_comparison.py \
         --model yolov8s-world.pt --coco-root /data/taeho/coco_datasets \
-        --data configs/coco_local.yaml --calib 32 --eval 500 --seed 2 --device 0
+        --data configs/coco_local.yaml \
+        --lvis-ann /data/taeho/lvis_datasets/labels_dl/extracted/lvis/annotations/lvis_v1_minival.json \
+        --calib 256 --seed 0 --device 0
+
+스모크 테스트(--eval-cap으로 probe 수 제한, calib도 줄여서 몇 분 안에 확인):
+    ... --calib 8 --eval-cap 16 --iters 30 --recon-iters-ada 20 --seed 0 --device 0
 """
 import argparse, glob, os, sys, time
 import cv2, numpy as np, torch
+
+if not hasattr(np, "float"):
+    np.float = float
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import SimilarityHarness
@@ -38,11 +58,13 @@ from quant.brecq import optimize_brecq
 from quant.promptcal import optimize_promptcal_scale_neighbor
 
 
-def load_coco_names():
+def load_names(which):
     import ultralytics, yaml
     from pathlib import Path
-    d = yaml.safe_load(open(Path(ultralytics.__file__).parent / "cfg" / "datasets" / "coco.yaml"))
-    return [d["names"][i] for i in range(len(d["names"]))]
+    p = Path(ultralytics.__file__).parent / "cfg" / "datasets" / f"{which}.yaml"
+    d = yaml.safe_load(open(p))
+    n = d["names"]
+    return [n[i] for i in range(len(n))]
 
 
 def letterbox(im, new=640, color=(114, 114, 114)):
@@ -52,24 +74,35 @@ def letterbox(im, new=640, color=(114, 114, 114)):
     im_r = cv2.resize(im, (nw, nh), interpolation=cv2.INTER_LINEAR)
     top, left = (new - nh) // 2, (new - nw) // 2
     return cv2.copyMakeBorder(im_r, top, new - nh - top, left, new - nw - left,
-                               cv2.BORDER_CONSTANT, value=color)
+                              cv2.BORDER_CONSTANT, value=color)
 
 
 def preprocess(path, imgsz, device):
-    # CPU 텐서로 반환 -- probe가 커지면 전부 GPU에 올릴 경우 VRAM이 부족해질 수
-    # 있고, out-of-place `/255.0`는 이미지당 여분의 float32 버퍼를 만들고 버려서
-    # RSS를 불필요하게 부풀린다(scripts/58에서 09-08 발견·수정한 것과 동일 패턴).
-    # run_image/calibrate/optimize_* 전부 내부에서 자체적으로 .to(device)를
-    # 하므로 여기서 미리 옮길 필요가 없다(device 인자는 호환성을 위해 남겨두되 안 씀).
+    """CPU 텐서로 반환 -- probe가 5000장 규모라 전부 GPU에 올리면 OOM난다.
+    run_image/calibrate/optimize_* 전부 내부에서 자체적으로 .to(device)를 하므로
+    여기서 미리 옮길 필요가 없다(device 인자는 호환성을 위해 남겨두되 안 씀)."""
     im = letterbox(cv2.imread(path), imgsz)
     im = np.ascontiguousarray(im[:, :, ::-1].transpose(2, 0, 1))
     t = torch.from_numpy(im).unsqueeze(0).float()
-    t.div_(255.0)
-    return t
+    t.div_(255.0)          # in-place: out-of-place `/255.0`는 이미지당 여분의
+    return t                # float32 버퍼를 만들고 버려서, probe 5000장 기준
+                            # RSS가 이론치(~24GB)의 2배(~47GB)로 부풀었었다(09-08 발견).
+
+
+def switch_vocab(model, names, device):
+    model.model.to("cpu")
+    model.model.set_classes(names, cache_clip_model=False)
+    model.model.to(device).eval()
 
 
 def measure_ap(model, data, imgsz, device):
-    metrics = model.val(data=data, imgsz=imgsz, device=device, save_json=False, verbose=False, workers=0)
+    # workers=0: 기본값(8)이면 DataLoader가 os.fork()로 worker를 여러 개 띄우는데,
+    # 이 시점 부모 프로세스가 이미 커져 있으면(q_sims 등) 그 메모리를 통째로
+    # 복사해서 순식간에 수백 GB로 터질 수 있다(09-09 실측: RSS 66GB 부모에서
+    # worker 8개가 fork되며 시스템 전체가 OOM 직전까지 감). single-process로
+    # 강제해서 fork 자체를 없앤다.
+    metrics = model.val(data=data, imgsz=imgsz, device=device, save_json=False,
+                        verbose=False, workers=0)
     overall = float(metrics.box.map) * 100, float(metrics.box.map50) * 100
     per_class = dict(zip(metrics.box.ap_class_index.tolist(),
                          (metrics.box.maps if hasattr(metrics.box, "maps") else metrics.box.all_ap[:, 0]).tolist()))
@@ -82,16 +115,11 @@ def subset_map(per_class, idx, scale=100.0):
 
 
 def group_flip(fp_sims, q_sims, group_idx, conf=0.25):
-    """우리가 만든 masked H_eval flip. group_idx(H_eval) 컬럼을 가린 뒤, FP
-    full-top1이 group_idx에 속하는 confident anchor에서 K-only(가림) argmax의
-    FP vs quant 불일치율 -- "H_eval을 안 쓰는 다른 사용자" 시나리오 진단용."""
     Gm = torch.zeros(80, dtype=torch.bool)
     Gm[group_idx] = True
     tot = fl = 0
     for sf, sq in zip(fp_sims, q_sims):
-        prob = sf.sigmoid()
-        mp, c_fp = prob.max(-1)
-        conf_m = mp > conf
+        prob = sf.sigmoid(); mp, c_fp = prob.max(-1); conf_m = mp > conf
         target = conf_m & Gm[c_fp]
         if target.sum() == 0:
             continue
@@ -104,14 +132,9 @@ def group_flip(fp_sims, q_sims, group_idx, conf=0.25):
 
 
 def standard_flip(fp_sims, q_sims, conf=0.25):
-    """Phase 1 표준 Top-1 flip: masking 없이, FP confident anchor에서 raw
-    top-1(전체 80class)이 양자화 모델과 같은지. AP와 동일한 배포 조건(전체
-    vocabulary)에서 결정 일치도를 직접 잰다."""
     tot = fl = 0
     for sf, sq in zip(fp_sims, q_sims):
-        prob = sf.sigmoid()
-        mp, c_fp = prob.max(-1)
-        conf_m = mp > conf
+        prob = sf.sigmoid(); mp, c_fp = prob.max(-1); conf_m = mp > conf
         if conf_m.sum() == 0:
             continue
         idx = conf_m.nonzero(as_tuple=True)[0]
@@ -121,12 +144,7 @@ def standard_flip(fp_sims, q_sims, conf=0.25):
     return fl / max(tot, 1) * 100, tot
 
 
-# ---------------------------------------------------------------------------
-# GT 기반 지표: 실제 COCO annotation과 anchor 매칭
-# ---------------------------------------------------------------------------
-
-def load_gt_by_path(ann_path, img_paths):
-    """COCO GT를 로드해서 img_path -> [(cls80, cx, cy, w, h)] (원본 이미지 px)로 반환."""
+def load_coco_gt_by_path(ann_path, img_paths):
     from pycocotools.coco import COCO
     from ultralytics.data.converter import coco91_to_coco80_class
     coco = COCO(ann_path)
@@ -148,8 +166,22 @@ def load_gt_by_path(ann_path, img_paths):
     return out
 
 
+def load_lvis_gt_by_path(lvis_gt, img_paths, img_ids):
+    ann_by_img = {}
+    for a in lvis_gt.dataset["annotations"]:
+        ann_by_img.setdefault(a["image_id"], []).append(a)
+    out = {}
+    for p, iid in zip(img_paths, img_ids):
+        boxes = []
+        for a in ann_by_img.get(iid, []):
+            cls = a["category_id"] - 1
+            x, y, w, h = a["bbox"]
+            boxes.append((cls, x + w / 2, y + h / 2, w, h))
+        out[p] = boxes
+    return out
+
+
 def get_grid_specs(h_fp, sample_img):
-    """SimilarityHarness의 level별 (H, W, stride)를 실제 forward로 확인."""
     h_fp.run_image(sample_img, -1)
     specs = []
     for i in sorted(h_fp._level_buf):
@@ -159,16 +191,12 @@ def get_grid_specs(h_fp, sample_img):
 
 
 def build_gt_targets(fp_sims, img_paths, gt_by_path, grid_specs, imgsz):
-    """각 이미지에 대해 [(anchor_idx, cls80), ...] 리스트를 만든다. GT 박스 중심이
-    드는 grid cell 후보 중 FP32가 정답 class에 가장 confident한 anchor를 선택.
-    fp_sims: probe 이미지별로 미리 계산해둔 FP sim 리스트."""
     offsets = []
     off = 0
     for (H, W) in grid_specs:
         stride = imgsz // W
         offsets.append((off, H, W, stride))
         off += H * W
-
     targets = []
     for i, p in enumerate(img_paths):
         sf = fp_sims[i]
@@ -178,7 +206,7 @@ def build_gt_targets(fp_sims, img_paths, gt_by_path, grid_specs, imgsz):
         nh, nw = int(round(h0 * r)), int(round(w0 * r))
         top, left = (imgsz - nh) // 2, (imgsz - nw) // 2
         img_targets = []
-        for (cls80, cx, cy, bw, bh) in gt_by_path.get(p, []):
+        for (cls, cx, cy, bw, bh) in gt_by_path.get(p, []):
             x0 = (cx - bw / 2) * r + left; x1 = (cx + bw / 2) * r + left
             y0 = (cy - bh / 2) * r + top;  y1 = (cy + bh / 2) * r + top
             candidates = []
@@ -192,42 +220,187 @@ def build_gt_targets(fp_sims, img_paths, gt_by_path, grid_specs, imgsz):
                             candidates.append(off0 + row * W + col)
             if not candidates:
                 continue
-            best = max(candidates, key=lambda a: float(sf[a, cls80]))
-            img_targets.append((best, cls80))
+            best = max(candidates, key=lambda a: float(sf[a, cls]))
+            img_targets.append((best, cls))
         targets.append(img_targets)
     return targets
 
 
-def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set):
-    """GT MRR / GT R@1 / GT top-1 lost / gained / UPIR 계산."""
+def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None, S_set=None, H_cal_set=None):
     recip_ranks = []
-    lost = gained = 0
+    lost = gained = lateral = 0
     upir_num = upir_den = 0
+    # S/H_cal/H_eval 그룹별 lost 분해 -- "COCO-80 lost가 H_eval(비보호
+    # 클래스)에 몰리는가"라는 가설을 직접 확인하기 위함. denom은 "FP32는
+    # 맞혔던(fp_rank==1) GT-anchor 수"(그룹별) -- lost가 나올 수 있는 최대
+    # 후보군이라 이걸로 나눠야 그룹 크기(S=40,H_cal=20,H_eval=20) 차이를
+    # 보정한 공정한 비율이 나온다.
+    lost_by_group = {"S": 0, "H_cal": 0, "H_eval": 0}
+    denom_by_group = {"S": 0, "H_cal": 0, "H_eval": 0}
     for i in range(len(fp_sims)):
-        sf = fp_sims[i]
-        sq = q_sims[i]
-        for (aidx, cls80) in gt_targets[i]:
+        sf = fp_sims[i]; sq = q_sims[i]
+        for (aidx, cls) in gt_targets[i]:
             fp_s = sf[aidx]; q_s = sq[aidx]
-            fp_rank = int((fp_s > fp_s[cls80]).sum()) + 1
-            q_rank = int((q_s > q_s[cls80]).sum()) + 1
+            fp_rank = int((fp_s > fp_s[cls]).sum()) + 1
+            q_rank = int((q_s > q_s[cls]).sum()) + 1
             recip_ranks.append(1.0 / q_rank)
+            group = None
+            if S_set is not None and cls in S_set:
+                group = "S"
+            elif H_cal_set is not None and cls in H_cal_set:
+                group = "H_cal"
+            elif H_eval_set is not None and cls in H_eval_set:
+                group = "H_eval"
             if fp_rank == 1 and q_rank != 1:
                 lost += 1
+                if group is not None:
+                    lost_by_group[group] += 1
+            if group is not None and fp_rank == 1:
+                denom_by_group[group] += 1
             if fp_rank != 1 and q_rank == 1:
                 gained += 1
-            if fp_rank == 1 and cls80 not in H_eval_set:
+            # lateral: 이 GT-anchor에서 FP/quant 둘 다 오답인데, quant의 예측
+            # 자체가 FP와 다르게 바뀐 경우(오답->다른 오답 flip). lost/gained만
+            # 보면 "GT-anchor에서 일어난 flip 중 실제로 정답이 되는 비율"을
+            # 못 재는데(분모에 이 lateral이 빠짐), 이걸 포함해야
+            # corrective_rate = gained/(lost+gained+lateral)이 정확해진다.
+            if fp_rank != 1 and q_rank != 1 and int(fp_s.argmax()) != int(q_s.argmax()):
+                lateral += 1
+            if H_eval_set is not None and fp_rank == 1 and cls not in H_eval_set:
                 upir_den += 1
                 if int(q_s.argmax()) in H_eval_set:
                     upir_num += 1
     n = len(recip_ranks)
     mrr = sum(recip_ranks) / max(n, 1)
     r1 = sum(1 for r in recip_ranks if r == 1.0) / max(n, 1)
-    upir = upir_num / max(upir_den, 1) * 100
-    return dict(mrr=mrr, r1=r1, lost=lost, gained=gained, upir=upir, n=n, upir_n=upir_den)
+    total_flips = lost + gained + lateral
+    corrective_rate = gained / max(total_flips, 1) * 100
+    out = dict(mrr=mrr, r1=r1, lost=lost, gained=gained, lateral=lateral,
+              total_flips=total_flips, corrective_rate=corrective_rate, n=n)
+    if H_eval_set is not None:
+        out["upir"] = upir_num / max(upir_den, 1) * 100
+        out["upir_n"] = upir_den
+    if S_set is not None and H_cal_set is not None:
+        out["lost_by_group"] = lost_by_group
+        out["denom_by_group"] = denom_by_group
+        out["lost_rate_by_group"] = {
+            g: lost_by_group[g] / max(denom_by_group[g], 1) * 100 for g in lost_by_group
+        }
+    return out
+
+
+def predict_lvis_results(model, img_paths, img_ids, imgsz, device, conf=0.001, max_det=300):
+    results = []
+    for path, img_id in zip(img_paths, img_ids):
+        r = model.predict(source=path, imgsz=imgsz, device=device, conf=conf,
+                          max_det=max_det, verbose=False)[0]
+        if r.boxes is None or len(r.boxes) == 0:
+            continue
+        xyxy = r.boxes.xyxy.cpu().numpy()
+        confs = r.boxes.conf.cpu().numpy()
+        clss = r.boxes.cls.cpu().numpy().astype(int)
+        for (x1, y1, x2, y2), sc, c in zip(xyxy, confs, clss):
+            results.append({"image_id": int(img_id), "category_id": int(c) + 1,
+                            "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
+                            "score": float(sc)})
+    return results
+
+
+def run_lvis_eval(lvis_gt, results, img_ids):
+    from lvis import LVISEval, LVISResults
+    if not results:
+        return dict(AP=0.0, AP50=0.0)
+    lvis_dt = LVISResults(lvis_gt, results, max_dets=300)
+    ev = LVISEval(lvis_gt, lvis_dt, iou_type="bbox")
+    ev.params.img_ids = img_ids
+    ev.run()
+    return ev.get_results()
+
+
+def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid_specs, imgsz, conf=0.25):
+    """LVIS(P=1203)는 8400 anchor x 1203 x probe장수 sim을 리스트로 다 들고 있으면
+    (4809장 기준 fp_sims 하나만 ~194GB) CPU RAM이 터진다. 이미지 하나씩 처리해서
+    FP/각 모델의 sim을 즉시 소비하고 버리는 스트리밍 방식으로 표준 flip과
+    GT_MRR/R@1/lost/gained를 동시에 누적한다. h_models: {mode: SimilarityHarness}."""
+    offsets = []
+    off = 0
+    for (H, W) in grid_specs:
+        stride = imgsz // W
+        offsets.append((off, H, W, stride))
+        off += H * W
+
+    tot = {m: 0 for m in h_models}; fl = {m: 0 for m in h_models}
+    recip = {m: [] for m in h_models}
+    lost = {m: 0 for m in h_models}; gained = {m: 0 for m in h_models}
+    lateral = {m: 0 for m in h_models}
+
+    for i, p in enumerate(probe_paths):
+        t = preprocess(p, imgsz, "cpu")
+        sf = h_fp.run_image(t, i).sim
+
+        im0 = cv2.imread(p)
+        h0, w0 = im0.shape[:2]
+        r = min(imgsz / h0, imgsz / w0)
+        nh, nw = int(round(h0 * r)), int(round(w0 * r))
+        top, left = (imgsz - nh) // 2, (imgsz - nw) // 2
+        img_targets = []
+        for (cls, cx, cy, bw, bh) in gt_by_path.get(p, []):
+            x0 = (cx - bw / 2) * r + left; x1 = (cx + bw / 2) * r + left
+            y0 = (cy - bh / 2) * r + top;  y1 = (cy + bh / 2) * r + top
+            candidates = []
+            for (off0, H, W, s) in offsets:
+                col0 = max(0, int(x0 / s - 0.5)); col1 = min(W - 1, int(x1 / s - 0.5) + 1)
+                row0 = max(0, int(y0 / s - 0.5)); row1 = min(H - 1, int(y1 / s - 0.5) + 1)
+                for row in range(row0, row1 + 1):
+                    for col in range(col0, col1 + 1):
+                        ccx, ccy = (col + 0.5) * s, (row + 0.5) * s
+                        if x0 <= ccx <= x1 and y0 <= ccy <= y1:
+                            candidates.append(off0 + row * W + col)
+            if not candidates:
+                continue
+            best = max(candidates, key=lambda a: float(sf[a, cls]))
+            img_targets.append((best, cls))
+
+        prob = sf.sigmoid(); mp, c_fp = prob.max(-1); conf_m = mp > conf
+        conf_idx = conf_m.nonzero(as_tuple=True)[0]
+
+        for mode, h_q in h_models.items():
+            sq = h_q.run_image(t, i).sim
+            if len(conf_idx) > 0:
+                c_q = sq.argmax(-1)
+                fl[mode] += int((c_fp[conf_idx] != c_q[conf_idx]).sum())
+                tot[mode] += len(conf_idx)
+            for (aidx, cls) in img_targets:
+                fp_s = sf[aidx]; q_s = sq[aidx]
+                fp_rank = int((fp_s > fp_s[cls]).sum()) + 1
+                q_rank = int((q_s > q_s[cls]).sum()) + 1
+                recip[mode].append(1.0 / q_rank)
+                if fp_rank == 1 and q_rank != 1:
+                    lost[mode] += 1
+                if fp_rank != 1 and q_rank == 1:
+                    gained[mode] += 1
+                if fp_rank != 1 and q_rank != 1 and int(fp_s.argmax()) != int(q_s.argmax()):
+                    lateral[mode] += 1        # 오답->다른 오답 flip (gt_metrics_for_method와 동일 정의)
+
+        if (i + 1) % 500 == 0:
+            print(f"    streaming {i+1}/{len(probe_paths)}장 처리")
+
+    out = {}
+    for mode in h_models:
+        n = len(recip[mode])
+        mrr = sum(recip[mode]) / max(n, 1)
+        r1 = sum(1 for x in recip[mode] if x == 1.0) / max(n, 1)
+        top1_flip = fl[mode] / max(tot[mode], 1) * 100
+        total_flips = lost[mode] + gained[mode] + lateral[mode]
+        corrective_rate = gained[mode] / max(total_flips, 1) * 100
+        out[mode] = dict(top1_flip=top1_flip, n_flip=tot[mode],
+                         mrr=mrr, r1=r1, lost=lost[mode], gained=gained[mode],
+                         lateral=lateral[mode], total_flips=total_flips,
+                         corrective_rate=corrective_rate, n=n)
+    return out
 
 
 def quantized_weight_mib(model_module):
-    """양자화 대상 conv weight 총량을 8bit(1 byte/element) 기준 이론 크기(MiB)로."""
     total = 0
     for m in model_module.modules():
         if isinstance(m, (AdaRoundQuantConv2d, QuantConv2d)):
@@ -236,8 +409,8 @@ def quantized_weight_mib(model_module):
 
 
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
-          lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5, neighbor_weight=1.0,
-          scale_reg_weight=10.0, h_eval=None,
+          lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=10.0,
+          h_eval=None, cal_idx=None, cal_weight=1.0,
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5):
     m = model_cls(w)
     m.set_classes(names)
@@ -264,11 +437,12 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         convert_to_adaround(m.model)
         optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
         optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
-                                          lr=lr, k=k, boundary_w=boundary_w, neighbor_k=neighbor_k,
+                                          lr=lr, k=k, neighbor_k=neighbor_k,
                                           neighbor_weight=neighbor_weight,
                                           asymmetric=True, scale_reg_weight=scale_reg_weight,
                                           exclude_from_neighbors=h_eval,
-                                          verbose=True)
+                                          cal_idx=cal_idx, cal_weight=cal_weight,
+                                          verbose=False)
     return m
 
 
@@ -277,24 +451,28 @@ def main():
     ap.add_argument("--model", default="yolov8s-world.pt")
     ap.add_argument("--coco-root", default="/data/taeho/coco_datasets")
     ap.add_argument("--data", default="configs/coco_local.yaml")
-    ap.add_argument("--gt-ann", default=None,
-                    help="기본값: {coco-root}/annotations/instances_val2017.json")
-    ap.add_argument("--calib", type=int, default=32)
-    ap.add_argument("--eval", type=int, default=500, help="flip/GT 측정용 probe 이미지 수")
+    ap.add_argument("--gt-ann", default=None)
+    ap.add_argument("--lvis-ann",
+                    default="/data/taeho/lvis_datasets/labels_dl/extracted/lvis/annotations/lvis_v1_minival.json")
+    ap.add_argument("--calib", type=int, default=256)
     ap.add_argument("--iters", type=int, default=1500)
     ap.add_argument("--recon-iters-ada", type=int, default=1000)
     ap.add_argument("--recon-iters-strong", type=int, default=2000)
     ap.add_argument("--qdrop-prob", type=float, default=0.5)
     ap.add_argument("--lr", type=float, default=1e-2)
     ap.add_argument("--k", type=int, default=5)
-    ap.add_argument("--boundary-w", type=float, default=3.0)
     ap.add_argument("--neighbor-k", type=int, default=5)
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
     ap.add_argument("--scale-reg-weight", type=float, default=10.0,
-                    help="09-08 official-data 6-seed 스윕으로 확정된 값. "
-                         "s_mult가 스칼라(구버전)가 아니라 per-channel 벡터일 때만 의미 있음 "
-                         "-- adaround.py의 AdaRoundQuantConv2d.s_mult 정의 참고.")
-    ap.add_argument("--seed", type=int, default=2)
+                    help="확정값(PROMPTCAL_CURRENT_MODEL.md §5.5/§8.2). s_mult(per-channel "
+                         "벡터, adaround.py의 AdaRoundQuantConv2d.s_mult)의 (s-1)^2 정규화 강도.")
+    ap.add_argument("--cal-weight", type=float, default=1.0,
+                    help="확정값(PROMPTCAL_CURRENT_MODEL.md §8.10). H_cal(20개)에도 S와 동일한 "
+                         "margin_loss를 직접 적용하는 가중치. 0.0=off(이전 동작).")
+    ap.add_argument("--eval-cap", type=int, default=0,
+                    help="스모크 테스트용: probe(COCO val2017/LVIS minival) 이미지 수를 이만큼으로 "
+                         "제한. 0이면 제한 없음(실제 실행 기본값 -- val2017 전체 5000장).")
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
     ap.add_argument("--torch-seed", type=int, default=0)
@@ -306,121 +484,188 @@ def main():
     torch.cuda.manual_seed_all(args.torch_seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    print(f"[determinism] torch.manual_seed={args.torch_seed}, cudnn.deterministic=True, cudnn.benchmark=False")
 
-    names = load_coco_names()
+    from lvis import LVIS
+    print(f"[lvis] loading GT {args.lvis_ann}")
+    lvis_gt = LVIS(args.lvis_ann)
+    lvis_img_ids = set(lvis_gt.get_img_ids())
+
+    coco = load_names("coco")
+    lvis_names = load_names("lvis")
     from ultralytics import YOLOWorld
-    imgs = sorted(glob.glob(os.path.join(args.coco_root, "val2017", "*.jpg")))
-    calib_paths = imgs[:args.calib]
-    probe_paths = imgs[args.calib:args.calib + args.eval]
+
+    # calib: train2017 (평가 데이터와 완전 분리)
+    calib_paths = sorted(glob.glob(os.path.join(args.coco_root, "train2017", "*.jpg")))[:args.calib]
+    print(f"[data] calib {len(calib_paths)}장 (train2017)")
+
+    # probe: val2017 전체 -- COCO-80은 5000장 다 쓰고, LVIS는 그중 minival(공식 4809장)과
+    # 겹치는 것만 채점
+    probe_paths = sorted(glob.glob(os.path.join(args.coco_root, "val2017", "*.jpg")))
+    if args.eval_cap > 0:
+        probe_paths = probe_paths[:args.eval_cap]
+    lvis_probe_paths, lvis_probe_ids = [], []
+    for p in probe_paths:
+        iid = int(os.path.basename(p).split(".")[0])
+        if iid in lvis_img_ids:
+            lvis_probe_paths.append(p); lvis_probe_ids.append(iid)
+    print(f"[data] probe {len(probe_paths)}장(val2017 전체), 그중 LVIS minival과 겹치는 "
+          f"{len(lvis_probe_paths)}장으로 LVIS 채점")
+
     calib = [preprocess(p, args.imgsz, device) for p in calib_paths]
-    # probe를 미리 리스트로 들고 있지 않는다 -- 장당 ~4.9MB로 프로세스당 고정
-    # 메모리 비용이 되어 동시 실행 가능한 seed 수를 제한하는 주범이었다
-    # (scripts/58과 동일 문제, 09-10 확인). 필요할 때 preprocess()로 다시 읽는다.
+    # probe(5000장)는 CPU에 미리 다 올려두지 않는다 -- 640x640x3 float32 기준
+    # 장당 ~4.9MB, 5000장이면 ~24.6GB인데 이게 프로세스당 고정 비용으로 깔려서
+    # 동시 실행 가능한 seed 수를 제한하는 주범이었다. 필요할 때마다
+    # preprocess()로 다시 읽는다 -- 디스크 read 속도가 빠르므로 전체 실험
+    # 시간(수 시간)에 비해 오버헤드가 무시할 수준.
+
+    coco_gt_by_path = load_coco_gt_by_path(gt_ann, probe_paths)
+    lvis_gt_by_path = load_lvis_gt_by_path(lvis_gt, lvis_probe_paths, lvis_probe_ids)
 
     rng = np.random.default_rng(args.seed)
     perm = rng.permutation(80)
-    S = perm[:40].tolist(); H_eval = perm[60:80].tolist()
+    S = perm[:40].tolist(); H_cal = perm[40:60].tolist(); H_eval = perm[60:80].tolist()
     H_eval_set = set(H_eval)
-    pidx = S
+    S_set = set(S); H_cal_set = set(H_cal)
 
-    print("[load] FP"); fp = build(YOLOWorld, args.model, names, device, calib, "fp")
+    print("[build] FP (COCO-80)")
+    fp = build(YOLOWorld, args.model, coco, device, calib, "fp")
+
     conditions = ["naive", "adaround", "qdrop", "brecq", "combined"]
-    models = {}
-    calib_time = {}
+    models, calib_time = {}, {}
     for mode in conditions:
         print(f"[build] {mode}")
         t0 = time.perf_counter()
-        models[mode] = build(YOLOWorld, args.model, names, device, calib, mode, fp=fp,
-                             iters=args.iters, pidx=pidx, lr=args.lr, k=args.k,
-                             boundary_w=args.boundary_w,
+        models[mode] = build(YOLOWorld, args.model, coco, device, calib, mode, fp=fp,
+                             iters=args.iters, pidx=S, lr=args.lr, k=args.k,
                              neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
                              scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
+                             cal_idx=(H_cal if args.cal_weight > 0 else None),
+                             cal_weight=args.cal_weight,
                              recon_iters_ada=args.recon_iters_ada,
                              recon_iters_strong=args.recon_iters_strong,
                              qdrop_prob=args.qdrop_prob)
         calib_time[mode] = time.perf_counter() - t0
-
+        print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     model_mib = quantized_weight_mib(models["adaround"].model)
 
-    print(f"\n[gt] FP sim 1회 계산(baseline 무관, 재사용) + {gt_ann} anchor 매칭 (probe {len(probe_paths)}장)")
+    # ---------------- COCO-80: FP sim 1회 계산 + GT 매칭 ----------------
+    print(f"\n[gt] COCO-80 FP sim 계산 + anchor 매칭 ({len(probe_paths)}장)")
     h_fp = SimilarityHarness(fp.model, device=device)
     grid_specs = get_grid_specs(h_fp, preprocess(probe_paths[0], args.imgsz, "cpu"))
     fp_sims = [h_fp.run_image(preprocess(p, args.imgsz, "cpu"), i).sim
               for i, p in enumerate(probe_paths)]
     h_fp.close()
-    gt_by_path = load_gt_by_path(gt_ann, probe_paths)
-    gt_targets = build_gt_targets(fp_sims, probe_paths, gt_by_path, grid_specs, args.imgsz)
-    n_gt = sum(len(t) for t in gt_targets)
-    print(f"  grid_specs={grid_specs}, 매칭된 GT anchor 수={n_gt}")
+    coco_gt_targets = build_gt_targets(fp_sims, probe_paths, coco_gt_by_path, grid_specs, args.imgsz)
+    n_coco_gt = sum(len(t) for t in coco_gt_targets)
+    print(f"  COCO GT anchor 수={n_coco_gt}")
 
-    print(f"\n[flip] H_eval flip(masked) + Top-1 flip(표준, unmasked) 측정")
-    flip_results = {}
-    std_flip_results = {}
-    gt_results = {}
+    results = {}
     for mode in conditions:
         h_q = SimilarityHarness(models[mode].model, device=device)
         q_sims = [h_q.run_image(preprocess(p, args.imgsz, "cpu"), i).sim
                  for i, p in enumerate(probe_paths)]
         h_q.close()
-        flip_results[mode], n1 = group_flip(fp_sims, q_sims, H_eval)
-        std_flip_results[mode], n2 = standard_flip(fp_sims, q_sims)
-        gt_results[mode] = gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set)
-        print(f"  {mode:>10}: H_eval_flip={flip_results[mode]:.2f}%(n={n1})  "
-              f"Top1_flip={std_flip_results[mode]:.2f}%(n={n2})  "
-              f"GT_MRR={gt_results[mode]['mrr']:.4f}  GT_R@1={gt_results[mode]['r1']:.4f}  "
-              f"lost={gt_results[mode]['lost']}  gained={gt_results[mode]['gained']}  "
-              f"UPIR={gt_results[mode]['upir']:.2f}%(n={gt_results[mode]['upir_n']})")
-        del q_sims
-        free_cpu_mem()
+        heval_flip, n1 = group_flip(fp_sims, q_sims, H_eval)
+        top1_flip, n2 = standard_flip(fp_sims, q_sims)
+        coco_gt_res = gt_metrics_for_method(fp_sims, q_sims, coco_gt_targets, H_eval_set,
+                                            S_set=S_set, H_cal_set=H_cal_set)
+        del q_sims          # measure_ap()이 model.val() 내부에서 DataLoader worker를
+        free_cpu_mem()      # fork하므로, 그 전에 이 조건의 큰 q_sims부터 비워둔다
+        (coco_ap, coco_ap50), coco_pc = measure_ap(models[mode], args.data, args.imgsz, args.device)
+        s_ap = subset_map(coco_pc, S); heval_ap = subset_map(coco_pc, H_eval)
+        lrg = coco_gt_res["lost_rate_by_group"]; lbg = coco_gt_res["lost_by_group"]; dbg = coco_gt_res["denom_by_group"]
+        print(f"  [COCO-80][{mode}] AP={coco_ap:.2f} S_AP={s_ap:.2f} H_eval_AP={heval_ap:.2f} "
+              f"Heval_flip={heval_flip:.2f}% Top1_flip={top1_flip:.2f}% "
+              f"GT_MRR={coco_gt_res['mrr']:.4f} GT_R@1={coco_gt_res['r1']:.4f} "
+              f"lost={coco_gt_res['lost']} gained={coco_gt_res['gained']} lateral={coco_gt_res['lateral']} "
+              f"corrective_rate={coco_gt_res['corrective_rate']:.2f}% UPIR={coco_gt_res['upir']:.2f}%")
+        print(f"    [lost by group] S={lbg['S']}/{dbg['S']}({lrg['S']:.2f}%) "
+              f"H_cal={lbg['H_cal']}/{dbg['H_cal']}({lrg['H_cal']:.2f}%) "
+              f"H_eval={lbg['H_eval']}/{dbg['H_eval']}({lrg['H_eval']:.2f}%)")
+        results[mode] = dict(coco_ap=coco_ap, s_ap=s_ap, heval_ap=heval_ap, heval_flip=heval_flip,
+                             top1_flip=top1_flip, coco_gt=coco_gt_res, calib_time=calib_time[mode],
+                             lost_rate_by_group=lrg)
 
-    results = {}
-    print(f"\n[ap] FP32 ..."); results["FP32"] = measure_ap(fp, args.data, args.imgsz, args.device)
+    # FP32 COCO-80 AP -- 반드시 fp의 vocabulary를 LVIS로 바꾸기 전에 재야 함
+    # (바꾼 뒤 COCO 80-class validator에 넣으면 confusion matrix index가 깨짐)
+    (fp_coco_ap, fp_coco_ap50), _ = measure_ap(fp, args.data, args.imgsz, args.device)
+
+    # ---------------- LVIS-1203(minival): 이식, 스트리밍(이미지 1장씩) ----------------
+    print(f"\n[switch] 전부 LVIS-1203 vocab으로 이식 (minival {len(lvis_probe_paths)}장)")
+    switch_vocab(fp, lvis_names, device)
     for mode in conditions:
-        print(f"[ap] {mode} ...")
-        results[mode] = measure_ap(models[mode], args.data, args.imgsz, args.device)
+        switch_vocab(models[mode], lvis_names, device)
+
+    h_fp = SimilarityHarness(fp.model, device=device)
+    lvis_grid_specs = get_grid_specs(h_fp, preprocess(lvis_probe_paths[0], args.imgsz, "cpu"))
+    h_models = {mode: SimilarityHarness(models[mode].model, device=device) for mode in conditions}
+
+    print(f"  [streaming] flip/GT_MRR/R@1/lost/gained 계산 중 ({len(lvis_probe_paths)}장 x {len(conditions)}조건)")
+    lvis_stream_res = compute_lvis_flip_gt_streaming(h_fp, h_models, lvis_probe_paths,
+                                                     lvis_gt_by_path, lvis_grid_specs, args.imgsz)
+    h_fp.close()
+    for h_q in h_models.values():
+        h_q.close()
+    n_lvis_gt = lvis_stream_res[conditions[0]]["n"]
+    print(f"  LVIS GT anchor 수={n_lvis_gt}")
+    for mode in conditions:
+        r = lvis_stream_res[mode]
+        print(f"  [LVIS-flip/GT][{mode}] Top1_flip={r['top1_flip']:.2f}%(n={r['n_flip']}) "
+              f"GT_MRR={r['mrr']:.4f} GT_R@1={r['r1']:.4f} lost={r['lost']} gained={r['gained']} "
+              f"lateral={r['lateral']} corrective_rate={r['corrective_rate']:.2f}%")
+
+    for mode in conditions:
+        print(f"[predict+AP] {mode} (minival {len(lvis_probe_paths)}장) ...")
+        preds = predict_lvis_results(models[mode], lvis_probe_paths, lvis_probe_ids, args.imgsz, device)
+        lvis_ap_res = run_lvis_eval(lvis_gt, preds, lvis_probe_ids)
+        print(f"  [LVIS-AP][{mode}] AP={lvis_ap_res.get('AP',0):.4f} AP50={lvis_ap_res.get('AP50',0):.4f} "
+              f"APr={lvis_ap_res.get('APr',0):.4f} APc={lvis_ap_res.get('APc',0):.4f} "
+              f"APf={lvis_ap_res.get('APf',0):.4f}")
+        r = lvis_stream_res[mode]
+        results[mode].update(lvis_ap=lvis_ap_res.get("AP", 0.0), lvis_ap50=lvis_ap_res.get("AP50", 0.0),
+                             lvis_apr=lvis_ap_res.get("APr", 0.0), lvis_apc=lvis_ap_res.get("APc", 0.0),
+                             lvis_apf=lvis_ap_res.get("APf", 0.0),
+                             lvis_top1_flip=r["top1_flip"],
+                             lvis_gt=dict(mrr=r["mrr"], r1=r["r1"], lost=r["lost"], gained=r["gained"],
+                                         lateral=r["lateral"], corrective_rate=r["corrective_rate"]))
+
+    print("\n[predict+AP] FP32 (참고, LVIS) ...")
+    preds_fp = predict_lvis_results(fp, lvis_probe_paths, lvis_probe_ids, args.imgsz, device)
+    fp_lvis = run_lvis_eval(lvis_gt, preds_fp, lvis_probe_ids)
 
     print("\n" + "=" * 100)
-    print(f" 전체 80-class AP (seed {args.seed})")
+    print(f" 공식 데이터 설정(calib=train2017 {len(calib_paths)}장, LVIS=공식 minival) -- seed {args.seed}")
     print("=" * 100)
-    print(f"{'':>10} | {'mAP50-95':>9} | {'mAP50':>9}")
-    for name in ["FP32"] + conditions:
-        (m, m50), _ = results[name]
-        print(f"{name:>10} | {m:>9.2f} | {m50:>9.2f}")
+    print(f"{'':>10} | {'COCO AP':>8} | {'S_AP':>7} | {'H_eval_AP':>9} | {'LVIS AP':>8} | {'APr':>6} | {'APc':>6} | {'APf':>6}")
+    print(f"{'FP32':>10} | {fp_coco_ap:>8.2f} | {'-':>7} | {'-':>9} | {fp_lvis.get('AP',0):>8.4f} | "
+          f"{fp_lvis.get('APr',0):>6.4f} | {fp_lvis.get('APc',0):>6.4f} | {fp_lvis.get('APf',0):>6.4f}")
+    for mode in conditions:
+        r = results[mode]
+        print(f"{mode:>10} | {r['coco_ap']:>8.2f} | {r['s_ap']:>7.2f} | {r['heval_ap']:>9.2f} | "
+              f"{r['lvis_ap']:>8.4f} | {r['lvis_apr']:>6.4f} | {r['lvis_apc']:>6.4f} | {r['lvis_apf']:>6.4f}")
 
     print("\n" + "=" * 100)
-    print(f" S vs H_eval subset mAP + flip 지표 (seed {args.seed})")
+    print(" flip / GT / UPIR / 비용")
     print("=" * 100)
-    print(f"{'':>10} | {'S mAP':>8} | {'H_eval mAP':>10} | {'Heval_flip':>10} | {'Top1_flip':>9}")
-    for name in conditions:
-        _, pc = results[name]
-        print(f"{name:>10} | {subset_map(pc, S):>8.2f} | {subset_map(pc, H_eval):>10.2f} | "
-              f"{flip_results[name]:>9.2f}% | {std_flip_results[name]:>8.2f}%")
+    print(f"{'':>10} | {'Heval_flip':>10} | {'Top1_flip':>9} | {'UPIR':>6} | {'lost':>5} | "
+          f"{'CorrRate':>8} | {'LVIS_flip':>9} | {'LVIS_lost':>9} | {'L_CorrR':>8} | {'calib(s)':>9}")
+    for mode in conditions:
+        r = results[mode]
+        print(f"{mode:>10} | {r['heval_flip']:>9.2f}% | {r['top1_flip']:>8.2f}% | "
+              f"{r['coco_gt']['upir']:>5.2f}% | {r['coco_gt']['lost']:>5} | "
+              f"{r['coco_gt']['corrective_rate']:>7.2f}% | "
+              f"{r['lvis_top1_flip']:>8.2f}% | {r['lvis_gt']['lost']:>9} | "
+              f"{r['lvis_gt']['corrective_rate']:>7.2f}% | {r['calib_time']:>9.1f}")
 
     print("\n" + "=" * 100)
-    print(f" GT 기반 지표 (seed {args.seed}, GT anchor n={n_gt})")
+    print(" lost 그룹별 분해 (S/H_cal/H_eval) -- \"lost가 H_eval에 몰리는가\" 가설 확인용")
     print("=" * 100)
-    print(f"{'':>10} | {'GT_MRR':>7} | {'GT_R@1':>7} | {'lost':>6} | {'gained':>6} | {'UPIR':>7}")
-    for name in conditions:
-        g = gt_results[name]
-        print(f"{name:>10} | {g['mrr']:>7.4f} | {g['r1']:>7.4f} | {g['lost']:>6} | "
-              f"{g['gained']:>6} | {g['upir']:>6.2f}%")
+    print(f"{'':>10} | {'lost_rate_S':>11} | {'lost_rate_H_cal':>15} | {'lost_rate_H_eval':>16}")
+    for mode in conditions:
+        lrg = results[mode]["lost_rate_by_group"]
+        print(f"{mode:>10} | {lrg['S']:>10.2f}% | {lrg['H_cal']:>14.2f}% | {lrg['H_eval']:>15.2f}%")
 
-    print("\n" + "=" * 100)
-    print(f" 비용/크기")
-    print("=" * 100)
-    print(f"  양자화 weight 이론 크기: {model_mib:.2f} MiB (모든 W8A8 방법 공통, naive 제외 동일 구조)")
-    print(f"  {'':>10} | {'calib 시간(s)':>13}")
-    for name in conditions:
-        print(f"  {name:>10} | {calib_time[name]:>13.1f}")
-
-    print("\n판정:")
-    print("  Combined H_eval mAP > QDrop/BRECQ H_eval mAP -> AdaRound뿐 아니라 더 강한")
-    print("     reconstruction-based baseline까지 이긴다.")
-    print("  Top1_flip(표준, AP와 같은 배포 조건)이 Combined에서도 낮으면 -> H_eval flip에서")
-    print("     본 반전이 masking 정의 때문이었다는 게 확인됨(진짜 결정 일치도는 개선).")
-    print("  GT_MRR/R@1이 Combined에서 가장 높고 UPIR이 가장 낮으면 -> 실제 정답 기준으로도")
-    print("     일관되게 최선(논문 핵심 주장 가장 강하게 뒷받침).")
+    print(f"\n이론적 모델 크기: {model_mib:.2f} MiB")
 
 
 if __name__ == "__main__":
