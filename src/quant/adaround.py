@@ -43,7 +43,7 @@ def h_alpha(alpha):
 
 class AdaRoundQuantConv2d(nn.Module):
     """기존 QuantConv2d를 AdaRound 반올림으로 확장."""
-    def __init__(self, qconv):
+    def __init__(self, qconv, channelwise_smult=True):
         super().__init__()
         self.conv = qconv.conv               # 원본 Conv2d (weight 고정)
         self.w_bits = qconv.w_bits
@@ -61,7 +61,18 @@ class AdaRoundQuantConv2d(nn.Module):
         # torch.ones(N)은 기본 CPU 텐서라 명시적으로 device를 맞춰야 함 -- 스칼라
         # 버전(torch.tensor(1.0))은 0-dim이라 cuda 텐서와 섞여도 PyTorch가 암묵적으로
         # 허용해줬지만(스칼라 특례), 벡터는 그 특례가 없어 device mismatch로 즉시 드러남.
-        self.s_mult = nn.Parameter(torch.ones(self.conv.in_channels, device=self.conv.weight.device))
+        # 09-15 claim4 대조 실험: baseline(naive/AdaRound/QDrop/BRECQ)은 전부
+        # activation을 per-tensor(ActObserver의 scale이 0-dim)로 양자화하는데
+        # Combined만 s_mult로 per-channel 자유도를 쓰는 게 unisolated confound라는
+        # 지적 -- 배포 시에도 표준 INT8 커널은 per-channel activation dequant를
+        # 지원 안 해서 s_mult를 그대로 못 쓴다는 문제도 겹침. channelwise_smult=False로
+        # 두면 s_mult를 다시 conv당 스칼라(0-dim)로 만들어 두 baseline과 동일한
+        # granularity로 맞춰서 "차원(dimensionality) 자유도"만 격리해 비교할 수 있다.
+        self.channelwise_smult = channelwise_smult
+        if channelwise_smult:
+            self.s_mult = nn.Parameter(torch.ones(self.conv.in_channels, device=self.conv.weight.device))
+        else:
+            self.s_mult = nn.Parameter(torch.tensor(1.0, device=self.conv.weight.device))
         self.use_smult = False               # True일 때만 s_mult 적용(scale 학습 모드)
 
         w = self.conv.weight.detach()
@@ -115,16 +126,18 @@ class AdaRoundQuantConv2d(nn.Module):
         return r.mean() if reduction == "mean" else r.sum()
 
 
-def convert_to_adaround(model_module):
-    """model 하위 QuantConv2d를 AdaRoundQuantConv2d로 교체(in-place). 교체 개수 반환."""
+def convert_to_adaround(model_module, channelwise_smult=True):
+    """model 하위 QuantConv2d를 AdaRoundQuantConv2d로 교체(in-place). 교체 개수 반환.
+    channelwise_smult=False면 s_mult을 per-tensor 스칼라로 생성(claim4 대조 실험용,
+    §AdaRoundQuantConv2d 주석 참고)."""
     from .fake_quant import QuantConv2d
     count = 0
     for name, child in list(model_module.named_children()):
         if isinstance(child, QuantConv2d):
-            setattr(model_module, name, AdaRoundQuantConv2d(child))
+            setattr(model_module, name, AdaRoundQuantConv2d(child, channelwise_smult=channelwise_smult))
             count += 1
         else:
-            count += convert_to_adaround(child)
+            count += convert_to_adaround(child, channelwise_smult=channelwise_smult)
     return count
 
 

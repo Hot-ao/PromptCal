@@ -69,8 +69,17 @@ def preprocess(path, imgsz, device):
 
 
 def switch_vocab(model, names, device):
+    # cache_clip_model=False를 쓰려고 내부 model.model.set_classes를 직접
+    # 호출하는데(YOLOWorld.set_classes wrapper는 이 인자를 안 받음), 그러면
+    # wrapper가 하는 model.model.names 갱신/predictor 리셋이 같이 스킵된다.
+    # 지금은 verbose=False+예측 후처리가 nc=0으로 안전하게 동작해서 수치
+    # 결과에는 영향 없지만(09-16 확인, pipeline/run_comparison.py와 동일 버그),
+    # 시각화/verbose를 켜면 이름-인덱스가 어긋나 IndexError가 날 수 있어
+    # 직접 맞춰준다(09-16 수정).
     model.model.to("cpu")
     model.model.set_classes(names, cache_clip_model=False)
+    model.model.names = list(names)
+    model.predictor = None
     model.model.to(device).eval()
 
 
@@ -83,8 +92,14 @@ def measure_ap(model, data, imgsz, device):
     metrics = model.val(data=data, imgsz=imgsz, device=device, save_json=False,
                         verbose=False, workers=0)
     overall = float(metrics.box.map) * 100, float(metrics.box.map50) * 100
-    per_class = dict(zip(metrics.box.ap_class_index.tolist(),
-                         (metrics.box.maps if hasattr(metrics.box, "maps") else metrics.box.all_ap[:, 0]).tolist()))
+    # 09-16 버그 수정: metrics.box.maps는 이미 클래스 id로 직접 인덱싱된
+    # nc-길이 배열이라(ultralytics.utils.metrics.Metric.maps 참고) ap_class_index와
+    # zip으로 "위치" 짝짓기하면 안 된다 -- ap_class_index가 [0,1,...,nc-1] 풀레인지일
+    # 때만 우연히 맞는다(pipeline/run_comparison.py와 동일 버그). 클래스별로 직접
+    # 인덱싱해야 맞다. (또한 구버전 호환용 fallback이던 all_ap[:, 0]은 AP50이라
+    # map(AP@0.5:0.95)과 지표 자체가 달라서 같이 제거 -- 현재 ultralytics(8.4.121)는
+    # .maps를 항상 갖고 있어 불필요.)
+    per_class = {int(c): float(metrics.box.maps[c]) for c in metrics.box.ap_class_index}
     return overall, per_class
 
 

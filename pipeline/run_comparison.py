@@ -90,8 +90,16 @@ def preprocess(path, imgsz, device):
 
 
 def switch_vocab(model, names, device):
+    # cache_clip_model=False를 쓰려고 내부 model.model.set_classes를 직접
+    # 호출하는데(YOLOWorld.set_classes wrapper는 이 인자를 안 받음), 그러면
+    # wrapper가 하는 model.model.names 갱신/predictor 리셋이 같이 스킵된다.
+    # 지금은 verbose=False+예측 후처리가 nc=0으로 안전하게 동작해서 수치
+    # 결과에는 영향 없지만(09-16 확인), 시각화/verbose를 켜면 이름-인덱스가
+    # 어긋나 IndexError가 날 수 있어 직접 맞춰준다(09-16 수정).
     model.model.to("cpu")
     model.model.set_classes(names, cache_clip_model=False)
+    model.model.names = list(names)
+    model.predictor = None
     model.model.to(device).eval()
 
 
@@ -104,8 +112,13 @@ def measure_ap(model, data, imgsz, device):
     metrics = model.val(data=data, imgsz=imgsz, device=device, save_json=False,
                         verbose=False, workers=0)
     overall = float(metrics.box.map) * 100, float(metrics.box.map50) * 100
-    per_class = dict(zip(metrics.box.ap_class_index.tolist(),
-                         (metrics.box.maps if hasattr(metrics.box, "maps") else metrics.box.all_ap[:, 0]).tolist()))
+    # 09-16 버그 수정: metrics.box.maps는 이미 클래스 id로 직접 인덱싱된
+    # nc-길이 배열이라(ultralytics.utils.metrics.Metric.maps 참고) ap_class_index와
+    # zip으로 "위치" 짝짓기하면 안 된다 -- ap_class_index가 [0,1,...,nc-1] 풀레인지일
+    # 때만 우연히 맞는다. 클래스별로 직접 인덱싱해야 맞다. (또한 구버전 호환용
+    # fallback이던 all_ap[:, 0]은 AP50이라 map(AP@0.5:0.95)과 지표 자체가 달라서
+    # 같이 제거 -- 현재 ultralytics(8.4.121)는 .maps를 항상 갖고 있어 불필요.)
+    per_class = {int(c): float(metrics.box.maps[c]) for c in metrics.box.ap_class_index}
     return overall, per_class
 
 
@@ -411,7 +424,8 @@ def quantized_weight_mib(model_module):
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
           lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=10.0,
           h_eval=None, cal_idx=None, cal_weight=1.0,
-          recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5):
+          recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5,
+          channelwise_smult=True, identity_aware_margin=False):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -434,7 +448,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         convert_to_adaround(m.model)
         optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong, verbose=False)
     elif mode == "combined":
-        convert_to_adaround(m.model)
+        convert_to_adaround(m.model, channelwise_smult=channelwise_smult)
         optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
         optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                           lr=lr, k=k, neighbor_k=neighbor_k,
@@ -442,6 +456,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           asymmetric=True, scale_reg_weight=scale_reg_weight,
                                           exclude_from_neighbors=h_eval,
                                           cal_idx=cal_idx, cal_weight=cal_weight,
+                                          identity_aware_margin=identity_aware_margin,
                                           verbose=False)
     return m
 
@@ -469,9 +484,22 @@ def main():
     ap.add_argument("--cal-weight", type=float, default=1.0,
                     help="확정값(PROMPTCAL_CURRENT_MODEL.md §8.10). H_cal(20개)에도 S와 동일한 "
                          "margin_loss를 직접 적용하는 가중치. 0.0=off(이전 동작).")
+    ap.add_argument("--smult-per-tensor", action="store_true",
+                    help="09-15 claim4 대조 실험: Combined의 s_mult을 per-channel 벡터 대신 "
+                         "conv당 스칼라(baseline과 동일 granularity)로 강제. 기본은 확정 설계인 "
+                         "per-channel(off) 유지.")
+    ap.add_argument("--identity-aware-margin", action="store_true",
+                    help="09-15 claim5 ablation: margin_loss가 fp_top/q_top을 각자 독립적으로 "
+                         "topk해서 class identity 없이 정렬된 값끼리만 비교(top-1/top-2가 값을 "
+                         "맞바꿔도 loss=0)하는 blind spot 검증용. True면 fp_idx로 sim_q를 gather해서 "
+                         "identity를 고정한다(promptcal.py의 margin_loss 참고). 기본은 기존 동작(off).")
     ap.add_argument("--eval-cap", type=int, default=0,
-                    help="스모크 테스트용: probe(COCO val2017/LVIS minival) 이미지 수를 이만큼으로 "
-                         "제한. 0이면 제한 없음(실제 실행 기본값 -- val2017 전체 5000장).")
+                    help="스모크 테스트용: flip/GT/UPIR/lost 등을 계산하는 probe(COCO val2017/LVIS "
+                         "minival) 이미지 수를 이만큼으로 제한. 0이면 제한 없음(실제 실행 기본값 -- "
+                         "val2017 전체 5000장). 09-16 확인: COCO_AP/S_AP/H_eval_AP(measure_ap, "
+                         "--data yaml의 고정 val split 사용)에는 이 옵션이 적용되지 않는다 -- AP는 "
+                         "항상 --data가 가리키는 전체 val 세트로 측정됨(AP eval 자체가 병목이 아니라 "
+                         "일부러 줄이지 않음, PROMPTCAL_CLAIMS_2026-09-15.md claim10 참고).")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
@@ -543,7 +571,9 @@ def main():
                              cal_weight=args.cal_weight,
                              recon_iters_ada=args.recon_iters_ada,
                              recon_iters_strong=args.recon_iters_strong,
-                             qdrop_prob=args.qdrop_prob)
+                             qdrop_prob=args.qdrop_prob,
+                             channelwise_smult=not args.smult_per_tensor,
+                             identity_aware_margin=args.identity_aware_margin)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     model_mib = quantized_weight_mib(models["adaround"].model)
@@ -635,6 +665,11 @@ def main():
 
     print("\n" + "=" * 100)
     print(f" 공식 데이터 설정(calib=train2017 {len(calib_paths)}장, LVIS=공식 minival) -- seed {args.seed}")
+    if args.eval_cap > 0:
+        print(f" 주의: --eval-cap={args.eval_cap}은 COCO_AP/S_AP/H_eval_AP(measure_ap, --data yaml의 "
+              f"고정 val split 사용)에는 적용 안 됨 -- 항상 전체 val 세트로 측정됨. "
+              f"LVIS_AP/APr/APc/APf는 probe_paths에서 파생돼 --eval-cap이 적용됨(위 LVIS 채점 "
+              f"{len(lvis_probe_paths)}장 참고). flip/GT/UPIR/lost(아래 두 번째 표)도 --eval-cap 적용됨.")
     print("=" * 100)
     print(f"{'':>10} | {'COCO AP':>8} | {'S_AP':>7} | {'H_eval_AP':>9} | {'LVIS AP':>8} | {'APr':>6} | {'APc':>6} | {'APf':>6}")
     print(f"{'FP32':>10} | {fp_coco_ap:>8.2f} | {'-':>7} | {'-':>9} | {fp_lvis.get('AP',0):>8.4f} | "

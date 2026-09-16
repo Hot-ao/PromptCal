@@ -912,8 +912,18 @@ neighbor-hinge가 무효화된 상태라 참고하지 말 것.*
 - **`pipeline/` 디렉토리**: 09-08~09-09에 per-channel `s_mult`,
   `scale_reg_weight` 정규화, H_eval 버그 수정까지 전부 동기화 완료
   (`src/quant/{adaround,promptcal}.py`와 diff 없음 확인, 09-09).
-  calibration/평가 데이터 소스만 아직 예전 방식(val2017 슬라이스) — 공식
-  데이터 설정으로는 이식 안 함.
+  **09-15 갱신**: `pipeline/run_comparison.py`를
+  `scripts/58_full_baseline_official_data.py` 기준으로 전면 포팅해서
+  calibration(train2017)/COCO-80 eval(val2017 전체)/LVIS eval(공식
+  `lvis_v1_minival.json`) 전부 공식 데이터 설정으로 맞췄고, `--cal-weight`
+  기본값도 확정값(1.0)으로 설정. 더 이상 예전 val2017 슬라이스 방식이
+  아니다 — 자세한 내용과 사용법은 `pipeline/README.md` 참고.
+- **09-15 이후 claim 1~6 관련 발견·변경 사항**(H_eval anchor-선정 리크
+  수정, per-tensor activation 대조 실험, margin_loss identity-aware
+  ablation 등)은 이 문서가 아니라 별도 문서
+  `PROMPTCAL_CLAIMS_2026-09-15.md`에 정리한다 — 아직 "확정값" 지위를
+  얻지 못한, 검증 중인 변경들이라 이 문서(§8.1의 확정 하이퍼파라미터)와는
+  분리해서 추적한다.
 
 ---
 
@@ -932,6 +942,8 @@ neighbor-hinge가 무효화된 상태라 참고하지 말 것.*
 | 공식 데이터 5조건 전체 검증 스크립트 | `scripts/58_full_baseline_official_data.py` |
 | scale_reg_weight 스윕 스크립트 | `scripts/59_rw_sweep_official_data.py` |
 | 원본 결과 로그 | `runs/58_official_data/*.log`, `runs/59_rw_sweep/*.log` |
+| `pipeline/` 디렉토리(공식 데이터 설정, 09-15 포팅 완료) | `pipeline/run_comparison.py`, `pipeline/README.md` |
+| 09-15 이후 claim 1~6 검증/변경 사항(미확정, 진행 중) | `PROMPTCAL_CLAIMS_2026-09-15.md` |
 
 ---
 

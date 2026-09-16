@@ -1,7 +1,9 @@
 # 코어 — Ultralytics가 torch/torchvision/opencv 등을 함께 끌어온다.
 # GPU 환경의 CUDA 버전에 맞는 torch가 이미 있으면, ultralytics 설치 시
 # torch를 덮어쓰지 않도록 torch를 먼저 설치한 뒤 --no-deps 고려.
-ultralytics>=8.3.0
+# 09-16: >=8.3.0으로 열어뒀던 걸 검증된 버전으로 고정 -- 이후 버전(예:
+# 8.4.152)에서 fuse()가 바뀌어(is_qat 분기, Detect.fuse()) 동작이 달라질 수 있음.
+ultralytics==8.4.121
 
 # COCO/LVIS AP 계산 (size-stratified AP도 여기서 나온다)
 pycocotools>=2.0.7

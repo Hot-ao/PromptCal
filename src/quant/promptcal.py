@@ -33,12 +33,26 @@ def decision_loss(sim_q, sim_fp):
     return F.cross_entropy(sim_q, target)
 
 
-def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
+def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0, identity_aware=False):
     """top-(k+1) 인접 pairwise margin을 FP와 맞춤. top-k 경계 margin에 가중.
-    sim_*: [anchors, P] pre-sigmoid 유사도. confident anchor만 넣어 호출."""
+    sim_*: [anchors, P] pre-sigmoid 유사도. confident anchor만 넣어 호출.
+
+    identity_aware=False(기본, 기존 동작): fp_top/q_top을 각자 독립적으로
+    topk해서 정렬된 값끼리만 비교한다 -- 어느 class가 그 순위를 차지했는지는
+    버려진다. 09-15 claim5 지적: top-1/top-2가 서로 값을 맞바꾸는(class identity가
+    뒤집히는) flip이 일어나도 정렬 후 margin 패턴 자체는 동일하면 loss=0이라,
+    이 loss가 막으려는 대상(flip)이 목적함수에 아예 안 보이는 경로가 있다.
+    identity_aware=True: fp_top의 index로 sim_q를 gather해서 동일 class 위치의
+    값끼리 비교(q_top이 더 이상 정렬돼있지 않음 -- Q에서 순서가 FP와 달라지면
+    q_m이 음수가 되면서 실제로 벌점을 받는다). 단일 변수 ablation용(opt-in);
+    v2의 decision_loss(완전 discrete top-1 매칭)가 과거 anti-transfer를 낸 전례가
+    있어 개선을 보장하진 않고 검증 목적."""
     kk = min(k + 1, sim_fp.shape[-1])
-    fp_top, _ = sim_fp.topk(kk, dim=-1)
-    q_top, _ = sim_q.topk(kk, dim=-1)
+    fp_top, fp_idx = sim_fp.topk(kk, dim=-1)
+    if identity_aware:
+        q_top = sim_q.gather(-1, fp_idx)
+    else:
+        q_top, _ = sim_q.topk(kk, dim=-1)
     fp_m = fp_top[:, :-1] - fp_top[:, 1:]        # [A, kk-1]
     q_m = q_top[:, :-1] - q_top[:, 1:]
     w = torch.ones(kk - 1, device=sim_fp.device)
@@ -346,7 +360,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       asymmetric=False, scale_reg_weight=0.0,
                                       exclude_from_neighbors=None,
                                       cal_idx=None, cal_weight=1.0,
-                                      conf_thres=0.25, verbose=True, eval_hook=None):
+                                      conf_thres=0.25, verbose=True, eval_hook=None,
+                                      identity_aware_margin=False):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -458,6 +473,15 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     pidx = torch.tensor(prompt_idx, device=device)
     cal_idx_list = list(cal_idx) if cal_idx else []
     cidx = torch.tensor(cal_idx_list, device=device, dtype=torch.long) if cal_idx_list else None
+    # 09-15 버그 수정: confident anchor 선정을 80열(COCO-80) 전체 기준
+    # sim_fp.sigmoid().max(-1)으로 하면, FP가 H_eval class를 1등으로 확신한
+    # anchor까지 aidx에 섞여 들어가서 그 anchor의 S/H_cal 컬럼 값이 margin_loss에
+    # 쓰인다. group_flip(masked Heval_flip)도 정확히 같은 "80열 전체 top-1 ∈
+    # H_eval" 기준으로 anchor를 고르므로, 두 계산이 같은 anchor 풀을 공유해
+    # 결합이 특히 크다(H_eval이 "최적화에 한 번도 안 쓰인다"는 원칙이 §5.4.1의
+    # neighbor 리크와는 별개로 여기서도 새고 있었음). train_cols(S∪H_cal)만
+    # 놓고 confidence를 재서 anchor 선정 자체를 H_eval과 무관하게 만든다.
+    train_cols = pidx if cidx is None else torch.cat([pidx, cidx])
 
     if verbose:
         cal_msg = f", cal {len(cal_idx_list)}개(cal_weight={cal_weight})" if cidx is not None else ""
@@ -469,7 +493,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     for it in range(iters):
         j = it % n
         t = calib_tensors[j].to(device); sim_fp = fp_sims[j]
-        prob = sim_fp.sigmoid(); mp, _ = prob.max(-1); conf = mp > conf_thres
+        prob = sim_fp[:, train_cols].sigmoid(); mp, _ = prob.max(-1); conf = mp > conf_thres
         if conf.sum() == 0:
             continue
         aidx = conf.nonzero(as_tuple=True)[0]
@@ -480,9 +504,11 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             B, P, H, W = q_cap.buf[i].shape
             parts.append(q_cap.buf[i].reshape(B, P, H*W))
         sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
-        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w)
+        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w,
+                         identity_aware=identity_aware_margin)
         if cidx is not None:
-            ml_cal = margin_loss(sim_q[aidx][:, cidx], sim_fp[aidx][:, cidx], k=k, boundary_w=boundary_w)
+            ml_cal = margin_loss(sim_q[aidx][:, cidx], sim_fp[aidx][:, cidx], k=k, boundary_w=boundary_w,
+                                 identity_aware=identity_aware_margin)
             ml = ml + cal_weight * ml_cal
         if asymmetric:
             # 경쟁자가 FP보다 강해지는 방향(sim_q > sim_fp)만 억제. 약해지는
