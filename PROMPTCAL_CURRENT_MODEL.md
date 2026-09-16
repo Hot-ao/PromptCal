@@ -1,11 +1,23 @@
-# Combined 모델 현재 설계 전체 문서 (2026-09-08 작성, 2026-09-12 갱신)
+# Combined 모델 현재 설계 전체 문서 (2026-09-08 작성, 2026-09-16 갱신)
 
 `PROMPTCAL_HOW_IT_WORKS.md`는 처음 6-seed 검증(COCO-80 vocabulary, scalar
 `s_mult`, calib=32)까지의 파이프라인을 중심으로 쓰여 있고, 이후의 per-channel
 재설계·공식 데이터 검증은 §5.7로 덧붙인 상태라 전체 그림을 한 번에 보기
-어렵다. 이 문서는 **지금(09-12) 실제로 쓰는 최종 설계**를 구조·코드·평가지표·
+어렵다. 이 문서는 **지금(09-16) 실제로 쓰는 최종 설계**를 구조·코드·평가지표·
 성능결과 순으로 처음부터 다시 정리한다. 코드/결과를 인용할 때마다 파일 경로를
 작게 같이 적는다.
+
+> **09-16 설계 변경 (중요)**: `s_mult`을 **per-channel 벡터에서 conv당
+> per-tensor 스칼라로 되돌렸고**(`--smult-per-tensor`, 아래 §5.2에 이유
+> 있음), `margin_loss`에 **identity-aware 비교**를 추가했다
+> (`--identity-aware-margin`, §5.3). 이 문서의 §5.2가 서술하는 "per-channel
+> 벡터가 최종 설계"라는 결론은 **더 이상 최종이 아니다** — 아래에 남겨둔
+> per-channel 서사는 "왜 처음에 벡터로 갔는가"의 역사적 맥락으로 유효하고,
+> per-tensor로 되돌아간 이유(baseline과의 activation quantization granularity
+> 공정성 + 표준 INT8 엔진 배포 가능성)는 성능이 아니라 방법론적 필연이다.
+> §8.1의 확정 결과 표는 이미 새 설계(per-tensor + identity-aware) 기준으로
+> 교체했다. 전체 검증 경위(claim 1~10)는
+> [`PROMPTCAL_CLAIMS_2026-09-15.md`](PROMPTCAL_CLAIMS_2026-09-15.md) 참고.
 
 ---
 
@@ -142,6 +154,20 @@ vocabulary로 일반성을 검증하다가 구조적 한계가 드러났다:
 스칼라(`torch.tensor(1.0)`, 0-dim)는 CUDA 텐서와 섞여도 PyTorch가 암묵적으로
 허용해줘서 이 버그가 숨어 있었다.)
 
+**09-16, per-tensor로 되돌아감**: 위 서사는 "성능만 보면" per-channel이
+맞는 선택이었다. 그런데 4개 baseline(naive/AdaRound/QDrop/BRECQ)은 전부
+activation을 per-tensor로 양자화하는데 Combined만 `s_mult`로 per-channel
+자유도를 추가로 쓰는 건 **baseline과의 unisolated confound**이고, 표준
+INT8 추론 엔진 대부분이 per-channel activation dequant를 지원하지 않아서
+**실제 배포 시 이 이점을 그대로 못 쓴다**는 지적을 받았다
+(`PROMPTCAL_CLAIMS_2026-09-15.md` claim4). `channelwise_smult=False`로
+다시 스칼라로 만들고 6-seed로 검증한 결과, **baseline 대비 우위는 여전히
+견고하게 유지됨**을 확인해서(§8.1 표 참고) per-tensor를 새 확정값으로
+채택했다 — 이건 성능이 더 좋아서가 아니라, "성능 손해가 감당할 만한
+수준이면서 공정성·배포 가능성 문제를 없앤다"는 방법론적 판단이다. 대신
+잃은 LVIS 일반화 마진의 일부는 §5.3의 identity-aware margin이 상쇄한다
+(claim5).
+
 ### 5.3 학습 목적함수 — `optimize_promptcal_scale_neighbor`
 
 *`src/quant/promptcal.py:343`*
@@ -256,9 +282,13 @@ picked = [o for o in order if o not in exclude_set][:neighbor_k]
 | `neighbor_weight` | 1.0 | |
 | `scale_reg_weight` | **10.0(확정)** | §8.1/8.2 참고 — 09-08에 20에서 10으로 변경, 6-seed(0~5) 검증 완료 |
 | `cal_weight` | **1.0(확정, 09-12)** | §8.10 참고 — H_cal(20개)에도 S와 동일 margin_loss 적용. 0.0=끄기(이전 동작) |
+| `channelwise_smult` | **False, 즉 per-tensor(확정, 09-16)** | `--smult-per-tensor`. §5.2 참고 — baseline과의 activation quant 공정성 + 배포 가능성 때문에 per-channel에서 되돌림 |
+| `identity_aware_margin` | **True(확정, 09-16)** | `--identity-aware-margin`. margin_loss가 class identity를 무시하던 blind spot 수정(claim5) — swap과 intrusion을 모두 탐지하도록 09-16에 추가 보강(claim5-b) |
 | `w_bits` / `a_bits` | 8 / 8 | |
 
-*`scripts/58_full_baseline_official_data.py`의 `argparse` 기본값과 동일*
+*`pipeline/run_comparison.py`의 `argparse` 기본값 중 `--smult-per-tensor`/
+`--identity-aware-margin`은 **꺼짐이 기본**이라(opt-in 플래그), 확정 설계로
+재현하려면 이 두 플래그를 반드시 켜야 한다 — 아래 실행 예시 참고.*
 
 ---
 
@@ -301,79 +331,66 @@ GT 파일: `/data/taeho/lvis_datasets/labels_dl/extracted/lvis/annotations/lvis_
 
 ---
 
-## 8. 성능 결과 (공식 데이터 설정, 2026-09-12 최신)
+## 8. 성능 결과 (공식 데이터 설정, 2026-09-16 최신)
 
-### 8.1 메인 결과 — `scale_reg_weight=10, cal_weight=1.0`, 6-seed(0~5) 완료 (**2026-09-12 갱신**)
+### 8.1 메인 결과 — per-tensor `s_mult` + identity-aware margin, 6-seed(0~5) 완료 (**2026-09-16 갱신**)
 
-§5.4.1의 H_eval 누출 버그를 고친 뒤 재실행한 결과이자, §8.10에서 채택한
-`cal_weight=1.0`(H_cal 직접 보호 확장)까지 반영한 **현재 확정 모델의 최종
-수치**다. `cal_weight` 도입 전 수치(버그 수정만 반영한 버전)는 §8.10의
-비교표에 "확정값(cal_weight=0)" 행으로 남아 있다 — 이 절의 표를 인용할
-때는 항상 `cal_weight=1.0` 기준임에 유의. seed3~5는 09-09 메모리 사고(3개
-동시 실행 중 커널 OOM-killer로 silent kill)로 한 번 유실되어 재실행함 —
-최종적으로 6개 seed 전부 에러 없이 완료. **범위는 평균±표준편차가 아니라
-최소~최대**로 표시(괄호 안이 평균). baseline은 AP/lost/LVIS류는 seed와
-무관한 상수, Heval_flip·UPIR만 S/H_eval 분할 때문에 seed마다 달라서 같이
-범위로 표시했다.
+**09-16 설계 변경으로 교체된 표다** — `s_mult`을 per-channel 벡터에서
+per-tensor 스칼라로(`--smult-per-tensor`), `margin_loss`를 identity-aware로
+(`--identity-aware-margin`) 바꾼 새 확정 설계의 풀스케일(`--eval-cap` 없음,
+val2017 전체 5000장 + 공식 LVIS minival 4809장) 6-seed 결과다. 이전
+확정값(per-channel, 09-12)은 §8.11에 그대로 보존했다 — 비교하려면 그쪽
+참고. 6개 seed 전부 물리 GPU 0/4/5/6/7(동일 모델, RTX4000 Ada)에서
+실행해서 §9의 GPU-비결정성 confound 없음. **범위는 평균±표준편차가 아니라
+최소~최대**로 표시(괄호 안이 평균).
 
 | method | COCO_AP | LVIS_AP | APr | Heval_flip | Top1_flip | GT_MRR | GT_R@1 | UPIR | lost | LVIS_flip | LVIS_lost |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| **FP32** | **36.80** | **0.1260** | - | - | - | - | - | - | - | - | - |
-| naive | 33.54 | 0.1264 | 0.0415 | 9.85~14.55%(11.80%) | 0.95% | 0.9220 | 0.8767 | 0.18~0.44%(0.31%) | 432 | 6.48% | 1224 |
-| AdaRound | 33.24 | 0.1242 | 0.0328 | 8.74~13.39%(10.85%) | 0.74% | 0.9229 | 0.8782 | 0.13~0.31%(0.25%) | 349 | 5.67% | 1212 |
-| QDrop | 33.30 | 0.1235 | 0.0311 | 8.81~13.29%(10.84%) | 0.72% | 0.9222 | 0.8770 | 0.13~0.33%(0.27%) | 384 | 5.71% | 1192 |
-| BRECQ | 33.30 | 0.1200 | 0.0319 | 8.55~12.67%(10.48%) | 0.71% | 0.9233 | 0.8788 | 0.11~0.33%(0.23%) | 327 | 5.53% | 1158 |
-| **Combined(cal_weight=1.0)** | **36.29~36.40(36.36)** | 0.1213~0.1260(0.1238) | 0.0320~0.0429(**0.0371**) | **7.87~11.04%(9.52%)** | 0.70~0.75%(0.727%) | 0.9224~0.9229(0.9226) | 0.8768~0.8776(0.8773) | 0.11~0.29%(**0.212%**) | 336~391(362.7) | **5.17~5.42%(5.32%)** | **1021~1124(1083)** |
+| **FP32** | **36.80** | **0.1260** | 0.0310 | - | - | - | - | - | - | - | - |
+| naive | 33.54 | 0.1264 | 0.0415 | 9.85~14.55%(11.80%) | 0.95% | - | - | 0.18~0.44%(0.31%) | 432 | 6.48% | 1224 |
+| AdaRound | 33.24 | 0.1242 | 0.0328 | 8.74~13.39%(10.85%) | 0.74% | - | - | 0.13~0.31%(0.25%) | 349 | 5.67% | 1212 |
+| QDrop | 33.30 | 0.1235 | 0.0311 | 8.81~13.29%(10.84%) | 0.72% | - | - | 0.13~0.33%(0.27%) | 384 | 5.71% | 1192 |
+| BRECQ | 33.30 | 0.1200 | 0.0319 | 8.55~12.67%(10.48%) | 0.71% | - | - | 0.11~0.33%(0.23%) | 327 | 5.53% | 1158 |
+| **Combined(per-tensor+identity-aware)** | **35.86~36.07(35.96)** | 0.1201~0.1228(0.1214) | 0.0356~0.0472(0.0387) | **7.29~10.40%(9.23%)** | **0.61~0.73%(0.657%)** | 0.9221~0.9227(0.9224) | 0.8759~0.8774(0.8768) | 0.13~0.29%(0.213%) | 337~381(355.0) | **5.00~5.49%(5.15%)** | **981~1086(1017)** |
 
-*원본 로그: `runs/58_official_data/neighborfix_seed{0,1,2,3,4,5}.log`(baseline,
-버그 수정 확인용; §8.4에서 이전 버전 로그와 값이 동일함을 확인함),
-`runs/60_hparam_sweep/cal_weight_seed{0,1,2,3,4,5}.log`(Combined,
-`combined_cal_weight1` 행). `cal_weight` 도입 경위·버그 발견·검증 전체
-과정은 §8.10 참고.*
+*원본 로그: `runs/67_final_confirmed_fullscale/seed{0..5}_final.log`. baseline의
+GT_MRR/GT_R@1은 이번 로그에서 별도 추출 안 함(패턴이 §8.11과 동일함은
+이미 확인된 사실이라 재확인 생략) — 필요하면 같은 로그에서 뽑을 수 있음.*
 
-**GT_MRR/GT_R@1 대조가 보여주는 것(중요, 버그 수정 후에도 유지됨)**: 5개
-방법의 GT_MRR(0.9220~0.9233)·GT_R@1(0.8767~0.8788)이 **거의 완전히
-겹친다** — 이 절대적 랭킹 정확도만 보면 naive조차 다른 방법들과 별 차이가
-없다. 그런데 같은 5개 방법의 AP는 33.24~36.40로 크게 갈리고,
-Top1_flip/Heval_flip도 뚜렷이 갈린다. **이 괴리 자체가 핵심 논증이다**: AP
-개선이 "GT 랭킹 점수 자체를 절대적으로 더 잘 복원해서" 나온 게
-아니라(그랬다면 GT_MRR도 같이 갈렸어야 함), **"FP32가 매기던 순서/결정을
-얼마나 유지하는가"(flip)에서 나온다**는 뜻 — 이는 `margin_loss`가
-값(score) 자체가 아니라 순위 간격(margin)을 맞추도록 설계된 것과 정확히
-같은 철학이다.
+**이전 확정값(per-channel, §8.11) 대비 델타** — 핵심 정정: 09-16 이전에
+`--eval-cap 1000`짜리 빠른 검증에서는 AP 손실이 노이즈 수준(-0.06)으로
+보였는데, **진짜 풀스케일로 재니 COCO_AP -0.40이 확실한 손실**이었다(6-seed
+범위 35.86~36.07이 이전 확정값 범위 36.29~36.40과 전혀 안 겹침):
 
-**정직한 요약**:
-- COCO_AP: naive 대비 **+2.82**(평균 기준), 6-seed 범위(36.29~36.40)가
-  naive(33.54)와 전혀 안 겹칠 만큼 안정적으로 높음.
-- Heval_flip: 평균 9.52%로 BRECQ 평균(10.48%)보다 낮음(더 좋음). 다만
-  범위가 넓어서(7.87~11.04%) BRECQ의 최선 seed(8.55%)와 일부 겹침 —
-  "항상"이 아니라 "평균적으로/대체로" 이긴다가 정확함.
-- **LVIS_flip·LVIS_lost는 6개 seed 전부 개별적으로 BRECQ를 이김**
-  (LVIS_flip 5.17~5.42% 전부 < BRECQ 5.53%; LVIS_lost 1021~1124 전부 <
-  BRECQ 1158), 특히 LVIS_lost는 `cal_weight` 도입 전(평균 1122)보다도
-  더 좋아짐(평균 1083) — §8.10 참고.
-- LVIS_AP: 평균 0.1238, BRECQ(0.1200)·QDrop(0.1235)보다는 6개 seed 전부
-  위, AdaRound(0.1242)와는 거의 동률(seed별로 이기고 지고 섞임),
-  naive/FP32(0.126대)보다는 소폭 아래.
-- **APr(rare class)**: 평균 0.0371로 AdaRound(0.0328)·QDrop(0.0311)·
-  BRECQ(0.0319)를 전부 이김(naive 0.0415만 못 넘음) — `cal_weight` 도입
-  전(0.0270, 5개 중 최하)에서 개선된 결과. §9 "APr 최하위" 항목 참고.
-- **UPIR·lost는 여전히 baseline 중 최선(BRECQ)에는 못 미침** — 특히
-  `lost`(336~391)는 6개 seed 전부 BRECQ(327)보다 나쁨(그래도 `cal_weight`
-  도입 전 평균 372보다는 소폭 개선). UPIR은 평균 0.212%로 `cal_weight`
-  도입 전(0.25%)보다 뚜렷이 개선됐지만 BRECQ(0.23%)와는 여전히 seed별로
-  엇갈림. ~~§8.3에 정리한 가설: neighbor-hinge의 부작용(H_eval 경계
-  손해)은 학습에 쓰인 COCO-80 vocabulary 안에서만 드러나는 비용~~ —
-  **09-10 그룹별 분해로 기각됨**(§9 참고): H_eval의 lost 악화폭이 S와
-  거의 같아서(둘 다 +15%) H_eval 국소적 비용이 아니라 COCO-80 전반에
-  걸친 일반적 트레이드오프로 보는 게 정확하다. neighbor-hinge가 실제
-  보호하는 H_cal만 상대적으로 덜 나빠짐(+9%)은 확인됨.
+| | 이전(per-channel) | 현재(per-tensor+identity-aware) | delta |
+|---|---|---|---|
+| COCO_AP | 36.36 | 35.96 | **-0.40** |
+| LVIS_AP | 0.1238 | 0.1214 | -0.0024 |
+| Heval_flip | 9.52% | 9.23% | -0.29pp(개선) |
+| Top1_flip | 0.727% | 0.657% | -0.070pp(개선) |
+| UPIR | 0.212% | 0.213% | 거의 동일 |
+| lost | 362.7 | 355.0 | -7.7(개선) |
+| LVIS_flip | 5.32% | 5.15% | -0.17pp(개선) |
+| LVIS_lost | 1083 | 1017 | **-66(뚜렷한 개선)** |
 
-**부수적 관찰 — naive가 AdaRound/QDrop/BRECQ보다 AP가 높은 이유**: 세 baseline
-모두 반올림 방향을 "layer 출력 재구성 MSE"를 줄이는 쪽으로 최적화하는데, 이건
-AP를 직접 겨냥한 목적함수가 아니다(reconstruction ≠ decision/task 최적화라는
-이 논문의 핵심 주장이 AP 자체에서도 드러난 사례). Combined는 이 MSE 대신
-decision 직접 목적함수(margin_loss)로 학습해서 이 함정을 안 물려받는다.
+COCO_AP -0.40은 baseline과의 activation quantization granularity
+공정성·표준 INT8 엔진 배포 가능성을 위해 지불하는 실제 비용이다(claim4,
+`PROMPTCAL_CLAIMS_2026-09-15.md` 참고) — 성능이 좋아져서 바꾼 게 아니라
+방법론적으로 필요해서 바꾼 것. 대신 decision-preservation 계열 지표는
+전부 유지되거나 개선됐다(LVIS_lost가 특히 크게 좋아짐) — identity-aware
+margin(claim5)이 그 손실 일부를 상쇄한 것으로 보인다.
+
+**baseline(BRECQ) 대비는 여전히 견고**: COCO_AP(+2.66), Heval_flip,
+Top1_flip, LVIS_flip, LVIS_lost 전부 이기고, UPIR은 근소하게 비슷,
+`lost`(raw count, 355 vs 327)·CorrRate만 여전히 짐 — 이 패턴은 이전
+확정값(§8.11)과 동일하게 유지된다(§8.11의 "정직한 요약" 참고, 구조는
+안 바뀜).
+
+**GT_MRR/GT_R@1 대조**: 새 설계에서도 Combined의 GT_MRR(0.9221~0.9227)·
+GT_R@1(0.8759~0.8774)이 §8.11의 범위(0.9224~0.9229 / 0.8768~0.8776)와
+거의 동일 — "AP 개선이 GT 랭킹 자체를 더 잘 맞혀서가 아니라 FP32의
+결정을 얼마나 유지하는가(flip)에서 나온다"는 핵심 논증은 설계가 바뀌어도
+그대로 유지된다.
 
 ### 8.2 `scale_reg_weight` 재스윕 — rw=10 vs rw=20, **6-seed(0~5) 완료**
 
@@ -791,6 +808,49 @@ neighbor-hinge가 무효화된 상태라 참고하지 말 것.*
 
 ---
 
+### 8.11 이전 확정값(per-channel `s_mult`, identity-aware 없음) — **09-16에 §8.1에서 대체됨, 역사적 기록용 보존**
+
+§8.1이 09-16에 per-tensor+identity-aware 설계로 교체되기 전까지
+09-12~09-15 사이 실제로 "확정값"이었던 표다. per-channel `s_mult` 설계
+자체의 서사(§5.2)와 대조하거나, "얼마나 손해를 보고 per-tensor로
+바꿨는가"를 정확히 따질 때 참고.
+
+| method | COCO_AP | LVIS_AP | APr | Heval_flip | Top1_flip | GT_MRR | GT_R@1 | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **FP32** | **36.80** | **0.1260** | - | - | - | - | - | - | - | - | - |
+| naive | 33.54 | 0.1264 | 0.0415 | 9.85~14.55%(11.80%) | 0.95% | 0.9220 | 0.8767 | 0.18~0.44%(0.31%) | 432 | 6.48% | 1224 |
+| AdaRound | 33.24 | 0.1242 | 0.0328 | 8.74~13.39%(10.85%) | 0.74% | 0.9229 | 0.8782 | 0.13~0.31%(0.25%) | 349 | 5.67% | 1212 |
+| QDrop | 33.30 | 0.1235 | 0.0311 | 8.81~13.29%(10.84%) | 0.72% | 0.9222 | 0.8770 | 0.13~0.33%(0.27%) | 384 | 5.71% | 1192 |
+| BRECQ | 33.30 | 0.1200 | 0.0319 | 8.55~12.67%(10.48%) | 0.71% | 0.9233 | 0.8788 | 0.11~0.33%(0.23%) | 327 | 5.53% | 1158 |
+| **Combined(cal_weight=1.0, per-channel)** | **36.29~36.40(36.36)** | 0.1213~0.1260(0.1238) | 0.0320~0.0429(**0.0371**) | **7.87~11.04%(9.52%)** | 0.70~0.75%(0.727%) | 0.9224~0.9229(0.9226) | 0.8768~0.8776(0.8773) | 0.11~0.29%(**0.212%**) | 336~391(362.7) | **5.17~5.42%(5.32%)** | **1021~1124(1083)** |
+
+*원본 로그: `runs/58_official_data/neighborfix_seed{0,1,2,3,4,5}.log`(baseline),
+`runs/60_hparam_sweep/cal_weight_seed{0,1,2,3,4,5}.log`(Combined,
+`combined_cal_weight1` 행).*
+
+**GT_MRR/GT_R@1 대조가 보여주는 것**: 5개 방법의 GT_MRR(0.9220~0.9233)·
+GT_R@1(0.8767~0.8788)이 **거의 완전히 겹친다** — 절대적 랭킹 정확도만
+보면 naive조차 다른 방법들과 별 차이가 없다. 그런데 같은 5개 방법의
+AP는 33.24~36.40로 크게 갈리고, Top1_flip/Heval_flip도 뚜렷이 갈린다.
+**이 괴리 자체가 핵심 논증이다**: AP 개선이 "GT 랭킹 점수 자체를
+절대적으로 더 잘 복원해서" 나온 게 아니라, **"FP32가 매기던 순서/결정을
+얼마나 유지하는가"(flip)에서 나온다**는 뜻.
+
+**정직한 요약(당시 기준)**:
+- COCO_AP: naive 대비 +2.82(평균 기준).
+- Heval_flip: 평균 9.52%로 BRECQ 평균(10.48%)보다 낮음(더 좋음).
+- LVIS_flip·LVIS_lost는 6개 seed 전부 개별적으로 BRECQ를 이김.
+- LVIS_AP: 평균 0.1238, BRECQ·QDrop보다는 위, AdaRound와는 거의 동률.
+- APr(rare class): 평균 0.0371로 AdaRound·QDrop·BRECQ를 전부 이김.
+- UPIR·lost는 여전히 baseline 중 최선(BRECQ)에는 못 미침.
+
+**§8.1과의 차이(09-16 재확인)**: per-tensor+identity-aware로 바꾼 §8.1은
+이 표 대비 COCO_AP -0.40, LVIS_AP -0.0024만큼 손해를 보지만 Heval_flip/
+Top1_flip/lost/LVIS_flip/LVIS_lost는 전부 유지되거나 개선된다 — 자세한
+비교는 §8.1 본문 참고.
+
+---
+
 ## 9. 알아둘 점 / 한계 / 열린 이슈
 
 - **"seed 효과"의 일부가 실제로는 GPU/실행환경 비결정성일 수 있음(09-12
@@ -942,8 +1002,9 @@ neighbor-hinge가 무효화된 상태라 참고하지 말 것.*
 | 공식 데이터 5조건 전체 검증 스크립트 | `scripts/58_full_baseline_official_data.py` |
 | scale_reg_weight 스윕 스크립트 | `scripts/59_rw_sweep_official_data.py` |
 | 원본 결과 로그 | `runs/58_official_data/*.log`, `runs/59_rw_sweep/*.log` |
-| `pipeline/` 디렉토리(공식 데이터 설정, 09-15 포팅 완료) | `pipeline/run_comparison.py`, `pipeline/README.md` |
-| 09-15 이후 claim 1~6 검증/변경 사항(미확정, 진행 중) | `PROMPTCAL_CLAIMS_2026-09-15.md` |
+| `pipeline/` 디렉토리(공식 데이터 설정, 09-16 확정 설계로 갱신 완료) | `pipeline/run_comparison.py`, `pipeline/README.md` |
+| 09-15 이후 claim 1~10 검증/변경 전체 경위(claim4/5는 채택됨, claim2/6는 논문 문구 초안 있음) | `PROMPTCAL_CLAIMS_2026-09-15.md` |
+| §8.1(현재 확정) 원본 로그, 풀스케일 6-seed | `runs/67_final_confirmed_fullscale/seed{0..5}_final.log` |
 
 ---
 
