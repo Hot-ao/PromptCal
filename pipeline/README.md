@@ -12,6 +12,12 @@
 "어느 파일이 무슨 역할을 하는가"에 집중한다 — 수치를 인용할 땐 항상
 `PROMPTCAL_CURRENT_MODEL.md`를 우선한다.
 
+**아직 §8.1 확정값으로 승격 안 된, 진행 중인 opt-in 실험(H_eval anchor-선정
+리크 수정, per-tensor `s_mult` 대조군, identity-aware `margin_loss` 등)**은
+[`PROMPTCAL_CLAIMS_2026-09-15.md`](../PROMPTCAL_CLAIMS_2026-09-15.md)에
+정리돼 있다 — 이 디렉토리의 `run_comparison.py`에 opt-in 플래그로만
+구현돼 있고 기본 동작은 안 바뀐다.
+
 ## 파일 지도
 
 ```
@@ -32,6 +38,9 @@ pipeline/
 │   │                            s_mult(연속 activation scale multiplier, conv당
 │   │                            스칼라가 아니라 in_channels별 벡터 --
 │   │                            PROMPTCAL_CURRENT_MODEL.md §5.2 참고)도 정의돼 있음.
+│   │                            09-15: channelwise_smult(기본 True) 추가 --
+│   │                            False면 s_mult을 baseline과 동일한 per-tensor
+│   │                            스칼라로 강제(claim4 대조 실험, opt-in).
 │   ├── brecq.py             -- BRECQ(block-wise joint reconstruction, C2fAttn 등
 │   │                            다중 입력 블록 지원).
 │   ├── pdquant.py           -- _find_head/_CV4Capture 헬퍼(promptcal.py가 사용).
@@ -50,6 +59,12 @@ pipeline/
 │                               이웃(H_eval 제외)의 절대 유사도가 FP보다 커지는
 │                               방향만 억제(asymmetric hinge) + (4) (s_mult-1)^2
 │                               정규화(scale_reg_weight)로 최적화.
+│                               09-15: (a) confident-anchor 선정을 80열 전체가
+│                               아니라 train_cols(S∪H_cal)로 제한(claim1 버그
+│                               수정, 항상 적용). (b) margin_loss에
+│                               identity_aware(기본 False) 추가 -- True면
+│                               fp_idx로 sim_q를 gather해서 class identity
+│                               고정(claim5 대조 실험, opt-in).
 └── run_comparison.py        -- 실행 진입점(`scripts/58_full_baseline_official_data.py`
                                 포팅, 09-15). naive/AdaRound/QDrop/BRECQ/Combined
                                 다섯 조건을 공식 데이터 설정(calib=train2017,
@@ -59,6 +74,13 @@ pipeline/
                                 lost/gained/lateral/corrective_rate·UPIR(COCO·LVIS
                                 양쪽)·lost의 S/H_cal/H_eval 그룹별 분해·calib 시간·
                                 이론적 모델 크기까지 전부 측정해서 표로 출력.
+                                09-16: --smult-per-tensor(claim4)·
+                                --identity-aware-margin(claim5) opt-in 플래그
+                                추가. measure_ap의 클래스별 AP 매핑 버그(claim7)·
+                                switch_vocab의 names/predictor 미갱신(claim8)
+                                수정. --eval-cap이 COCO_AP/S_AP/H_eval_AP에는
+                                적용 안 된다는 안내 문구 추가(claim10, LVIS AP는
+                                적용됨) -- 자세한 내용은 PROMPTCAL_CLAIMS_2026-09-15.md.
 ```
 
 ## 실행 방법
@@ -87,6 +109,16 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle GPU> python pipeline/run
 - `--scale-reg-weight`(기본 10.0)·`--cal-weight`(기본 1.0): 둘 다 확정값
   (`PROMPTCAL_CURRENT_MODEL.md` §5.5). `--cal-weight 0.0`을 주면 H_cal 직접
   보호를 끈 이전 동작으로 돌아감.
+- **09-16 opt-in 실험 플래그(둘 다 기본 off = 기존 확정 동작)**:
+  `--smult-per-tensor`(Combined의 `s_mult`을 baseline과 동일한 per-tensor
+  스칼라로 강제, claim4)·`--identity-aware-margin`(margin_loss가 class
+  identity를 무시하는 blind spot을 막음, claim5 — 6-seed 검증 결과 AP
+  손해는 노이즈 수준이고 Top1_flip/UPIR/lost/LVIS_flip/LVIS_lost가 견고하게
+  개선돼 §8.1 확정 설계로 승격 후보). 둘 다 아직 미확정, 자세한 내용과
+  실험 결과는 `PROMPTCAL_CLAIMS_2026-09-15.md` 참고.
+- `--eval-cap`은 COCO_AP/S_AP/H_eval_AP(`measure_ap`가 `--data` yaml의 고정
+  val split을 씀)에는 적용 안 되고, LVIS_AP/APr/APc/APf와 flip/GT/UPIR/lost
+  등 나머지 전부에는 적용됨 — 실행 시 표 위에 이 안내가 자동 출력됨(claim10).
 - `--model`: 저장소 루트의 `yolov8s-world.pt`(YOLO-World v1) 또는
   `yolov8s-worldv2.pt`. 지금까지 모든 확정 결과는 `yolov8s-world.pt` 기준.
 - `--seed`: COCO-80 프롬프트를 S(40, margin_loss 직접 대상)/H_cal(20,
@@ -151,6 +183,17 @@ pipeline/quant/*.py`처럼 직접 diff를 떠서 확인할 것 — 이 문서의
   1.0)·`--scale-reg-weight`(기본 10.0) 확정값, LVIS AP(+APr/APc/APf)/LVIS
   flip/GT/lost 스트리밍 계산까지 전부 반영됨. `--eval-cap` 스모크 테스트로
   end-to-end 정상 동작 확인 완료(GPU 7, calib=8/eval-cap=16).
+- **2026-09-16**: claim 1~10(리뷰어 공격 포인트 점검) 검증/수정 반영,
+  커밋 `87157e5`. `src/quant/promptcal.py`의 confident-anchor 선정을
+  train_cols(S∪H_cal)로 제한하는 버그 수정(claim1, 항상 적용)이
+  `pipeline/quant/promptcal.py`에 동기화됨. `channelwise_smult`(claim4)·
+  `identity_aware_margin`(claim5) opt-in 파라미터가 `adaround.py`/
+  `promptcal.py`에 추가되고 `run_comparison.py`에 `--smult-per-tensor`/
+  `--identity-aware-margin` 플래그로 노출됨. `measure_ap`의 클래스별 AP
+  매핑 버그(claim7)와 `switch_vocab`의 names/predictor 미갱신(claim8)도
+  수정. 전부 opt-in이거나(claim4/5) 항상-바른-방향인 버그 수정(claim1/7/8)이라
+  기존 확정 결과 재현성은 안 깨짐. 실험 결과·6-seed 검증·미결정 사항은
+  `PROMPTCAL_CLAIMS_2026-09-15.md`에 별도 정리.
 - 최신 확정 하이퍼파라미터·공식 데이터 6-seed 결과의 단일 진실 공급원은
   저장소 루트의 `PROMPTCAL_CURRENT_MODEL.md`다. 이 README와 수치가 어긋나면
   그쪽을 따를 것.
