@@ -369,6 +369,85 @@ AP 포함)는 1000장 기준**이었다 — 같은 seed 내 5개 방법 비교�
 
 ---
 
+## 09-16 추가 발견 (a)(b)(c) — cal_weight confound, identity-aware의 intrusion 미탐지, 실행 편의
+
+**(a) `cal_weight=0` ablation의 confound**: `run_comparison.py`의 `main()`이
+`build()`를 호출할 때 `cal_idx=(H_cal if args.cal_weight > 0 else None)`으로
+넘기고 있었다. `promptcal.py`의 `train_cols`(claim1 수정으로 도입된
+confident-anchor 선정 기준)는 `cidx is None`이면 `pidx`(S, 40개)만 쓰고
+아니면 `torch.cat([pidx, cidx])`(S∪H_cal, 60개)를 쓴다. 그래서
+`cal_weight=0`을 주면 `ml_cal` 항(H_cal margin_loss)만 꺼지는 게 아니라
+**anchor 선정에 쓰이는 열 개수까지 40→60으로 같이 바뀌어서**, `cal_weight`
+0 vs 1 비교가 두 변수를 동시에 흔드는 confound가 됐다.
+`promptcal.py`(내부 `if cidx is not None and cal_weight > 0:` 게이트)가
+docstring에 적어둔 "`cal_weight=0`이면 결과가 같아야 한다"는 불변식도 이
+경로로 깨져 있었다(정확히는 claim1의 `train_cols` 도입이 09-15에, `cal_idx`
+조건부 전달이 09-12에 각각 따로 생겨서 서로 상호작용을 안 맞춰본 것).
+
+**검증**: 코드로 확인, 정확한 지적. 다만 **이번 세션에서 지금까지 보고한
+결과는 전부 영향 없음** — claim1/4/5의 모든 실행이 `--cal-weight`를 아예
+지정 안 해서 기본값(1.0, `cal_idx=H_cal`)을 썼기 때문에 이 confound
+경로를 안 탔다. `PROMPTCAL_CURRENT_MODEL.md` §8.10의 `cal_weight=0` 원본
+검증(09-12)도 claim1의 `train_cols` 자체가 그때는 없었으니(80열 전체
+기준) 영향 없음. **앞으로 `--cal-weight 0`으로 재실행할 계획이 있었다면
+그 결과만 무효**.
+
+**수정 완료**: `run_comparison.py`에서 `cal_idx`를 조건 없이 항상 `H_cal`로
+전달하도록 변경 — `ml_cal` 추가 여부는 `promptcal.py` 내부의
+`cal_weight > 0` 게이트에만 맡긴다. 이제 `train_cols`는 `cal_weight` 값과
+무관하게 항상 S∪H_cal(60)로 고정되고, `cal_weight`는 순수하게 "H_cal에
+margin_loss를 추가로 거냐"만 토글하는 단일 변수가 됐다.
+
+**(b) identity-aware margin이 기존 버전의 상위호환이 아님 — intrusion 미탐지**:
+claim5의 `identity_aware=True`는 `fp_idx`로 `sim_q`를 gather하는데,
+`fp_idx`는 FP의 top-(k+1) 안에 있는 class만 가리킨다. 그래서 **FP top-(k+1)
+밖에 있던 class가 Q에서 값이 치솟아 실제 1등을 빼앗는 경우(intrusion)를
+그 열 자체를 아예 안 봐서 완전히 놓친다.** 반면 기존 정렬 버전(`topk`를
+Q에도 독립적으로 적용)은 identity는 몰라도 Q 자신의 top-1 값이 커지는 걸
+통해 intrusion을 부분적으로 잡아냈었다 — 즉 identity-aware는 "swap은 잡고
+intrusion은 놓치는" 다른 trade-off였지 기존 버전의 순수 상위호환이 아니다.
+
+**검증**: 코드 리뷰 + 합성 텐서로 직접 재현 — FP top-6 밖의 class(index 15)를
+Q에서 100.0으로 스파이크시켰을 때, 기존 `identity_aware` 구현은 그 값을
+전혀 못 보고(gather가 index 15를 안 가져옴) loss가 낮게 유지됐다.
+
+**수정 완료**: 제안하신 대로 마지막 열(boundary_w가 걸리는 FP rank-(k+1)
+자리)만 "FP top-k(rank 1..k) 밖에 있는 class 중 Q에서 가장 높은 값"으로
+바꿔치기하도록 `margin_loss`를 수정:
+```python
+if identity_aware:
+    q_top = sim_q.gather(-1, fp_idx)
+    mask = torch.zeros_like(sim_q, dtype=torch.bool).scatter_(-1, fp_idx[:, :-1], True)
+    q_out = sim_q.masked_fill(mask, float("-inf")).max(-1).values
+    q_top = torch.cat([q_top[:, :-1], q_out[:, None]], dim=1)
+```
+앞쪽 k개 열은 그대로 identity-aware gather(swap 탐지), 마지막 열만 "top-k
+밖 전체 최댓값"(intrusion 탐지) — 둘 다 하나의 boundary 비교에 담김. 합성
+텐서로 재검증: intrusion 시나리오에서 loss가 정상적으로 크게 나옴(전:
+낮게 유지 → 후: 5880 수준), swap 시나리오(claim5 원래 케이스)도 여전히
+정확히 탐지됨(loss 0 → 1.0). **주의: claim5에서 이미 돌린 6-seed
+identity-aware 결과(`runs/64_identity_margin/`)는 이 수정 전 버전으로
+나온 것이라, intrusion 미탐지 상태에서의 결과다 — 재현하려면 재실행
+필요.**
+
+**(c) 실행 편의**: 두 가지 지적 모두 확인 후 수정.
+- 결과 표에 어떤 플래그를 켜고 돌렸는지 안 남아서 `--identity-aware-margin`/
+  `--smult-per-tensor`를 켠 로그와 안 켠 로그가 구분이 안 됐음 → `main()`
+  시작 시 `print(f"[args] {vars(args)}")` 추가.
+- `conditions = ["naive", "adaround", "qdrop", "brecq", "combined"]`가
+  하드코딩돼 있어서 Combined 변형 하나만 확인할 때도 QDrop/BRECQ(seed당
+  900~1400s대)까지 매번 다시 빌드했음 → `--conditions`(쉼표 구분, 기본값은
+  기존과 동일한 5개 전부) 추가. `models["adaround"]`로 모델 크기를 재던
+  하드코딩도 `--conditions`로 일부만 돌 때 KeyError 안 나게 존재하는
+  AdaRound 계열 아무거나(없으면 첫 조건) 쓰도록 같이 수정.
+
+**상태**: (a)(b)(c) 전부 수정 완료, 스모크 테스트(`--conditions
+naive,combined --identity-aware-margin`, calib=8/eval-cap=16, GPU7)로
+args 출력·조건 서브셋·에러 없음 확인. `src`/`pipeline` 동기화 완료.
+git 커밋 필요.
+
+---
+
 ## 부록 A — 세션 중 발견한 실행/GPU 이슈
 
 **`CUDA_VISIBLE_DEVICES=N`만으로는 물리 GPU N이 보장 안 됨.**
@@ -394,9 +473,9 @@ GPU들은 비었다고 뜰 때까지 피했다.
 | 파일 | 변경 내용 |
 |---|---|
 | `src/quant/adaround.py` | `AdaRoundQuantConv2d.__init__`/`convert_to_adaround`에 `channelwise_smult` 파라미터 추가(claim4) |
-| `src/quant/promptcal.py` | confident-anchor 선정 `train_cols` 제한(claim1), `margin_loss`에 `identity_aware` 파라미터 추가(claim5), `optimize_promptcal_scale_neighbor`에 `identity_aware_margin` 파라미터 전달 |
+| `src/quant/promptcal.py` | confident-anchor 선정 `train_cols` 제한(claim1), `margin_loss`에 `identity_aware` 파라미터 추가(claim5) + intrusion 탐지 보강(claim5-b), `optimize_promptcal_scale_neighbor`에 `identity_aware_margin` 파라미터 전달 |
 | `pipeline/quant/adaround.py`, `pipeline/quant/promptcal.py` | 위 두 파일과 동기화(diff 없음 확인) |
-| `pipeline/run_comparison.py` | `--smult-per-tensor`, `--identity-aware-margin` CLI 플래그 추가, `build()`에 `channelwise_smult`/`identity_aware_margin` 파라미터 전달, `measure_ap`의 클래스별 AP 매핑 수정(claim7), `switch_vocab`의 names/predictor 갱신 추가(claim8), `--eval-cap` help 문구·결과 표 안내 문구 추가(claim10c) |
+| `pipeline/run_comparison.py` | `--smult-per-tensor`, `--identity-aware-margin` CLI 플래그 추가, `build()`에 `channelwise_smult`/`identity_aware_margin` 파라미터 전달, `measure_ap`의 클래스별 AP 매핑 수정(claim7), `switch_vocab`의 names/predictor 갱신 추가(claim8), `--eval-cap` help 문구·결과 표 안내 문구 추가(claim10c), `cal_idx` 항상 전달로 confound 제거(claim5-a), `--conditions` 플래그 + `print(vars(args))` 추가(claim5-c) |
 | `requirements.txt` | `ultralytics>=8.3.0` → `ultralytics==8.4.121`로 고정(claim9) |
 | `scripts/58_full_baseline_official_data.py` | claim7/8과 동일한 두 수정 동기화 |
 

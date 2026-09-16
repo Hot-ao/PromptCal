@@ -504,9 +504,14 @@ def main():
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
     ap.add_argument("--torch-seed", type=int, default=0)
+    ap.add_argument("--conditions", default="naive,adaround,qdrop,brecq,combined",
+                    help="쉼표로 구분된 조건 목록(콤마 뒤 공백 없이). 09-16 추가 -- Combined 변형 "
+                         "하나만 볼 때도 항상 5개 조건(특히 QDrop/BRECQ, 900~1400s대)을 다 "
+                         "빌드하던 낭비를 줄이기 위함. 예: --conditions naive,combined")
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
+    print(f"[args] {vars(args)}")
 
     torch.manual_seed(args.torch_seed)
     torch.cuda.manual_seed_all(args.torch_seed)
@@ -558,7 +563,9 @@ def main():
     print("[build] FP (COCO-80)")
     fp = build(YOLOWorld, args.model, coco, device, calib, "fp")
 
-    conditions = ["naive", "adaround", "qdrop", "brecq", "combined"]
+    conditions = [c.strip() for c in args.conditions.split(",")]
+    _valid = {"naive", "adaround", "qdrop", "brecq", "combined"}
+    assert all(c in _valid for c in conditions), f"--conditions에 알 수 없는 값: {set(conditions) - _valid}"
     models, calib_time = {}, {}
     for mode in conditions:
         print(f"[build] {mode}")
@@ -567,7 +574,14 @@ def main():
                              iters=args.iters, pidx=S, lr=args.lr, k=args.k,
                              neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
                              scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
-                             cal_idx=(H_cal if args.cal_weight > 0 else None),
+                             # 09-16 버그 수정(claim a): cal_weight==0일 때 cal_idx까지 None으로
+                             # 넘기면, promptcal.py의 confident-anchor 선정 기준인 train_cols가
+                             # S∪H_cal(60) 대신 S(40)로 줄어들어 anchor 풀 자체가 바뀐다. 그러면
+                             # cal_weight 0 vs 1 비교가 "H_cal margin_loss 유무"와 "anchor 풀
+                             # 크기" 두 변수를 동시에 바꾸게 돼서 단일 변수 ablation이 깨진다.
+                             # cal_idx는 항상 넘기고, ml_cal 추가 여부는 promptcal.py 내부의
+                             # `cal_weight > 0` 게이트에만 맡긴다.
+                             cal_idx=H_cal,
                              cal_weight=args.cal_weight,
                              recon_iters_ada=args.recon_iters_ada,
                              recon_iters_strong=args.recon_iters_strong,
@@ -576,7 +590,11 @@ def main():
                              identity_aware_margin=args.identity_aware_margin)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
-    model_mib = quantized_weight_mib(models["adaround"].model)
+    # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
+    # 모드(adaround/qdrop/brecq/combined)는 전부 같은 conv/양자화 구조라 이론적
+    # 모델 크기가 동일하므로, 돌아간 것 중 아무거나 골라도 된다(naive만 돈 경우는 naive로).
+    _mib_mode = next((m for m in ["adaround", "qdrop", "brecq", "combined"] if m in models), conditions[0])
+    model_mib = quantized_weight_mib(models[_mib_mode].model)
 
     # ---------------- COCO-80: FP sim 1회 계산 + GT 매칭 ----------------
     print(f"\n[gt] COCO-80 FP sim 계산 + anchor 매칭 ({len(probe_paths)}장)")

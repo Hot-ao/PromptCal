@@ -44,13 +44,28 @@ def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0, identity_aware=False):
     이 loss가 막으려는 대상(flip)이 목적함수에 아예 안 보이는 경로가 있다.
     identity_aware=True: fp_top의 index로 sim_q를 gather해서 동일 class 위치의
     값끼리 비교(q_top이 더 이상 정렬돼있지 않음 -- Q에서 순서가 FP와 달라지면
-    q_m이 음수가 되면서 실제로 벌점을 받는다). 단일 변수 ablation용(opt-in);
-    v2의 decision_loss(완전 discrete top-1 매칭)가 과거 anti-transfer를 낸 전례가
-    있어 개선을 보장하진 않고 검증 목적."""
+    q_m이 음수가 되면서 실제로 벌점을 받는다).
+
+    09-16 claim5-b 지적 및 수정: 순수 gather는 FP top-(k+1) "밖"에 있던 class가
+    Q에서 값이 치솟아 실제 1등을 빼앗는 경우(intrusion)를 아예 못 본다 --
+    fp_idx가 그 class의 열 자체를 가리키지 않기 때문. 반면 기존 정렬 버전은
+    identity는 몰라도 Q 자신의 top-1 값 자체가 커지는 식으로 intrusion을
+    부분적으로 잡아냈었다 -- 즉 identity_aware가 기존 버전의 상위호환이
+    아니라 "swap은 잡고 intrusion은 놓치는" 다른 trade-off였다. 마지막
+    열(boundary_w가 걸리는 자리, FP rank-(k+1))만 "FP top-k(rank 1..k) 밖에
+    있는 class 중 Q에서 가장 높은 값"으로 바꿔서, swap(앞쪽 k개 열, identity
+    고정)과 intrusion(마지막 열, FP top-k 밖 전체에서 최댓값)을 둘 다 하나의
+    boundary 비교에 담는다. FP 쪽 마지막 값(fp_top[:, -1], FP rank-(k+1))과
+    비교 대상이 정확히 대응되므로(둘 다 "top-k 경계 바로 바깥의 가장 위협적인
+    값") 의미도 일관된다."""
     kk = min(k + 1, sim_fp.shape[-1])
     fp_top, fp_idx = sim_fp.topk(kk, dim=-1)
     if identity_aware:
         q_top = sim_q.gather(-1, fp_idx)
+        if kk > 1:
+            mask = torch.zeros_like(sim_q, dtype=torch.bool).scatter_(-1, fp_idx[:, :-1], True)
+            q_out = sim_q.masked_fill(mask, float("-inf")).max(-1).values
+            q_top = torch.cat([q_top[:, :-1], q_out[:, None]], dim=1)
     else:
         q_top, _ = sim_q.topk(kk, dim=-1)
     fp_m = fp_top[:, :-1] - fp_top[:, 1:]        # [A, kk-1]
