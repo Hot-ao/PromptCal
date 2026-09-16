@@ -527,6 +527,22 @@ UPIR=1.23%, lost=2). 커밋 `bcf0196`.
 
 **상태**: (d)(e) 전부 수정·검증·커밋 완료.
 
+**09-16 추가 확인(f)**: "pipeline/ 디렉토리랑 문서가 다 최신화됐나"는
+질문에 답하려고 `optimize_promptcal_scale_neighbor`를 호출하는 모든
+스크립트를 `grep -rl`로 전수 조사했다. `scripts/58_full_baseline_official_data.py`도
+(d)와 정확히 같은 문제(channelwise_smult/identity_aware_margin 미전달 +
+cal_idx confound)가 있었고, 같은 "_official_data" 패밀리인
+`scripts/59_rw_sweep_official_data.py`·`scripts/61_combo_grid_official_data.py`도
+동일 문제(cal_idx는 애초에 이 둘엔 없어서 해당 없음)였다. 전부 수정·
+스모크 테스트·커밋 완료(`bc40efa`, `105e16d`) — 세 스크립트의 `combined`
+행 수치가 서로, 그리고 `run_comparison.py`/`scripts/60`과도 전부 정확히
+일치함을 확인. **09-08~09-15 시절의 개별 진단 스크립트(`scripts/41~57`
+등, "_official_data" 접미사 없음)는 의도적으로 안 건드림** — 대부분 특정
+과거 설계(예: per-channel 도입 이전/이후 비교)를 그 자체로 검증하는 게
+목적이라 "최신 설계로 갱신"하면 오히려 그 스크립트의 원래 용도(역사적
+재현)가 깨진다. 이제 `_official_data` 패밀리(`58/59/60/61`) 전부와
+`pipeline/run_comparison.py`가 전부 §8.1 확정 설계를 기본으로 사용한다.
+
 ---
 
 ## 부록 A — 세션 중 발견한 실행/GPU 이슈
