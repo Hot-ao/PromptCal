@@ -7,10 +7,12 @@
 
 작동 원리를 개념적으로 설명한 문서는 저장소 루트의
 [`PROMPTCAL_HOW_IT_WORKS.md`](../PROMPTCAL_HOW_IT_WORKS.md), **현재 확정된
-최종 설계·하이퍼파라미터·성능 결과의 단일 진실 공급원**은
-[`PROMPTCAL_CURRENT_MODEL.md`](../PROMPTCAL_CURRENT_MODEL.md)다. 이 README는
-"어느 파일이 무슨 역할을 하는가"에 집중한다 — 수치를 인용할 땐 항상
-`PROMPTCAL_CURRENT_MODEL.md`를 우선한다.
+최종 설계·하이퍼파라미터·성능 결과의 단일 진실 공급원**은 **09-17부터**
+[`PROMPTCAL_CURRENT_MODEL_V2.md`](../PROMPTCAL_CURRENT_MODEL_V2.md)다(v1인
+`PROMPTCAL_CURRENT_MODEL.md`는 per-channel 시절 전체 서사와 하이퍼파라미터
+스윕 10개 절의 역사적 기록으로 보존됨 — v2가 그 결론만 깔끔하게 반영).
+이 README는 "어느 파일이 무슨 역할을 하는가"에 집중한다 — 수치를 인용할 땐
+항상 `PROMPTCAL_CURRENT_MODEL_V2.md`를 우선한다.
 
 **09-16에 §8.1이 per-tensor `s_mult` + identity-aware `margin_loss`
 설계로 갱신됐다** — 둘 다 이제 `run_comparison.py`의 **기본 동작**이다
@@ -126,7 +128,7 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle GPU> python pipeline/run
   `lvis_v1_minival.json`(ultralytics 공식 배포) — 확인 결과 "COCO val2017 ∩
   LVIS val"과 정확히 일치하는 4809장.
 - `--scale-reg-weight`(기본 10.0)·`--cal-weight`(기본 1.0): 둘 다 확정값
-  (`PROMPTCAL_CURRENT_MODEL.md` §5.5). `--cal-weight 0.0`을 주면 H_cal 직접
+  (`PROMPTCAL_CURRENT_MODEL_V2.md` §5.5). `--cal-weight 0.0`을 주면 H_cal 직접
   보호를 끈 이전 동작으로 돌아감.
 - **`--smult-per-tensor`·`--identity-aware-margin`(09-16, 둘 다 §8.1 확정
   설계라 기본값 True)**: `argparse.BooleanOptionalAction`이라
@@ -239,6 +241,11 @@ pipeline/quant/*.py`처럼 직접 diff를 떠서 확인할 것 — 이 문서의
   `cal_weight`/`scale_reg_weight`가 이미 확정값을 기본으로 쓰는 것과
   일관성을 맞춘 것 — 이제 위 "실행 방법"의 예시 커맨드가 플래그 추가 없이
   §8.1을 그대로 재현한다.
+- **2026-09-17**: `PROMPTCAL_CURRENT_MODEL.md`(v1)가 per-channel 시절
+  서사와 하이퍼파라미터 스윕 10개 절이 누적돼 지금 설계를 파악하기 어려울
+  만큼 두꺼워져서, 지금 확정 설계만 처음부터 깔끔하게 다시 쓴
+  `PROMPTCAL_CURRENT_MODEL_V2.md`를 새로 작성 — v1은 역사적 감사 기록으로
+  보존.
 - 최신 확정 하이퍼파라미터·공식 데이터 6-seed 결과의 단일 진실 공급원은
-  저장소 루트의 `PROMPTCAL_CURRENT_MODEL.md`다. 이 README와 수치가 어긋나면
-  그쪽을 따를 것.
+  저장소 루트의 `PROMPTCAL_CURRENT_MODEL_V2.md`다. 이 README와 수치가
+  어긋나면 그쪽을 따를 것.

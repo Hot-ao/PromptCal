@@ -1,8 +1,15 @@
 # PromptCal-PTQ — Claim 1~10 검증/변경 기록 (2026-09-15~)
 
 이 문서는 `pipeline/` 공식 데이터 설정 포팅(09-15) 이후, 리뷰어 공격 포인트
-관점에서 제기된 claim 1~10(+ claim5의 하위 발견 a/b/c)을 코드로 검증하고
+관점에서 제기된 claim 1~10(+ claim5의 하위 발견 a~f)을 코드로 검증하고
 실제로 바꾼 내용을 정리한다.
+
+**09-17 갱신**: 이 문서가 다룬 결정(claim4/5 채택 등)은 이제
+[`PROMPTCAL_CURRENT_MODEL_V2.md`](PROMPTCAL_CURRENT_MODEL_V2.md)에 확정
+설계로 반영 완료됐다 — 이 CLAIMS 문서는 계속 "무엇을 왜 검증했고 왜 그렇게
+결정했는지"의 감사(audit) 기록으로 남긴다. 아래 본문에서 v1
+(`PROMPTCAL_CURRENT_MODEL.md`)의 특정 절(§8.5, §8.10 등)을 인용하는 부분은
+그 시점 문서 상태에 대한 정확한 역사적 인용이라 그대로 둔다.
 
 **09-16 갱신**: claim4(per-tensor)와 claim5(identity-aware margin)를
 새 확정 설계로 **채택하기로 결정**했다 — `PROMPTCAL_CURRENT_MODEL.md`
