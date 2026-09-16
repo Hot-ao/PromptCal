@@ -425,7 +425,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=10.0,
           h_eval=None, cal_idx=None, cal_weight=1.0,
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5,
-          channelwise_smult=True, identity_aware_margin=False):
+          channelwise_smult=False, identity_aware_margin=True):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -484,15 +484,18 @@ def main():
     ap.add_argument("--cal-weight", type=float, default=1.0,
                     help="확정값(PROMPTCAL_CURRENT_MODEL.md §8.10). H_cal(20개)에도 S와 동일한 "
                          "margin_loss를 직접 적용하는 가중치. 0.0=off(이전 동작).")
-    ap.add_argument("--smult-per-tensor", action="store_true",
-                    help="09-15 claim4 대조 실험: Combined의 s_mult을 per-channel 벡터 대신 "
-                         "conv당 스칼라(baseline과 동일 granularity)로 강제. 기본은 확정 설계인 "
-                         "per-channel(off) 유지.")
-    ap.add_argument("--identity-aware-margin", action="store_true",
-                    help="09-15 claim5 ablation: margin_loss가 fp_top/q_top을 각자 독립적으로 "
-                         "topk해서 class identity 없이 정렬된 값끼리만 비교(top-1/top-2가 값을 "
-                         "맞바꿔도 loss=0)하는 blind spot 검증용. True면 fp_idx로 sim_q를 gather해서 "
-                         "identity를 고정한다(promptcal.py의 margin_loss 참고). 기본은 기존 동작(off).")
+    ap.add_argument("--smult-per-tensor", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True): Combined의 s_mult을 baseline과 동일한 "
+                         "per-tensor 스칼라로 씀 -- claim4, activation quantization granularity "
+                         "공정성 + 표준 INT8 엔진 배포 가능성 때문에 채택. §8.11(이전 확정값)과 "
+                         "대조하려면 --no-smult-per-tensor로 per-channel 벡터로 되돌릴 수 있음.")
+    ap.add_argument("--identity-aware-margin", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True): margin_loss가 fp_top/q_top을 각자 "
+                         "독립적으로 topk해서 class identity 없이 정렬된 값끼리만 비교(top-1/top-2가 "
+                         "값을 맞바꿔도 loss=0)하던 blind spot을 막음(claim5) -- fp_idx로 sim_q를 "
+                         "gather해서 identity를 고정하고, FP top-k 밖 class의 intrusion도 마지막 "
+                         "열에서 같이 탐지(claim5-b, promptcal.py의 margin_loss 참고). "
+                         "--no-identity-aware-margin으로 이전 동작(정렬 비교)으로 되돌릴 수 있음.")
     ap.add_argument("--eval-cap", type=int, default=0,
                     help="스모크 테스트용: flip/GT/UPIR/lost 등을 계산하는 probe(COCO val2017/LVIS "
                          "minival) 이미지 수를 이만큼으로 제한. 0이면 제한 없음(실제 실행 기본값 -- "

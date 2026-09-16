@@ -12,11 +12,14 @@
 "어느 파일이 무슨 역할을 하는가"에 집중한다 — 수치를 인용할 땐 항상
 `PROMPTCAL_CURRENT_MODEL.md`를 우선한다.
 
-**아직 §8.1 확정값으로 승격 안 된, 진행 중인 opt-in 실험(H_eval anchor-선정
-리크 수정, per-tensor `s_mult` 대조군, identity-aware `margin_loss` 등)**은
+**09-16에 §8.1이 per-tensor `s_mult` + identity-aware `margin_loss`
+설계로 갱신됐다** — 둘 다 이제 `run_comparison.py`의 **기본 동작**이다
+(claim4/claim5, `--no-smult-per-tensor`/`--no-identity-aware-margin`으로
+이전 설계로 되돌릴 수 있음). H_eval anchor-선정 리크 수정(claim1)은 opt-in도
+아니고 항상 적용되는 버그 수정이다. 이 변경들의 전체 검증 경위·claim
+2/3/6~10 등 아직 미확정인 부분은
 [`PROMPTCAL_CLAIMS_2026-09-15.md`](../PROMPTCAL_CLAIMS_2026-09-15.md)에
-정리돼 있다 — 이 디렉토리의 `run_comparison.py`에 opt-in 플래그로만
-구현돼 있고 기본 동작은 안 바뀐다.
+정리돼 있다.
 
 ## 파일 지도
 
@@ -82,8 +85,10 @@ pipeline/
                                 양쪽)·lost의 S/H_cal/H_eval 그룹별 분해·calib 시간·
                                 이론적 모델 크기까지 전부 측정해서 표로 출력.
                                 09-16: --smult-per-tensor(claim4)·
-                                --identity-aware-margin(claim5) opt-in 플래그
-                                추가. measure_ap의 클래스별 AP 매핑 버그(claim7)·
+                                --identity-aware-margin(claim5) 플래그 추가,
+                                이후 둘 다 §8.1 확정 설계로 채택되면서 기본값을
+                                True로 전환(--no-* 로 이전 설계로 되돌릴 수 있음).
+                                measure_ap의 클래스별 AP 매핑 버그(claim7)·
                                 switch_vocab의 names/predictor 미갱신(claim8)
                                 수정. --eval-cap이 COCO_AP/S_AP/H_eval_AP에는
                                 적용 안 된다는 안내 문구 추가(claim10, LVIS AP는
@@ -123,15 +128,17 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle GPU> python pipeline/run
 - `--scale-reg-weight`(기본 10.0)·`--cal-weight`(기본 1.0): 둘 다 확정값
   (`PROMPTCAL_CURRENT_MODEL.md` §5.5). `--cal-weight 0.0`을 주면 H_cal 직접
   보호를 끈 이전 동작으로 돌아감.
-- **09-16 opt-in 실험 플래그(둘 다 기본 off = 기존 확정 동작)**:
-  `--smult-per-tensor`(Combined의 `s_mult`을 baseline과 동일한 per-tensor
-  스칼라로 강제, claim4)·`--identity-aware-margin`(margin_loss가 class
-  identity를 무시하는 blind spot을 막음, claim5 — 초기 6-seed 검증 결과 AP
-  손해는 노이즈 수준이고 Top1_flip/UPIR/lost/LVIS_flip/LVIS_lost가 견고하게
-  개선돼 §8.1 확정 설계로 승격 후보였으나, **09-16에 intrusion 미탐지
-  버그(claim5-b)가 수정돼서 이 6-seed 결과는 재현하려면 재실행 필요**). 둘
-  다 아직 미확정, 자세한 내용과 실험 결과는 `PROMPTCAL_CLAIMS_2026-09-15.md`
-  참고.
+- **`--smult-per-tensor`·`--identity-aware-margin`(09-16, 둘 다 §8.1 확정
+  설계라 기본값 True)**: `argparse.BooleanOptionalAction`이라
+  `--no-smult-per-tensor`/`--no-identity-aware-margin`으로 끌 수 있음 —
+  이전(§8.11) 확정값인 per-channel `s_mult`·identity-unaware margin_loss로
+  되돌리는 방법. `--smult-per-tensor`는 Combined의 `s_mult`을 baseline과
+  동일한 per-tensor 스칼라로 쓰게 함(claim4, activation quantization
+  granularity 공정성 + 표준 INT8 엔진 배포 가능성). `--identity-aware-margin`은
+  margin_loss가 class identity를 무시하던 blind spot을 막음(claim5,
+  claim5-b로 intrusion 탐지까지 보강). 즉 **위 "실행 방법" 예시 커맨드는
+  플래그 추가 없이 그대로 §8.1 확정 설계를 재현**한다. 자세한 검증 경위는
+  `PROMPTCAL_CLAIMS_2026-09-15.md` 참고.
 - `--eval-cap`은 COCO_AP/S_AP/H_eval_AP(`measure_ap`가 `--data` yaml의 고정
   val split을 씀)에는 적용 안 되고, LVIS_AP/APr/APc/APf와 flip/GT/UPIR/lost
   등 나머지 전부에는 적용됨 — 실행 시 표 위에 이 안내가 자동 출력됨(claim10).
@@ -223,6 +230,15 @@ pipeline/quant/*.py`처럼 직접 diff를 떠서 확인할 것 — 이 문서의
   버그 수정(claim5-b) — **이 수정 전에 돌린 identity-aware 6-seed 결과는
   재현하려면 재실행 필요**. `--conditions` 플래그와 `print(vars(args))`
   추가(claim5-c).
+- **2026-09-16 (이어서 2)**: 커밋 `4629adf`(claims 문서), 이어서
+  `--smult-per-tensor`/`--identity-aware-margin`을 `PROMPTCAL_CURRENT_MODEL.md`
+  §8.1 확정 설계로 승격 — 풀스케일 6-seed(`runs/67_final_confirmed_fullscale/`)
+  검증 완료 후 `argparse.BooleanOptionalAction`으로 바꿔서 두 플래그의
+  **기본값을 True로 전환**(`--no-smult-per-tensor`/`--no-identity-aware-margin`으로
+  이전 설계로 되돌릴 수 있음). `build()` 함수 자체의 기본값도 맞춰서 변경.
+  `cal_weight`/`scale_reg_weight`가 이미 확정값을 기본으로 쓰는 것과
+  일관성을 맞춘 것 — 이제 위 "실행 방법"의 예시 커맨드가 플래그 추가 없이
+  §8.1을 그대로 재현한다.
 - 최신 확정 하이퍼파라미터·공식 데이터 6-seed 결과의 단일 진실 공급원은
   저장소 루트의 `PROMPTCAL_CURRENT_MODEL.md`다. 이 README와 수치가 어긋나면
   그쪽을 따를 것.
