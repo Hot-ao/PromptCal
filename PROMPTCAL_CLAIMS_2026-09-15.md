@@ -581,10 +581,13 @@ seed5를 물리 GPU2(46GB 카드, 다른 모델)에 띄웠다가, §9의 GPU-비
 
 **남은 작업**:
 1. claim2/claim6 문구를 실제 논문 파일에 삽입(이 저장소 밖 작업).
-2. `pipeline/run_comparison.py`의 `--smult-per-tensor`/
-   `--identity-aware-margin` 기본값을 `False`(opt-in)에서 `True`(확정
-   설계가 기본)로 뒤집을지 검토 — `cal_weight`/`scale_reg_weight`가 이미
-   확정값을 기본으로 쓰는 것과 일관성 맞추는 차원. 아직 안 함, 사용자
-   판단 대기.
+2. ~~`--smult-per-tensor`/`--identity-aware-margin` 기본값을 뒤집을지
+   검토~~ **완료**(커밋 `4332e46`) — `argparse.BooleanOptionalAction`으로
+   바꿔서 기본값 True, `--no-*`로 이전 설계 재현 가능. `build()` 기본값도
+   맞춰서 변경. 라이브러리 레벨(`adaround.py`/`promptcal.py`) 기본값은
+   의도적으로 안 건드림(`run_comparison.py`가 항상 명시적으로 넘기므로
+   실제 동작엔 무관, `scripts/58` 등 과거 암묵적 기본값 의존 코드의
+   재현성만 흔들 위험 있어서).
 3. 이 문서와 코드 변경 전체는 이미 커밋됨(`87157e5`, `645f910`, `d5ce828`,
-   `4629adf` + README 갱신 2건) — 새 변경이 생기면 그때그때 커밋.
+   `4629adf`, `345e71e`, `4332e46` + README 갱신 3건) — 새 변경이 생기면
+   그때그때 커밋.
