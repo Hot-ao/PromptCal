@@ -335,20 +335,22 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
 
 def build_combined(model_cls, w, names, device, calib, fp, scale_reg_weight, iters=1500,
                    pidx=None, lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0,
-                   h_eval=None, recon_iters_ada=1000):
+                   h_eval=None, recon_iters_ada=1000,
+                   channelwise_smult=False, identity_aware_margin=True):
     m = model_cls(w)
     m.set_classes(names)
     m.fuse()
     wrap_convs(m.model, 8, 8)
     m.model.to(device).eval()
     calibrate(m.model, calib, device=device)
-    convert_to_adaround(m.model)
+    convert_to_adaround(m.model, channelwise_smult=channelwise_smult)
     optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
     optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                       lr=lr, k=k, neighbor_k=neighbor_k,
                                       neighbor_weight=neighbor_weight,
                                       asymmetric=True, scale_reg_weight=scale_reg_weight,
                                       exclude_from_neighbors=h_eval,
+                                      identity_aware_margin=identity_aware_margin,
                                       verbose=False)
     return m
 
@@ -368,6 +370,12 @@ def main():
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--neighbor-k", type=int, default=5)
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
+    ap.add_argument("--smult-per-tensor", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True, run_comparison.py와 동일). "
+                         "--no-smult-per-tensor로 이전(§8.11) per-channel 설계로 되돌릴 수 있음.")
+    ap.add_argument("--identity-aware-margin", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True). --no-identity-aware-margin으로 이전 "
+                         "동작(정렬 비교)으로 되돌릴 수 있음.")
     ap.add_argument("--rw-list", default="10,20,30,50",
                     help="비교할 scale_reg_weight 후보 (콤마 구분)")
     ap.add_argument("--eval-cap", type=int, default=0)
@@ -378,6 +386,7 @@ def main():
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
+    print(f"[args] {vars(args)}")
     rw_list = [float(x) for x in args.rw_list.split(",")]
 
     torch.manual_seed(args.torch_seed)
@@ -434,7 +443,9 @@ def main():
         models[mode] = build_combined(YOLOWorld, args.model, coco, device, calib, fp, rw,
                                       iters=args.iters, pidx=S, lr=args.lr, k=args.k,
                                       neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
-                                      h_eval=H_eval, recon_iters_ada=args.recon_iters_ada)
+                                      h_eval=H_eval, recon_iters_ada=args.recon_iters_ada,
+                                      channelwise_smult=not args.smult_per_tensor,
+                                      identity_aware_margin=args.identity_aware_margin)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
 

@@ -335,27 +335,29 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
     return out
 
 
-def build_adaround_base(model_cls, w, names, device, calib, fp, recon_iters_ada=1000):
+def build_adaround_base(model_cls, w, names, device, calib, fp, recon_iters_ada=1000,
+                        channelwise_smult=False):
     m = model_cls(w)
     m.set_classes(names)
     m.fuse()
     wrap_convs(m.model, 8, 8)
     m.model.to(device).eval()
     calibrate(m.model, calib, device=device)
-    convert_to_adaround(m.model)
+    convert_to_adaround(m.model, channelwise_smult=channelwise_smult)
     optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
     return m
 
 
 def build_combined_from_base(base_model, fp, calib, device, scale_reg_weight, iters=1500,
                              pidx=None, lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5,
-                             neighbor_weight=1.0, h_eval=None):
+                             neighbor_weight=1.0, h_eval=None, identity_aware_margin=True):
     m = copy.deepcopy(base_model)
     optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                       lr=lr, k=k, boundary_w=boundary_w, neighbor_k=neighbor_k,
                                       neighbor_weight=neighbor_weight,
                                       asymmetric=True, scale_reg_weight=scale_reg_weight,
                                       exclude_from_neighbors=h_eval,
+                                      identity_aware_margin=identity_aware_margin,
                                       verbose=False)
     return m
 
@@ -377,6 +379,12 @@ def main():
     ap.add_argument("--neighbor-k-values", default="5", help="콤마 구분 정수 리스트")
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
     ap.add_argument("--scale-reg-weight", type=float, default=10.0)
+    ap.add_argument("--smult-per-tensor", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True, run_comparison.py와 동일). "
+                         "--no-smult-per-tensor로 이전(§8.11) per-channel 설계로 되돌릴 수 있음.")
+    ap.add_argument("--identity-aware-margin", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True). --no-identity-aware-margin으로 이전 "
+                         "동작(정렬 비교)으로 되돌릴 수 있음.")
     ap.add_argument("--eval-cap", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
@@ -385,6 +393,7 @@ def main():
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
+    print(f"[args] {vars(args)}")
 
     k_values = [int(x) for x in args.k_values.split(",")]
     bw_values = [float(x) for x in args.boundary_w_values.split(",")]
@@ -440,7 +449,8 @@ def main():
     print("[build] AdaRound base (그리드 전체와 무관, 1회만 빌드)")
     t0 = time.perf_counter()
     base_model = build_adaround_base(YOLOWorld, args.model, coco, device, calib, fp,
-                                     recon_iters_ada=args.recon_iters_ada)
+                                     recon_iters_ada=args.recon_iters_ada,
+                                     channelwise_smult=not args.smult_per_tensor)
     base_build_time = time.perf_counter() - t0
     print(f"  base 빌드 {base_build_time:.1f}s")
 
@@ -453,7 +463,8 @@ def main():
                                                 args.scale_reg_weight, iters=args.iters,
                                                 pidx=S, lr=args.lr, k=k, boundary_w=bw,
                                                 neighbor_k=nk, neighbor_weight=args.neighbor_weight,
-                                                h_eval=H_eval)
+                                                h_eval=H_eval,
+                                                identity_aware_margin=args.identity_aware_margin)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
 
