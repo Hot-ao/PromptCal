@@ -1,11 +1,18 @@
 # PromptCal-PTQ — Claim 1~10 검증/변경 기록 (2026-09-15~)
 
 이 문서는 `pipeline/` 공식 데이터 설정 포팅(09-15) 이후, 리뷰어 공격 포인트
-관점에서 제기된 claim 1~10을 코드로 검증하고 실제로 바꾼 내용을 정리한다.
-**`PROMPTCAL_CURRENT_MODEL.md`의 §8.1 확정 하이퍼파라미터는 이 문서의 어떤
-내용으로도 아직 바뀌지 않았다** — 여기 나오는 변경들은 전부 opt-in 플래그로
-구현돼서 기존 확정 동작과 병행 가능하고, "채택" 여부는 별도 결정 사항으로
-남겨둔다. git 커밋도 아직 안 했다(`git status`로 확인 가능, 아래 부록 참고).
+관점에서 제기된 claim 1~10(+ claim5의 하위 발견 a/b/c)을 코드로 검증하고
+실제로 바꾼 내용을 정리한다.
+
+**09-16 갱신**: claim4(per-tensor)와 claim5(identity-aware margin)를
+새 확정 설계로 **채택하기로 결정**했다 — `PROMPTCAL_CURRENT_MODEL.md`
+§8.1을 대체할 풀스케일 6-seed 검증이 진행 중이며, 완료되면 §8.1이
+갱신된다(부록 D 참고). 그 전까지는 여전히 §8.1이 유효한 확정값이고,
+여기 변경들은 opt-in 플래그(`--smult-per-tensor`,
+`--identity-aware-margin`)로 기존 동작과 병행 가능하다. 코드는 이미
+전부 커밋 완료(`87157e5`, `645f910`, README `c5f2cf1`/`1893592`) —
+풀스케일 검증은 기존 커밋된 플래그를 다른 CLI 인자(`--eval-cap` 없이)로
+실행한 것뿐이라 새 코드 변경은 없다.
 
 ---
 
@@ -62,6 +69,22 @@ feature가 영향을 받는다 — loss 함수와 무관한 별도의 confound.
 
 **남은 선택지(미실행)**: Combined만 calibration 시 vocabulary를 60-class(H_eval
 제외)로 줄여서 도는 ablation — 순수 검증용, 시도 안 함.
+
+**09-16 Limitations 문구 초안**(영어, 논문 삽입용):
+
+> *Limitations.* Because YOLO-World's vision-language fusion (C2fAttn's
+> `MaxSigmoidAttnBlock` and `ImagePoolingAttn`) conditions visual features
+> on the *entire currently active* text vocabulary via cross-attention,
+> H_eval prompts — while never used in any loss term during calibration —
+> are still architecturally present in the 80-class COCO vocabulary at
+> calibration time. This applies identically across all five methods
+> compared, so it does not bias the relative comparison, but it does mean
+> COCO-80 metrics for H_eval should not be read as measuring performance
+> under a *fully unseen* vocabulary in the strictest sense. Our
+> LVIS-transplant results are free of this confound, since LVIS categories
+> are never present in the vocabulary during COCO-80 calibration.
+
+**상태**: 초안 작성 완료, 논문 Limitations 섹션에 삽입 대기(사용자 검토 필요).
 
 ---
 
@@ -256,7 +279,22 @@ opt-in 플래그로 구현 완료, `src`/`pipeline` 동기화 완료, 커밋 안
 2. (비용 높음) 후보 풀이 훨씬 큰 세팅(클래스 수 확대 또는 H_cal 비중
    축소)에서 "진짜 selection"이 일어남을 보여주는 보조 실험 추가.
 
-**상태**: 미결정, 사용자 판단 대기.
+**09-16 방법론 문구 초안**(영어, 옵션 1 채택, 논문 삽입용):
+
+> We select up to `neighbor_k` semantically nearest non-target prompts per
+> anchor class via text-embedding cosine similarity, excluding S and
+> H_eval. In our 40/20/20 (S/H_cal/H_eval) split, this candidate pool
+> reduces to H_cal in its entirety (20 classes) — with 40 S-anchors each
+> drawing `neighbor_k=5` candidates from this pool, the union already
+> covers all 20 H_cal classes, which we confirmed empirically: results are
+> identical for `neighbor_k` ∈ {5, 8, 10}. The mechanism is thus
+> equivalent, under our split, to applying the asymmetric hinge to H_cal in
+> its entirety; the neighbor-selection formulation is written generally so
+> that it yields genuine locality-restricted selection under splits with a
+> larger candidate pool.
+
+**상태**: 초안 작성 완료(옵션 1, 비용 낮은 쪽), 논문 Method 섹션에 삽입
+대기(사용자 검토 필요). 옵션 2(보조 실험)는 계획 없음.
 
 ---
 
@@ -468,6 +506,20 @@ GPU들은 비었다고 뜰 때까지 피했다.
 단위(3개 → 상태 확인 → 나머지)로 띄우면서 `nvidia-smi`/`free -h`를 매번
 확인하는 방식으로 진행(claim5 재검증부터 적용).
 
+**GPU 모델 이질성(09-16, 풀스케일 최종 검증 때 발견)**: "논문에 실릴 최종
+확정 숫자"를 만드는 6-seed 실행에서는 매핑 정확성뿐 아니라 **GPU 모델
+자체를 6개 seed 전부 동일하게 맞추는 게 낫다** — `PROMPTCAL_CURRENT_MODEL.md`
+§9의 GPU-비결정성 실측(동일 코드/seed도 물리 GPU가 다르면 결과가 달라짐)
+때문. 이 서버는 20GB 카드(물리 0/4/5/6/7, RTX4000 Ada) 5개와 46GB 카드
+(물리 1/2/3) 3개가 섞여 있어서 6-seed를 돌리려면 최소 하나는 다른 모델을
+써야 하는 상황이 생김 — 해결책은 (a) 매칭되는 GPU가 남을 때까지 순차
+대기, 또는 (b) 메모리 여유가 큰(job당 ~2.5GB, 카드당 20GB) 걸 이용해
+같은 모델 GPU 하나에 2개 job을 동시에 올려서 공유(연산만 나눠 쓰고
+메모리는 안 모자람 — 그 GPU의 두 job만 ~2배 느려질 뿐 OOM 위험은
+없음). 이번엔 (b)를 씀(GPU7에 seed4/5 공유). 스모크성 빠른 검증(seed 간
+비교가 주 목적이 아닌 경우)에서는 모델 이질성이 크게 중요치 않을 수
+있지만, "확정 표"를 만들 때는 반드시 신경 쓸 것.
+
 ## 부록 B — 코드 변경 파일 목록 (전부 uncommitted)
 
 | 파일 | 변경 내용 |
@@ -490,13 +542,40 @@ GPU들은 비었다고 뜰 때까지 피했다.
 | claim5 identity-aware OFF 6-seed(seed0은 `62_anchorfix` 재사용) | `runs/65_identity_off/seed{1..5}_off.log` |
 | claim3 rounding_diff_rate 측정 | 스크립트만 존재(`/tmp` scratchpad, 저장소에 커밋 안 됨) — 재현하려면 이 문서의 claim3 절차대로 재실행 필요 |
 
-## 부록 D — 다음에 결정할 것들 (우선순위 순)
+## 부록 D — 결정 현황 (2026-09-16 갱신)
 
-1. **claim5(identity-aware margin)를 §8.1 확정 설계로 승격할지** — 가장
-   근거가 탄탄한 후보.
-2. claim1 수정을 6-seed(같은 물리 GPU)로 재검증 후 §8.1 갱신할지.
-3. claim6의 논문 서술을 어떻게 고칠지(방법론 문장 수정 vs 보조 실험 추가).
-4. claim4의 per-tensor 결과를 논문에 disclosure로 쓸지, 아니면 per-tensor
-   자체를 새 기본값으로 밀고 갈지(현재는 비권장).
-5. 위 결정들이 나면 이 문서 내용을 `PROMPTCAL_CURRENT_MODEL.md`로 승격/병합하고
+**09-16에 내려진 결정** (더 이상 "고민 중"이 아니라 확정된 방향):
+- **claim4(per-tensor)와 claim5(identity-aware margin, intrusion 수정판)
+  둘 다 채택.** 판단 기준을 "성능이 더 좋은가"에서 "성능 손해 없이
+  구조적 결함(공정성/배포 가능성/loss의 correctness)을 고치는가"로
+  재정립함 — per-tensor는 baseline과의 공정한 비교·실제 배포 가능성을
+  위해 필연적, identity-aware margin은 margin_loss가 실제로 flip을
+  보게 만드는 correctness fix이고 6-seed 기준 성능 손해가 사실상
+  없음(§Claim5 표 참고). 둘 다 성능 저울질 대상이 아니라 "이렇게
+  해야 하는" 방향으로 확정.
+- claim1(anchor 선정 버그 수정)은 원래도 순수 버그 수정이라 별도 결정
+  없이 항상 적용 — 새 확정 설계에 당연히 포함.
+- claim2/claim6 논문 문구 초안 작성 완료(해당 절 참고), 실제 논문
+  파일에 삽입은 사용자 몫.
+
+**진행 중(GPU)**: 위 결정에 따른 새 확정 설계(`--smult-per-tensor
+--identity-aware-margin`, claim1 fix 포함)로 **풀스케일(`--eval-cap` 없음,
+val2017 5000장 + 공식 LVIS minival 4809장) 6-seed(0~5) 재검증**을
+`runs/67_final_confirmed_fullscale/`에서 돌리는 중. 5개 조건(naive/
+AdaRound/QDrop/BRECQ/Combined) 전부 포함 — 최종 확정 표에 baseline도
+같은 스케일로 필요하기 때문. 6개 seed 전부 물리 GPU 0/4/5/6/7(동일 모델,
+RTX4000 Ada)에서만 실행해서 GPU-모델 confound 없음 — 처음엔 GPU 부족으로
+seed5를 물리 GPU2(46GB 카드, 다른 모델)에 띄웠다가, §9의 GPU-비결정성
+우려 때문에 초반(2분 경과, 손실 미미)에 죽이고 GPU7(RTX4000 Ada, seed4와
+공유)로 재시작함(부록 A 참고). seed4/5는 GPU7을 공유해서 그 둘만 좀 더
+오래 걸림.
+
+**완료 후 남은 작업**:
+1. `runs/67_final_confirmed_fullscale/`의 6-seed 결과를 §8.1 형식으로
+   집계.
+2. `PROMPTCAL_CURRENT_MODEL.md` §8.1을 이 결과로 교체(per-channel 단독
+   확정값 → per-tensor+identity-aware+claim1 조합) — 지금까지의 확정
+   설계를 대체하는 것이므로 §8.1 전체 재작성 필요.
+3. claim2/claim6 문구를 실제 논문 파일에 삽입(이 저장소 밖 작업).
+4. 이 문서(`PROMPTCAL_CLAIMS_2026-09-15.md`)와 코드 변경 전체를 최종
    git commit.
