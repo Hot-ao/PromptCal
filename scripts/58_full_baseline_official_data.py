@@ -405,7 +405,8 @@ def quantized_weight_mib(model_module):
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
           lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=0.0,
           h_eval=None, cal_idx=None, cal_weight=1.0,
-          recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5):
+          recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5,
+          channelwise_smult=False, identity_aware_margin=True):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -428,7 +429,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         convert_to_adaround(m.model)
         optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong, verbose=False)
     elif mode == "combined":
-        convert_to_adaround(m.model)
+        convert_to_adaround(m.model, channelwise_smult=channelwise_smult)
         optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
         optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                           lr=lr, k=k, neighbor_k=neighbor_k,
@@ -436,6 +437,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           asymmetric=True, scale_reg_weight=scale_reg_weight,
                                           exclude_from_neighbors=h_eval,
                                           cal_idx=cal_idx, cal_weight=cal_weight,
+                                          identity_aware_margin=identity_aware_margin,
                                           verbose=False)
     return m
 
@@ -458,10 +460,16 @@ def main():
     ap.add_argument("--neighbor-k", type=int, default=5)
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
     ap.add_argument("--scale-reg-weight", type=float, default=10.0)
-    ap.add_argument("--cal-weight", type=float, default=0.0,
-                     help="H_cal(20개)에도 margin_loss 직접 적용(09-12 §9 확장). "
-                          "0.0=off(기존 동작), >0이면 S와 동일 margin_loss를 "
-                          "H_cal 컬럼에도 이 가중치로 추가하고 neighbor 후보 풀에서 제외.")
+    ap.add_argument("--cal-weight", type=float, default=1.0,
+                     help="확정값(09-12 §8.10, 09-16에 이 스크립트도 pipeline/run_comparison.py와 "
+                          "일치하도록 기본값을 0.0에서 1.0으로 갱신). H_cal(20개)에도 S와 동일한 "
+                          "margin_loss를 이 가중치로 직접 적용. 0.0=off(이전 동작).")
+    ap.add_argument("--smult-per-tensor", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True, pipeline/run_comparison.py와 동일). "
+                         "--no-smult-per-tensor로 이전(§8.11) per-channel 설계로 되돌릴 수 있음.")
+    ap.add_argument("--identity-aware-margin", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True, pipeline/run_comparison.py와 동일). "
+                         "--no-identity-aware-margin으로 이전 동작(정렬 비교)으로 되돌릴 수 있음.")
     ap.add_argument("--eval-cap", type=int, default=0,
                     help="스모크 테스트용: probe(COCO val2017/LVIS minival) 이미지 수를 이만큼으로 "
                          "제한. 0이면 제한 없음(실제 실행 기본값 -- val2017 전체 5000장).")
@@ -472,6 +480,7 @@ def main():
     args = ap.parse_args()
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
+    print(f"[args] {vars(args)}")
 
     torch.manual_seed(args.torch_seed)
     torch.cuda.manual_seed_all(args.torch_seed)
@@ -532,11 +541,18 @@ def main():
                              iters=args.iters, pidx=S, lr=args.lr, k=args.k,
                              neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
                              scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
-                             cal_idx=(H_cal if args.cal_weight > 0 else None),
+                             # 09-16 버그 수정(claim5-a와 동일): cal_weight==0일 때 cal_idx까지
+                             # None으로 넘기면 confident-anchor 선정 풀(train_cols)이
+                             # S(40)로 좁아져서 cal_weight 0 vs >0 비교가 anchor 풀 차이와
+                             # 섞이는 confound가 생긴다. cal_idx는 항상 넘기고 ml_cal
+                             # 추가 여부만 cal_weight로 게이트한다.
+                             cal_idx=H_cal,
                              cal_weight=args.cal_weight,
                              recon_iters_ada=args.recon_iters_ada,
                              recon_iters_strong=args.recon_iters_strong,
-                             qdrop_prob=args.qdrop_prob)
+                             qdrop_prob=args.qdrop_prob,
+                             channelwise_smult=not args.smult_per_tensor,
+                             identity_aware_margin=args.identity_aware_margin)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     model_mib = quantized_weight_mib(models["adaround"].model)
