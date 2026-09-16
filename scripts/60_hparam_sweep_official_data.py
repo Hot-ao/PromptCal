@@ -334,24 +334,29 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
     return out
 
 
-def build_adaround_base(model_cls, w, names, device, calib, fp, recon_iters_ada=1000):
+def build_adaround_base(model_cls, w, names, device, calib, fp, recon_iters_ada=1000,
+                        channelwise_smult=False):
     """AdaRound 단계까지만 빌드 -- neighbor_k/k/boundary_w 스윕과 무관하게 항상
     bit-identical 결과이므로, 스윕 값마다 매번 다시 만들지 않고 한 번만 만들어서
-    deepcopy로 재사용한다(스윕 포인트가 N개면 이전엔 AdaRound를 N번, 지금은 1번만 돎)."""
+    deepcopy로 재사용한다(스윕 포인트가 N개면 이전엔 AdaRound를 N번, 지금은 1번만 돎).
+    09-16: channelwise_smult 기본값을 False(§8.1 확정 설계, per-tensor)로 맞춤 --
+    이 함수가 인자 없이 호출되면 라이브러리 기본값(True, per-channel, §8.11로
+    superseded)을 그대로 물려받아서 스윕이 조용히 옛 설계로 도는 문제가 있었음."""
     m = model_cls(w)
     m.set_classes(names)
     m.fuse()
     wrap_convs(m.model, 8, 8)
     m.model.to(device).eval()
     calibrate(m.model, calib, device=device)
-    convert_to_adaround(m.model)
+    convert_to_adaround(m.model, channelwise_smult=channelwise_smult)
     optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
     return m
 
 
 def build_combined_from_base(base_model, fp, calib, device, scale_reg_weight, iters=1500,
                              pidx=None, lr=1e-2, k=5, boundary_w=3.0, neighbor_k=5,
-                             neighbor_weight=1.0, h_eval=None, cal_idx=None, cal_weight=1.0):
+                             neighbor_weight=1.0, h_eval=None, cal_idx=None, cal_weight=1.0,
+                             identity_aware_margin=True):
     m = copy.deepcopy(base_model)
     optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                       lr=lr, k=k, boundary_w=boundary_w, neighbor_k=neighbor_k,
@@ -359,6 +364,7 @@ def build_combined_from_base(base_model, fp, calib, device, scale_reg_weight, it
                                       asymmetric=True, scale_reg_weight=scale_reg_weight,
                                       exclude_from_neighbors=h_eval,
                                       cal_idx=cal_idx, cal_weight=cal_weight,
+                                      identity_aware_margin=identity_aware_margin,
                                       verbose=False)
     return m
 
@@ -381,6 +387,17 @@ def main():
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
     ap.add_argument("--scale-reg-weight", type=float, default=10.0,
                     help="확정값(09-08). --param으로 이것 자체를 스윕하려면 scripts/59 사용.")
+    ap.add_argument("--cal-weight", type=float, default=1.0,
+                    help="확정값(09-12, §8.10). H_cal(20개)에도 S와 동일한 margin_loss를 직접 "
+                         "적용하는 가중치. --param cal_weight로 이것 자체를 스윕할 때는 --values가 "
+                         "이 기본값을 덮어씀.")
+    ap.add_argument("--smult-per-tensor", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True). --no-smult-per-tensor로 §8.11(이전 "
+                         "확정값, per-channel)로 되돌릴 수 있음 -- pipeline/run_comparison.py와 "
+                         "동일 플래그.")
+    ap.add_argument("--identity-aware-margin", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-16 §8.1 확정 설계(기본 True). --no-identity-aware-margin으로 이전 "
+                         "동작(정렬 비교)으로 되돌릴 수 있음.")
     ap.add_argument("--param", required=True,
                     choices=["neighbor_k", "k", "boundary_w", "neighbor_weight", "scale_reg_weight",
                              "cal_weight"],
@@ -450,21 +467,28 @@ def main():
     print("[build] AdaRound base (스윕 파라미터와 무관, 1회만 빌드)")
     t0 = time.perf_counter()
     base_model = build_adaround_base(YOLOWorld, args.model, coco, device, calib, fp,
-                                     recon_iters_ada=args.recon_iters_ada)
+                                     recon_iters_ada=args.recon_iters_ada,
+                                     channelwise_smult=not args.smult_per_tensor)
     base_build_time = time.perf_counter() - t0
     print(f"  base 빌드 {base_build_time:.1f}s")
 
     conditions = [f"combined_{args.param}{v:g}" for v in sweep_values]
     models, calib_time = {}, {}
     for v, mode in zip(sweep_values, conditions):
+        # 09-16 버그 수정(claim5-a와 동일 문제): cal_idx를 "cal_weight를 스윕할
+        # 때만" 넘기면, 다른 파라미터(scale_reg_weight 등) 스윕 도중엔 H_cal이
+        # 전혀 보호 안 받고 confident-anchor 선정 풀(train_cols)도 S(40)로만
+        # 좁아져서 --cal-weight 기본값(1.0)이 무시된 채 조용히 다른 설계로
+        # 돈다. cal_idx는 항상 넘기고, --param cal_weight일 때만 그 값을
+        # 스윕 값으로 덮어쓴다.
         kw = dict(iters=args.iters, pidx=S, lr=args.lr, k=args.k, boundary_w=args.boundary_w,
                   neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
-                  h_eval=H_eval)
+                  h_eval=H_eval, cal_idx=H_cal, cal_weight=args.cal_weight,
+                  identity_aware_margin=args.identity_aware_margin)
         srw = args.scale_reg_weight
         if args.param == "scale_reg_weight":
             srw = v                 # scale_reg_weight는 kw가 아니라 위치 인자라 따로 처리
         elif args.param == "cal_weight":
-            kw["cal_idx"] = H_cal   # cal_weight 스윕일 때만 H_cal을 보호 대상으로 활성화
             kw["cal_weight"] = v
         else:
             kw[args.param] = v      # 스윕 대상 하나만 덮어쓰기, 나머지는 확정값 그대로

@@ -521,7 +521,11 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
         sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
         ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w,
                          identity_aware=identity_aware_margin)
-        if cidx is not None:
+        if cidx is not None and cal_weight > 0:
+            # 09-16: cal_weight=0이면 이 항의 기여가 0*ml_cal=0이라 결과는
+            # 원래도 같았지만(버그 아님), cal_idx가 이제 항상 전달되므로
+            # (claim5-a) cal_weight=0에서도 매 iter margin_loss를 불필요하게
+            # 계산하고 있었다. 게이트를 걸어서 그 계산 자체를 스킵한다.
             ml_cal = margin_loss(sim_q[aidx][:, cidx], sim_fp[aidx][:, cidx], k=k, boundary_w=boundary_w,
                                  identity_aware=identity_aware_margin)
             ml = ml + cal_weight * ml_cal
