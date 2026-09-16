@@ -65,6 +65,13 @@ pipeline/
 │                               identity_aware(기본 False) 추가 -- True면
 │                               fp_idx로 sim_q를 gather해서 class identity
 │                               고정(claim5 대조 실험, opt-in).
+│                               09-16: identity_aware=True가 FP top-(k+1) 밖의
+│                               class가 Q에서 치솟는 경우(intrusion)를 아예 못
+│                               보던 것 수정 -- 마지막 열(boundary)만 "top-k 밖
+│                               전체 최댓값"으로 바꿔서 swap과 intrusion을 둘 다
+│                               탐지(claim5-b). 이 수정 전에 돌린
+│                               identity-aware 6-seed 결과(아래 실행 이력 참고)는
+│                               재현하려면 재실행 필요.
 └── run_comparison.py        -- 실행 진입점(`scripts/58_full_baseline_official_data.py`
                                 포팅, 09-15). naive/AdaRound/QDrop/BRECQ/Combined
                                 다섯 조건을 공식 데이터 설정(calib=train2017,
@@ -81,6 +88,13 @@ pipeline/
                                 수정. --eval-cap이 COCO_AP/S_AP/H_eval_AP에는
                                 적용 안 된다는 안내 문구 추가(claim10, LVIS AP는
                                 적용됨) -- 자세한 내용은 PROMPTCAL_CLAIMS_2026-09-15.md.
+                                09-16 추가: --cal-weight 0일 때 cal_idx까지
+                                None으로 넘겨서 anchor 풀(train_cols)이 같이
+                                줄어들던 confound 수정(claim5-a, cal_idx는 이제
+                                항상 전달). main() 시작 시 print(vars(args))로
+                                실행 플래그 로그에 남김, --conditions(쉼표 구분,
+                                기본 5개 전부)로 Combined 변형만 볼 때 QDrop/BRECQ
+                                재빌드 생략 가능(claim5-c).
 ```
 
 ## 실행 방법
@@ -112,13 +126,20 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle GPU> python pipeline/run
 - **09-16 opt-in 실험 플래그(둘 다 기본 off = 기존 확정 동작)**:
   `--smult-per-tensor`(Combined의 `s_mult`을 baseline과 동일한 per-tensor
   스칼라로 강제, claim4)·`--identity-aware-margin`(margin_loss가 class
-  identity를 무시하는 blind spot을 막음, claim5 — 6-seed 검증 결과 AP
+  identity를 무시하는 blind spot을 막음, claim5 — 초기 6-seed 검증 결과 AP
   손해는 노이즈 수준이고 Top1_flip/UPIR/lost/LVIS_flip/LVIS_lost가 견고하게
-  개선돼 §8.1 확정 설계로 승격 후보). 둘 다 아직 미확정, 자세한 내용과
-  실험 결과는 `PROMPTCAL_CLAIMS_2026-09-15.md` 참고.
+  개선돼 §8.1 확정 설계로 승격 후보였으나, **09-16에 intrusion 미탐지
+  버그(claim5-b)가 수정돼서 이 6-seed 결과는 재현하려면 재실행 필요**). 둘
+  다 아직 미확정, 자세한 내용과 실험 결과는 `PROMPTCAL_CLAIMS_2026-09-15.md`
+  참고.
 - `--eval-cap`은 COCO_AP/S_AP/H_eval_AP(`measure_ap`가 `--data` yaml의 고정
   val split을 씀)에는 적용 안 되고, LVIS_AP/APr/APc/APf와 flip/GT/UPIR/lost
   등 나머지 전부에는 적용됨 — 실행 시 표 위에 이 안내가 자동 출력됨(claim10).
+- `--conditions`(쉼표 구분, 기본 `naive,adaround,qdrop,brecq,combined`):
+  Combined 변형만 튜닝/확인할 때 `--conditions naive,combined`로 QDrop/BRECQ
+  재빌드(seed당 900~1400s대)를 생략할 수 있다 — 단, baseline 결과를 다른
+  로그에서 재사용하려면 **같은 seed** 로그여야 한다(S_AP/H_eval_AP/Heval_flip/
+  UPIR/lost_rate_by_group은 seed마다 partition이 바뀌어 값이 달라짐).
 - `--model`: 저장소 루트의 `yolov8s-world.pt`(YOLO-World v1) 또는
   `yolov8s-worldv2.pt`. 지금까지 모든 확정 결과는 `yolov8s-world.pt` 기준.
 - `--seed`: COCO-80 프롬프트를 S(40, margin_loss 직접 대상)/H_cal(20,
@@ -194,6 +215,14 @@ pipeline/quant/*.py`처럼 직접 diff를 떠서 확인할 것 — 이 문서의
   수정. 전부 opt-in이거나(claim4/5) 항상-바른-방향인 버그 수정(claim1/7/8)이라
   기존 확정 결과 재현성은 안 깨짐. 실험 결과·6-seed 검증·미결정 사항은
   `PROMPTCAL_CLAIMS_2026-09-15.md`에 별도 정리.
+- **2026-09-16 (이어서)**: 커밋 `645f910`. `--cal-weight 0`이 `cal_idx`까지
+  `None`으로 넘겨서 anchor 풀(`train_cols`)이 40→60으로 같이 바뀌던
+  confound 수정(claim5-a, `cal_idx`는 이제 항상 전달) — 이번 세션 결과는
+  전부 `cal_weight` 기본값(1.0)을 썼으므로 영향 없음. `identity_aware=True`가
+  FP top-(k+1) 밖의 class가 Q에서 치솟는 경우(intrusion)를 아예 못 보던
+  버그 수정(claim5-b) — **이 수정 전에 돌린 identity-aware 6-seed 결과는
+  재현하려면 재실행 필요**. `--conditions` 플래그와 `print(vars(args))`
+  추가(claim5-c).
 - 최신 확정 하이퍼파라미터·공식 데이터 6-seed 결과의 단일 진실 공급원은
   저장소 루트의 `PROMPTCAL_CURRENT_MODEL.md`다. 이 README와 수치가 어긋나면
   그쪽을 따를 것.
