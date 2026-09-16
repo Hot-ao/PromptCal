@@ -486,6 +486,49 @@ git 커밋 필요.
 
 ---
 
+## 09-16 추가 발견 (d)(e) — `scripts/60`이 §8.1 대체 후에도 옛 설계로 돔, cal_weight 게이트 문서/코드 불일치
+
+**(d) `scripts/60_hparam_sweep_official_data.py`가 §8.1 확정 설계 변경(claim4/5
+채택) 이후에도 여전히 per-channel + identity-unaware로 돎**: 이 스크립트는
+`convert_to_adaround(m.model)`과 `optimize_promptcal_scale_neighbor(...)`를
+`channelwise_smult`/`identity_aware_margin` 인자 없이 호출해서, 라이브러리
+기본값(`channelwise_smult=True`, `identity_aware_margin=False` — 의도적으로
+안 바꾼 값, claim5-c 관련 기록 참고)을 그대로 물려받는다. `run_comparison.py`는
+CLI 기본값을 뒤집어서 해결했지만(§부록D 완료 항목 2), `scripts/60`은 별개
+스크립트라 그 수정이 안 미쳤다 — **앞으로 per-tensor용으로
+`scale_reg_weight`를 재튜닝할 때 이 스크립트를 그대로 쓰면 로그에 아무
+표시 없이 엉뚱한(§8.11로 superseded된) 설계를 스윕하게 되는 실사용 리스크**였다.
+
+조사 중 **관련된 두 번째 버그**도 같이 발견: `cal_idx`가 `--param cal_weight`로
+그 자체를 스윕할 때만 넘겨지고 있어서, 다른 파라미터(scale_reg_weight 등)를
+스윕하는 동안은 `--cal-weight` 기본값(1.0)이 있어도 `cal_idx=None`이라
+H_cal 보호가 통째로 꺼지고 confident-anchor 풀(`train_cols`)도 S(40)로
+좁아진 채 돌고 있었다 — claim5-a와 정확히 같은 종류의 문제가 이 스크립트에도
+있었던 것.
+
+**수정 완료**: `--smult-per-tensor`/`--identity-aware-margin` 플래그 추가
+(기본 True, `run_comparison.py`와 동일 패턴), `build_adaround_base`/
+`build_combined_from_base`에 전달. `cal_idx`는 이제 스윕 대상과 무관하게
+항상 넘기고 `cal_weight` 값만 스윕 시 덮어씀. 스모크 테스트로 검증 —
+`neighbor_weight=1.0`(확정값) 행이 `run_comparison.py` 기본값 스모크 테스트와
+**수치까지 정확히 일치**함을 확인(Heval_flip=10.34%, Top1_flip=1.08%,
+UPIR=1.23%, lost=2). 커밋 `bcf0196`.
+
+**(e) `cal_weight` 게이트 문서/코드 불일치**: 이 claims 문서(claim5-a 절)가
+`promptcal.py`에 `if cidx is not None and cal_weight > 0:` 게이트가 있다고
+적었는데, 실제 코드는 `if cidx is not None:`만 있고 `cal_weight`는 그 뒤에
+곱셈으로만 적용되고 있었다. `cal_weight=0`이면 `0 * ml_cal = 0`이라
+**수치 결과는 문서에 적은 것과 동일**(버그 아님) — 다만 `cal_weight=0`에서도
+매 iteration `margin_loss`를 불필요하게 계산하고 있었다는 점, 그리고
+코드와 문서가 안 맞았다는 점은 사실이었다. `and cal_weight > 0`을 실제
+게이트에 추가해서 문서와 일치시키고, 그 낭비 연산도 없앴다(수치 결과는
+불변 — 0을 더하던 걸 아예 안 더하게 바뀐 것뿐). `src`/`pipeline`
+`promptcal.py` 동기화 완료. 커밋 `bcf0196`(위 (d)와 같은 커밋).
+
+**상태**: (d)(e) 전부 수정·검증·커밋 완료.
+
+---
+
 ## 부록 A — 세션 중 발견한 실행/GPU 이슈
 
 **`CUDA_VISIBLE_DEVICES=N`만으로는 물리 GPU N이 보장 안 됨.**
@@ -525,8 +568,9 @@ GPU들은 비었다고 뜰 때까지 피했다.
 | 파일 | 변경 내용 |
 |---|---|
 | `src/quant/adaround.py` | `AdaRoundQuantConv2d.__init__`/`convert_to_adaround`에 `channelwise_smult` 파라미터 추가(claim4) |
-| `src/quant/promptcal.py` | confident-anchor 선정 `train_cols` 제한(claim1), `margin_loss`에 `identity_aware` 파라미터 추가(claim5) + intrusion 탐지 보강(claim5-b), `optimize_promptcal_scale_neighbor`에 `identity_aware_margin` 파라미터 전달 |
+| `src/quant/promptcal.py` | confident-anchor 선정 `train_cols` 제한(claim1), `margin_loss`에 `identity_aware` 파라미터 추가(claim5) + intrusion 탐지 보강(claim5-b), `optimize_promptcal_scale_neighbor`에 `identity_aware_margin` 파라미터 전달, `ml_cal` 게이트에 `cal_weight > 0` 추가(claim5-e, 문서/코드 불일치 수정 + 낭비 연산 제거) |
 | `pipeline/quant/adaround.py`, `pipeline/quant/promptcal.py` | 위 두 파일과 동기화(diff 없음 확인) |
+| `scripts/60_hparam_sweep_official_data.py` | `--smult-per-tensor`/`--identity-aware-margin`(기본 True) 플래그 추가, `build_adaround_base`/`build_combined_from_base`에 전달(claim5-d), `cal_idx`를 스윕 대상과 무관하게 항상 전달하도록 수정(claim5-d) |
 | `pipeline/run_comparison.py` | `--smult-per-tensor`, `--identity-aware-margin` CLI 플래그 추가, `build()`에 `channelwise_smult`/`identity_aware_margin` 파라미터 전달, `measure_ap`의 클래스별 AP 매핑 수정(claim7), `switch_vocab`의 names/predictor 갱신 추가(claim8), `--eval-cap` help 문구·결과 표 안내 문구 추가(claim10c), `cal_idx` 항상 전달로 confound 제거(claim5-a), `--conditions` 플래그 + `print(vars(args))` 추가(claim5-c) |
 | `requirements.txt` | `ultralytics>=8.3.0` → `ultralytics==8.4.121`로 고정(claim9) |
 | `scripts/58_full_baseline_official_data.py` | claim7/8과 동일한 두 수정 동기화 |
