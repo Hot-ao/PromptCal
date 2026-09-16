@@ -570,12 +570,21 @@ seed5를 물리 GPU2(46GB 카드, 다른 모델)에 띄웠다가, §9의 GPU-비
 공유)로 재시작함(부록 A 참고). seed4/5는 GPU7을 공유해서 그 둘만 좀 더
 오래 걸림.
 
-**완료 후 남은 작업**:
-1. `runs/67_final_confirmed_fullscale/`의 6-seed 결과를 §8.1 형식으로
-   집계.
-2. `PROMPTCAL_CURRENT_MODEL.md` §8.1을 이 결과로 교체(per-channel 단독
-   확정값 → per-tensor+identity-aware+claim1 조합) — 지금까지의 확정
-   설계를 대체하는 것이므로 §8.1 전체 재작성 필요.
-3. claim2/claim6 문구를 실제 논문 파일에 삽입(이 저장소 밖 작업).
-4. 이 문서(`PROMPTCAL_CLAIMS_2026-09-15.md`)와 코드 변경 전체를 최종
-   git commit.
+**완료된 작업** (09-16):
+1. ~~`runs/67_final_confirmed_fullscale/`의 6-seed 결과를 §8.1 형식으로
+   집계.~~ **완료.**
+2. ~~`PROMPTCAL_CURRENT_MODEL.md` §8.1을 이 결과로 교체~~ **완료**(커밋
+   `4629adf`) — 이전 per-channel 확정값은 새 §8.11로 보존. 풀스케일로
+   재니 COCO_AP -0.40(6-seed 범위가 서로 안 겹침, eval-cap=1000에서 봤던
+   노이즈 수준(-0.06)보다 큼)이 확인됐지만, decision-preservation 지표는
+   전부 유지/개선(LVIS_lost -66)됨.
+
+**남은 작업**:
+1. claim2/claim6 문구를 실제 논문 파일에 삽입(이 저장소 밖 작업).
+2. `pipeline/run_comparison.py`의 `--smult-per-tensor`/
+   `--identity-aware-margin` 기본값을 `False`(opt-in)에서 `True`(확정
+   설계가 기본)로 뒤집을지 검토 — `cal_weight`/`scale_reg_weight`가 이미
+   확정값을 기본으로 쓰는 것과 일관성 맞추는 차원. 아직 안 함, 사용자
+   판단 대기.
+3. 이 문서와 코드 변경 전체는 이미 커밋됨(`87157e5`, `645f910`, `d5ce828`,
+   `4629adf` + README 갱신 2건) — 새 변경이 생기면 그때그때 커밋.
