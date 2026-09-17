@@ -337,6 +337,15 @@ flip/GT/UPIR/lost 등 나머지 전부는 `--eval-cap`을 따른다. 실행 시 
 
 ## 8. 성능 결과 — 확정 설계, 풀스케일 6-seed(0~5) (2026-09-16)
 
+> **09-17 경고: 아래 표의 LVIS_AP/APr/APc/APf 열은 stale하다.** LVIS 평가가
+> NMS `multi_label` 불일치 + standard-AP(300-cap) 프로토콜 버그로
+> 공개 수치의 절반 수준으로 낮게 측정되고 있었음이 확인됐다(claim11,
+> `PROMPTCAL_CLAIMS_2026-09-15.md` 참고 — FP32 기준 LVIS_AP 0.126→0.259로
+> 재측정됨, 공개 수치와 6% 이내 일치). 코드는 수정·커밋됐지만
+> (`adf9489`), 이 §8 표는 **아직 고친 코드로 재측정 전**이다. COCO_AP/
+> S_AP/H_eval_AP 열과 flip/GT/UPIR/lost 계열은 이 버그와 무관해서
+> 그대로 유효하다.
+
 `runs/67_final_confirmed_fullscale/seed{0..5}_final.log`. 6개 seed 전부
 물리 GPU 0/4/5/6/7(동일 모델, RTX4000 Ada)에서 실행해서 GPU-비결정성
 confound 없음(§9 참고). **범위는 최소~최대**(괄호 안이 평균).
@@ -377,11 +386,12 @@ neighbor_weight, cal_weight 도입 등) 근거는 v1 §8.2~§8.10에 그대로 �
 
 ## 9. 알아둘 점 / 한계 / 열린 이슈 (현재 기준)
 
-- **APr(rare class)는 아직 naive보다 낮다**: 0.0387 vs naive 0.0415.
-  AdaRound/QDrop/BRECQ는 다 이기지만 "완전 해소"는 아니다 — `cal_weight`
-  도입(H_cal 직접 보호) 이후 계속 개선 추세이긴 하다(v1 §9 기록: 0.0270 →
-  0.0371 → 0.0387). open-vocabulary 일반화 주장을 가장 엄격히 검증하는
-  게 rare class라, 논문에서 과장 없이 정직하게 서술할 것.
+- **APr(rare class) 논의는 09-17 claim11로 재측정 전까지 보류**: 아래
+  0.0387 vs naive 0.0415는 LVIS eval 버그(§8 상단 경고)가 낀 채로 측정된
+  수치라, rare class에서 가장 크게 흔들렸을 가능성이 높다(FP32 기준
+  APr이 버그 수정으로 5.7배 뛴 전례). 수정된 코드로 재측정하기 전에는
+  "AdaRound/QDrop/BRECQ는 이기지만 naive는 못 이긴다"는 판정 자체를
+  신뢰하지 말 것.
 - **UPIR·lost는 BRECQ보다 못하다**: `lost`는 6-seed 전부 BRECQ(327)보다
   나쁨(337~381), UPIR도 근소하게 밀림. v1 §9의 그룹별 분해 분석(가설:
   "이 비용이 H_eval에 국소적으로 몰림" → 기각, S/H_eval에 고르게 나타나는

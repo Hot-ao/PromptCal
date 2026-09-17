@@ -552,6 +552,66 @@ cal_idx confound)가 있었고, 같은 "_official_data" 패밀리인
 
 ---
 
+## Claim 11 — LVIS_AP가 공개 수치의 절반 수준 (09-17, 사용자 발견)
+
+**주장**: LVIS는 long-tail이라 COCO보다 AP가 낮은 게 정상이지만, 우리
+FP32의 LVIS_AP(0.126)는 YOLO-World-S(O365+GoldG) 공개 minival 수치(AP
+0.243)의 절반 수준이다. COCO_AP(36.80)는 공개 수치(~37.4)와 거의 일치하니
+COCO 파이프라인은 정상이고 LVIS 평가만 어긋난다. 원인 후보 셋:
+1. NMS `multi_label` 불일치 — 가장 유력.
+2. Fixed AP가 아니라 이미지당 300개 cap standard AP.
+3. LVIS 프롬프트 문자열이 동의어를 `/`로 합친 한 문자열(확신도 낮음).
+
+**검증**:
+1. **정확함.** `DetectionValidator.postprocess`(COCO_AP가 쓰는
+   `model.val()` 경로)는 NMS를 `multi_label=True`로 호출하는데,
+   `DetectionPredictor.postprocess`(LVIS_AP가 쓰는 `model.predict()`
+   경로)는 이 인자를 아예 안 넘겨서 `non_max_suppression`의 기본값
+   `multi_label=False`가 조용히 적용되고 있었다. `model.predict(...,
+   multi_label=True)`로 넘겨도 `DetectionPredictor`가 `self.args`에서
+   그 값을 안 읽어서 무시된다 — `nms` 모듈 함수 자체를 patch해야 실제
+   적용됨을 확인.
+2. **정확함.** `predict_lvis_results`의 `max_det=300` 기본값,
+   `run_lvis_eval`의 `LVISResults(..., max_dets=300)` — 이미지당 300개
+   cap의 standard AP가 맞음.
+3. `lvis.yaml` 1203개 중 460개(38%)가 실제로 `"aerosol can/spray
+   can"`처럼 `/`로 합쳐진 문자열임을 확인(심한 경우 7단어 연쇄). 영향은
+   있겠으나 1·2보다 후순위라는 판단에 동의.
+
+**실측(공식 4809장 minival, FP32)**:
+
+| 설정 | AP | APr | APc | APf |
+|---|---|---|---|---|
+| 기존(버그) | 0.1260 | 0.0310 | 0.0808 | 0.1831 |
+| multi_label=True만 | 0.2326 | 0.1579 | 0.2148 | 0.2620 |
+| **multi_label=True + FixedAP** | **0.2589** | **0.1767** | **0.2454** | **0.2856** |
+| 공개 수치 | 0.243 | 0.166 | 0.221 | 0.277 |
+
+0.126→0.259로 공개 수치와 6% 이내로 일치 — 미스터리 해소. 기여도는
+multi_label이 격차의 ~80%(+0.107), Fixed AP가 ~20%(+0.026). **APr이 가장
+크게 움직임**(0.031→0.177, 5.7배) — §9의 "Combined가 APr 최하위" 논의가
+이 버그 위에서 나온 것이라 재측정 전엔 유효하지 않음.
+
+**수정 완료**: `pipeline/run_comparison.py`, `scripts/58~61` 전부
+`predict_lvis_results`에서 `ultralytics.utils.nms.non_max_suppression`을
+`predict` 루프 동안 `multi_label=True`로 monkey-patch, `run_lvis_eval`을
+Fixed AP(클래스당 상위 10000개 유지, 이미지당 cap 없음)로 전환,
+`max_det` 기본값 300→1000. 전체 파이프라인 스모크 테스트로 에러 없음
+확인. 커밋 `adf9489`(pipeline+scripts/58), `ac50d82`(scripts/59~61).
+
+**영향 범위**: COCO_AP는 원래도 `model.val()`을 썼으니 무관. **LVIS_AP/
+APr/APc/APf는 이번 세션 전체(§8.1 확정 표 포함)가 재측정 대상**이다.
+5개 방법이 전부 같은 `predict()` 경로를 타서 방법 간 순위 방향은 유지될
+가능성이 높지만, 좁은 마진 우위(BRECQ 대비 등)는 뒤집힐 수 있다.
+`scripts/59~61`의 `BASELINE_REF` 하드코딩 값(옛 LVIS_AP)도 이제 stale —
+아직 안 고침, 재사용 전 재확인 필요.
+
+**상태**: 코드 수정·커밋 완료. **§8.1 확정 표의 LVIS 재측정(6-seed×5조건)은
+아직 안 함** — claim4/5 승격 때와 비슷한 규모의 GPU 작업, 사용자 판단
+대기.
+
+---
+
 ## 부록 A — 세션 중 발견한 실행/GPU 이슈
 
 **`CUDA_VISIBLE_DEVICES=N`만으로는 물리 GPU N이 보장 안 됨.**
