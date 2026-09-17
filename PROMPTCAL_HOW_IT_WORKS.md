@@ -5,6 +5,14 @@
 실제로 동작하는** 파이프라인 전체 — 문제 정의부터 측정 도구, baseline, 제안
 방법, 평가지표까지 — 를 하나로 정리한다. 코드 경로를 항상 같이 적는다.
 
+> **09-17 주의**: 이 문서는 09-08 시점 설계(파이프라인 구조·측정 도구·평가지표
+> 개념은 지금도 유효)를 기준으로 쓰였다. 이후 §5.2(s_mult per-channel→
+> per-tensor)와 §5.4(margin_loss가 identity-aware+intrusion 탐지로 보강됨)가
+> 설계 변경으로 **superseded**됐다 — 해당 절 예시 코드를 그대로 재현 코드로
+> 쓰지 말 것. **지금 확정 설계와 하이퍼파라미터는
+> [`PROMPTCAL_CURRENT_MODEL_V2.md`](PROMPTCAL_CURRENT_MODEL_V2.md)**를 볼 것,
+> 이 문서는 "왜 이런 구조로 설계했는가"의 개념적 배경 설명으로만 참고할 것.
+
 ---
 
 ## 1. 무엇을 풀려는 문제인가
@@ -163,6 +171,11 @@ continuous multiplier를 하나 더 얹는다.**
 
 ### 5.2 `s_mult` — learnable activation scale multiplier (09-08 기준: per-channel 벡터)
 
+**09-16에 다시 per-tensor 스칼라로 되돌아감**(baseline과의 activation
+quantization 공정성 + 표준 INT8 엔진 배포 가능성 때문 — 성능 문제 아님,
+`PROMPTCAL_CURRENT_MODEL_V2.md` §5.2 참고). 아래는 그 이전(per-channel)
+설계가 왜 필요했는지의 역사적 배경으로는 여전히 유효하다.
+
 `AdaRoundQuantConv2d`(`adaround.py`)의 필드:
 
 ```python
@@ -210,6 +223,11 @@ COCO-80 프롬프트를 seed마다 무작위로 섞어 3분할(`np.random.defaul
 "완전히 안 본 프롬프트에서도 결정이 보존되는가"를 정직하게 잰다.
 
 ### 5.4 margin_loss — S 프롬프트의 경계를 FP와 맞춘다
+
+**09-16에 identity-aware 비교 + intrusion 탐지가 추가됨**(아래 코드는 그
+이전의 정렬-비교 버전) — 정렬 후 비교만 하면 top-1/top-2가 값을 맞바꾸는
+flip이 일어나도 margin 패턴이 같으면 loss가 0이 되는 blind spot이 있었다.
+확정 설계의 정확한 코드는 `PROMPTCAL_CURRENT_MODEL_V2.md` §5.3(a) 참고.
 
 ```python
 def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0):
