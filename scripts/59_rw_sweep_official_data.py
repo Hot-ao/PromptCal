@@ -233,28 +233,45 @@ def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None):
     return out
 
 
-def predict_lvis_results(model, img_paths, img_ids, imgsz, device, conf=0.001, max_det=300):
-    results = []
-    for path, img_id in zip(img_paths, img_ids):
-        r = model.predict(source=path, imgsz=imgsz, device=device, conf=conf,
-                          max_det=max_det, verbose=False)[0]
-        if r.boxes is None or len(r.boxes) == 0:
-            continue
-        xyxy = r.boxes.xyxy.cpu().numpy()
-        confs = r.boxes.conf.cpu().numpy()
-        clss = r.boxes.cls.cpu().numpy().astype(int)
-        for (x1, y1, x2, y2), sc, c in zip(xyxy, confs, clss):
-            results.append({"image_id": int(img_id), "category_id": int(c) + 1,
-                            "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
-                            "score": float(sc)})
+def predict_lvis_results(model, img_paths, img_ids, imgsz, device, conf=0.001, max_det=1000):
+    # 09-17 버그 수정(pipeline/run_comparison.py, scripts/58과 동일): NMS
+    # multi_label=True/False 불일치. model.predict()에 multi_label=True를
+    # 넘겨도 DetectionPredictor가 안 읽어서 무시되므로 nms 모듈 함수 자체를
+    # 임시 patch해야 한다. 실측(FP32, 공식 4809장 minival): AP 0.126→0.233.
+    from ultralytics.utils import nms
+    import functools
+    orig_nms = nms.non_max_suppression
+    nms.non_max_suppression = functools.partial(orig_nms, multi_label=True)
+    try:
+        results = []
+        for path, img_id in zip(img_paths, img_ids):
+            r = model.predict(source=path, imgsz=imgsz, device=device, conf=conf,
+                              max_det=max_det, verbose=False)[0]
+            if r.boxes is None or len(r.boxes) == 0:
+                continue
+            xyxy = r.boxes.xyxy.cpu().numpy()
+            confs = r.boxes.conf.cpu().numpy()
+            clss = r.boxes.cls.cpu().numpy().astype(int)
+            for (x1, y1, x2, y2), sc, c in zip(xyxy, confs, clss):
+                results.append({"image_id": int(img_id), "category_id": int(c) + 1,
+                                "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
+                                "score": float(sc)})
+    finally:
+        nms.non_max_suppression = orig_nms
     return results
 
 
 def run_lvis_eval(lvis_gt, results, img_ids):
+    # 09-17: Fixed AP 프로토콜 채택(pipeline/run_comparison.py와 동일 이유).
     from lvis import LVISEval, LVISResults
+    from collections import defaultdict
     if not results:
         return dict(AP=0.0, AP50=0.0)
-    lvis_dt = LVISResults(lvis_gt, results, max_dets=300)
+    by_cat = defaultdict(list)
+    for r in results:
+        by_cat[r["category_id"]].append(r)
+    results = [r for rs in by_cat.values() for r in sorted(rs, key=lambda x: -x["score"])[:10000]]
+    lvis_dt = LVISResults(lvis_gt, results, max_dets=-1)
     ev = LVISEval(lvis_gt, lvis_dt, iou_type="bbox")
     ev.params.img_ids = img_ids
     ev.run()
