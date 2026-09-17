@@ -302,28 +302,59 @@ def gt_metrics_for_method(fp_sims, q_sims, gt_targets, H_eval_set=None, S_set=No
     return out
 
 
-def predict_lvis_results(model, img_paths, img_ids, imgsz, device, conf=0.001, max_det=300):
-    results = []
-    for path, img_id in zip(img_paths, img_ids):
-        r = model.predict(source=path, imgsz=imgsz, device=device, conf=conf,
-                          max_det=max_det, verbose=False)[0]
-        if r.boxes is None or len(r.boxes) == 0:
-            continue
-        xyxy = r.boxes.xyxy.cpu().numpy()
-        confs = r.boxes.conf.cpu().numpy()
-        clss = r.boxes.cls.cpu().numpy().astype(int)
-        for (x1, y1, x2, y2), sc, c in zip(xyxy, confs, clss):
-            results.append({"image_id": int(img_id), "category_id": int(c) + 1,
-                            "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
-                            "score": float(sc)})
+def predict_lvis_results(model, img_paths, img_ids, imgsz, device, conf=0.001, max_det=1000):
+    # 09-17 버그 수정: DetectionValidator(COCO_AP가 쓰는 model.val() 경로)는
+    # NMS를 multi_label=True로 호출하는데, DetectionPredictor(여기서 쓰는
+    # model.predict() 경로)는 이 인자를 아예 안 넘겨서 non_max_suppression
+    # 기본값 multi_label=False가 조용히 적용되고 있었다. LVIS처럼
+    # 1203-class 동의어/federated annotation이 밀집한 vocabulary에서는
+    # anchor당 top-1 class만 후보로 내는 multi_label=False가 recall을
+    # 심하게 깎는다(실측: FP32 AP 0.126→0.233, APr 0.031→0.158, 4809장
+    # 공식 minival 기준). model.predict()는 self.args에서 multi_label을
+    # 아예 안 읽어서(DetectionPredictor.postprocess 확인) predict()에
+    # multi_label=True를 인자로 넘겨도 무시된다 -- nms 모듈 함수 자체를
+    # 임시로 patch해야 실제로 적용된다.
+    from ultralytics.utils import nms
+    import functools
+    orig_nms = nms.non_max_suppression
+    nms.non_max_suppression = functools.partial(orig_nms, multi_label=True)
+    try:
+        results = []
+        for path, img_id in zip(img_paths, img_ids):
+            r = model.predict(source=path, imgsz=imgsz, device=device, conf=conf,
+                              max_det=max_det, verbose=False)[0]
+            if r.boxes is None or len(r.boxes) == 0:
+                continue
+            xyxy = r.boxes.xyxy.cpu().numpy()
+            confs = r.boxes.conf.cpu().numpy()
+            clss = r.boxes.cls.cpu().numpy().astype(int)
+            for (x1, y1, x2, y2), sc, c in zip(xyxy, confs, clss):
+                results.append({"image_id": int(img_id), "category_id": int(c) + 1,
+                                "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
+                                "score": float(sc)})
+    finally:
+        nms.non_max_suppression = orig_nms
     return results
 
 
 def run_lvis_eval(lvis_gt, results, img_ids):
+    # 09-17: Fixed AP 프로토콜 채택(YOLO-World 논문 및 LVIS long-tail
+    # 문헌 관행, Dave et al. -- 이미지당 dets 상한(표준 AP의 max_dets=300)이
+    # rare class를 구조적으로 불리하게 만든다는 지적). 이미지당 상한 없이,
+    # 클래스당 confidence 상위 10000개만 유지해서 채점한다. 위
+    # multi_label=True 수정과 합쳐서 실측(FP32, 공식 4809장 minival):
+    # AP 0.126→0.259, APr 0.031→0.177 -- 공개 수치(AP 0.243, APr 0.166)와
+    # 6% 이내로 일치. **논문에 disclosure 필요**: 이건 버그 수정이 아니라
+    # 프로토콜 선택이므로 "Fixed AP를 썼다"고 명시할 것.
     from lvis import LVISEval, LVISResults
+    from collections import defaultdict
     if not results:
         return dict(AP=0.0, AP50=0.0)
-    lvis_dt = LVISResults(lvis_gt, results, max_dets=300)
+    by_cat = defaultdict(list)
+    for r in results:
+        by_cat[r["category_id"]].append(r)
+    fixed = [r for rs in by_cat.values() for r in sorted(rs, key=lambda x: -x["score"])[:10000]]
+    lvis_dt = LVISResults(lvis_gt, fixed, max_dets=-1)
     ev = LVISEval(lvis_gt, lvis_dt, iou_type="bbox")
     ev.params.img_ids = img_ids
     ev.run()
