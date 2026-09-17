@@ -10,6 +10,14 @@ semantic decision preservation 문제다.**
 갱신). 세션별 상세 기록은 `PromptCal_PTQ_progress_*.md`, 방법의 자세한 작동
 원리는 `PROMPTCAL_HOW_IT_WORKS.md` 참고.
 
+> **09-17 주의**: 이 문서는 09-07 갱신 이후 실제로는 갱신이 안 됐다 —
+> 공식 데이터 설정 전환(09-08), per-channel `s_mult` 재설계·H_eval 버그
+> 수정(09-09~09-12), 그리고 09-16의 per-tensor+identity-aware 전환까지
+> 전부 반영 안 된 상태다. §6의 수치·설계 설명은 그 이전(calib=32, scalar
+> `s_mult`, val2017 슬라이스) 스냅샷이니 확정 수치로 쓰지 말 것. **지금
+> 상태는 [`PROMPTCAL_CURRENT_MODEL_V2.md`](PROMPTCAL_CURRENT_MODEL_V2.md)**를
+> 볼 것.
+
 ---
 
 ## 0. 한눈에 보기 — 전체 로드맵
