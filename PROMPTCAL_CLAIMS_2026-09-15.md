@@ -4,6 +4,17 @@
 관점에서 제기된 claim 1~10(+ claim5의 하위 발견 a~f)을 코드로 검증하고
 실제로 바꾼 내용을 정리한다.
 
+**09-19 갱신(최신)**: claim15(비교 축 불공정 발견·수정 — QDrop/BRECQ LSQ
+기본 적용, `scale_reg_weight` 10.0→1.0 재튜닝, BRECQ-stage1 진단) 추가.
+claim14(1단계 AdaRound 제거)가 맞았던 결정이었음을 재확인하면서도, 공정
+비교에서는 Combined가 9개 지표 중 4개만 이긴다는 게 드러남 — 지금까지
+나온 것 중 가장 중요한 발견. 각 절 참고.
+
+**09-18 갱신**: claim14(Combined의 1단계 AdaRound 제거 — 확정 설계로
+채택, `--combined-recon-iters` 기본값 0) 추가. claim12(baseline
+activation-scale 학습 비대칭)와 claim13(AdaRound/BRECQ 재구성 loss 정규화
+버그, 6-seed 재측정 완료) 위에서 나온 발견. 각 절 참고.
+
 **09-17 갱신**: 이 문서가 다룬 결정(claim4/5 채택 등)은 이제
 [`PROMPTCAL_CURRENT_MODEL_V2.md`](PROMPTCAL_CURRENT_MODEL_V2.md)에 확정
 설계로 반영 완료됐다 — 이 CLAIMS 문서는 계속 "무엇을 왜 검증했고 왜 그렇게
@@ -606,9 +617,418 @@ APr/APc/APf는 이번 세션 전체(§8.1 확정 표 포함)가 재측정 대상
 `scripts/59~61`의 `BASELINE_REF` 하드코딩 값(옛 LVIS_AP)도 이제 stale —
 아직 안 고침, 재사용 전 재확인 필요.
 
-**상태**: 코드 수정·커밋 완료. **§8.1 확정 표의 LVIS 재측정(6-seed×5조건)은
-아직 안 함** — claim4/5 승격 때와 비슷한 규모의 GPU 작업, 사용자 판단
-대기.
+**상태**: 코드 수정·커밋 완료. **§8.1 확정 표의 LVIS 재측정(6-seed×5조건)
+완료**(`runs/68_lvis_fix_fullscale/seed{0..5}_lvisfix.log`, 물리 GPU
+0/4/5/6/7 동일 모델). 결과:
+
+| method | LVIS_AP(6-seed) | APr(6-seed) |
+|---|---|---|
+| FP32 | 0.2589 | 0.1767 |
+| naive | 0.2342 | 0.1704 |
+| AdaRound | 0.2338 | 0.1553 |
+| QDrop | 0.2323 | 0.1652 |
+| BRECQ | 0.2333 | 0.1679 |
+| **Combined** | **0.2454~0.2498(0.2476)** | **0.1680~0.1736(0.1704)** |
+
+baseline 4개는 calib 256장 샘플링이 결정적이라 6-seed 값이 완전히
+동일(seed는 Combined의 neighbor/margin 학습에만 영향). **결론 완전히
+뒤집힘**: Combined가 LVIS_AP에서 4개 baseline 전부를 이기고(BRECQ 대비
++0.0143), APr(rare class)도 naive와 사실상 동률(0.1704=0.1704)이면서
+AdaRound/QDrop/BRECQ는 확실히 이긴다 — 구버전의 "Combined가 rare class
+에서 유일하게 naive에 진다"는 서술은 LVIS 평가 버그의 산물이었음이
+최종 확인됨. `PROMPTCAL_CURRENT_MODEL_V2.md` §8/§9에 반영 완료.
+`scripts/59~61`의 `BASELINE_REF` 하드코딩 값(옛 LVIS_AP)은 위 표의
+naive/AdaRound/QDrop/BRECQ 값으로 아직 안 고침 — 그 스윕들을 재사용하기
+전에 갱신 필요.
+
+---
+
+## Claim 12 — baseline엔 activation scale을 학습하는 손잡이가 아예 없다 (09-17, 사용자 발견)
+
+**주장**: Combined가 학습하는 건 activation scale(s_mult)인데, AdaRound/QDrop/
+BRECQ 구현은 weight rounding(alpha)만 최적화하고 activation scale은 min-max로
+고정한다. claim4는 granularity(per-channel vs per-tensor)만 맞췄을 뿐, "손잡이가
+있느냐 없느냐" 비대칭은 그대로 남아있다. baseline이 naive보다 낮은 것, s_mult
+min=0.43(outlier 보정 추정) 등이 정황 증거.
+
+**검증**:
+1. 코드: `ActObserver`의 `scale`/`zero_point`는 전부 `register_buffer`(비학습),
+   `optimize_adaround`/`optimize_brecq`의 optimizer는 `[alpha]`만 담음 — 확인됨.
+2. 문헌: [BRECQ(Li et al., ICLR 2021)](https://openreview.net/pdf?id=POWv6hDd9XH)
+   원 논문이 "adopts adaptive rounding for weights and learned step size
+   (Esser et al., 2020, LSQ) for activation step size"라고 명시 — 원 논문은
+   activation LSQ를 포함함을 확인. [QDrop(Wei et al., ICLR 2022)](https://arxiv.org/pdf/2203.05740)도
+   BRECQ의 block reconstruction 프레임워크를 그대로 물려받아 같은 LSQ 메커니즘을 씀.
+   [AdaRound(Nagel et al., ICML 2020)](https://arxiv.org/pdf/2004.10568)는 순수
+   weight-rounding 방법이라 activation LSQ가 원래 없음 — 이 축소는 AdaRound에는
+   해당 안 됨, BRECQ/QDrop 두 개만 해당.
+3. Control 실험(`--control-mse`, `promptcal.py` `control_mse=True`): Combined의
+   margin_loss/neighbor-hinge를 전부 빼고 s_mult 메커니즘만 유지한 채 순수
+   `F.mse_loss(sim_q[train_cols], sim_fp[train_cols])`로 최적화. 3-seed(구
+   재구성 코드 기준, `runs/69_control_mse/`) 결과:
+
+   | 지표 | BRECQ | Combined(margin) | Combined(MSE-control) |
+   |---|---|---|---|
+   | COCO_AP | 33.30 | 35.96 | **36.47** |
+   | LVIS_AP | 0.2333 | 0.2476 | **0.2521** |
+   | Heval_flip | 9.71% | **9.05%** | 9.93% |
+   | Top1_flip | **0.71%** | **0.633%** | 0.713% |
+   | LVIS_flip | **5.53%** | **5.06%** | 5.63% |
+
+   AP 계열은 MSE-control이 margin_loss 버전보다도 앞섬(손잡이 존재 자체가 AP
+   이득의 주 원인). 그런데 decision-preservation 계열(Heval_flip/Top1_flip/
+   LVIS_flip)은 MSE-control이 BRECQ보다도 못하거나 비슷함 — margin_loss의 실제
+   기여는 AP가 아니라 decision-preservation에 있다는 뜻.
+4. `--learn-act-scale`(`optimize_adaround`/`optimize_brecq`의 `learn_act_scale=True`,
+   기존 `s_mult`/`_quantize_smult` 메커니즘 재사용, `channelwise_smult=False`로
+   Combined와 granularity 통일): 1-seed(구 재구성 코드 기준, `runs/70_learn_act_scale/`)
+   결과:
+
+   | 지표 | BRECQ(원본) | BRECQ+LSQ | AdaRound+LSQ | QDrop+LSQ | Combined(margin) |
+   |---|---|---|---|---|---|
+   | COCO_AP | 33.30 | 35.46 | **36.10** | **36.18** | 36.03 |
+   | Heval_flip | 8.99% | **7.09%** | 7.79% | 9.64% | 8.08% |
+   | lost | 327 | **255** | 311 | 406 | 356 |
+
+   AdaRound+LSQ/QDrop+LSQ가 이미 COCO_AP에서 Combined를 앞지르고, BRECQ+LSQ는
+   decision-preservation 전 지표에서 Combined(margin_loss)를 이김 — claim4/5로
+   완결됐다고 봤던 "Combined의 우위"가 상당 부분 "baseline에 없는 손잡이"에서
+   온 것일 수 있음을 시사.
+
+**상태**: 메커니즘 확인·구현 완료. **claim13(재구성 loss 버그) 발견으로 위 3/4번
+수치는 전부 재검증 대상** — 구 재구성 코드(정규화 버그 있음) 위에서 측정된 것이라,
+claim13 수정 후 baseline 자체의 절대 성능이 달라지면 이 비교도 다시 그려야 한다.
+act_lr(`DEFAULT_ACT_LR`)도 처음엔 공식 소스를 잘못 인용(4e-5, 실제는 4e-4)했다가
+사용자가 지적해 정정 — 최종적으로 절대값 환산 대신 Combined의 s_mult lr(1e-2)과
+맞추고 CosineAnnealing은 유지(수렴 실측 근거, `PROMPTCAL_CLAIMS` 이 문서 서술과
+별개로 대화 로그에 diagnostic 스크립트 2개 존재, 저장소엔 미커밋).
+
+---
+
+## Claim 13 — AdaRound/BRECQ 재구성 loss 정규화가 공식 대비 축소돼 있었다 (09-18, 사용자 발견)
+
+**주장**: `(pred-target).pow(2).mean()`은 BRECQ 공식 `lp_loss`(채널축 sum, 나머지
+mean) 대비 정확히 C_out배 작다. `reg_loss`(alpha 정규화)는 이 축소 영향을 안
+받으므로, 상대적으로 rounding 정규화가 재구성 항을 압도해 alpha가 초기값
+(=round-to-nearest)에서 거의 못 움직인다. 여기에 lr(1e-2→1e-3)·reg_weight
+(1e-3→0.01, 둘 다 공식값)도 같이 고치고 warmup 20%를 추가하면 반올림 결정이
+실제로 바뀐다(nearest 대비 flip 0.069%→1.5%대).
+
+**검증**:
+1. 공식 repo(`yhhhli/BRECQ`) `layer_recon.py`/`block_recon.py`/`main_imagenet.py`를
+   직접 fetch해서 대조. `main_imagenet.py`의 실제 실험 kwargs가
+   `warmup=0.2, weight=0.01, b_range=(20,2)`를 layer/block reconstruction
+   **둘 다에** 똑같이 넘김(각 함수 자체의 내부 기본값 0.0/0.001은 실제로 안 쓰이는
+   placeholder) — 수정된 `DEFAULT_WARMUP=0.2`/`DEFAULT_REG_WEIGHT=0.01`이 정확히
+   일치함을 확인.
+2. `lp_rec_loss`(채널축 sum, 나머지 mean) 정규화가 공식 `lp_loss(p=2,
+   reduction='none')`와 동일한 정규화임을 GitHub 소스로 확인.
+3. alpha lr: 공식이 `Adam(opt_params)`로 lr 명시 안 함 → Adam 기본값 1e-3 —
+   `DEFAULT_LR=1e-3`과 일치.
+4. **한 군데 인용 오류 발견·정정**: activation LSQ lr 주석이 "공식은 4e-5"라고
+   적혀 있었는데, 이건 `block_recon.py` 함수 자체의 내부 기본값이고 실제
+   `main_imagenet.py --lr` 기본값은 **4e-4**(10배 차이). 사용자가 지적. 이
+   모델에서 `a_obs.scale` 중앙값을 실측하면 0.0576(ImageNet 가정 0.024의
+   2.4배)이라 올바른 소스로 환산하면 act_lr≈7e-3이 나오지만, 이 절대값 변환
+   자체가 불필요한 불확실성을 더한다는 사용자 지적에 따라 최종적으로는
+   Combined의 s_mult lr(1e-2)과 정확히 맞추는 쪽으로 결정(§ claim12 마지막
+   문단 참고). 수렴 실측(conv 2개, 1000 iters): act_lr=2e-3+cosine(구현 전
+   버전)은 마지막 10%에서 이미 완전히 수렴(변동폭 0.0000~0.0003), lr=1e-2를
+   scheduler 없이 쓰면 끝까지 진동(변동폭 0.005~0.05) — CosineAnnealing은
+   유지하고 peak lr만 1e-2로 올림.
+5. **정황 증거**: 이 세션 내내 확정 §8 표에서 AdaRound(33.24)가 naive(33.54)
+   보다 낮았던 게 계속 이상했는데("AdaRound가 naive보다 못한 모델을 만든다"),
+   09-08 문서에도 이게 "검증 필요"로만 남아있었다. `flip_rate()` 진단
+   (round-to-nearest 대비 반올림이 실제로 바뀐 비율)이 수정 전 0.069%였다는
+   재현 실험 결과와 정확히 들어맞음 — AdaRound가 사실상 naive rounding과
+   같은 모델을 만들고 있었다는 뜻.
+
+**수정 완료**: `src/quant/adaround.py`(`lp_rec_loss`, `temp_decay`,
+`DEFAULT_LR/REG_WEIGHT/WARMUP/ACT_LR`, `flip_rate()` 진단, `optimize_adaround`
+전체), `src/quant/brecq.py`(`optimize_brecq` 전체, `_to_cpu`/`_to_dev`/`_mix`
+재귀 처리로 다중 입력 list/tuple OOM 버그도 같이 수정, QDrop을 여기로 이전),
+`pipeline/run_comparison.py`(QDrop 조건이 `optimize_brecq(qdrop_prob=...)`를
+쓰도록 변경 — 이전엔 layer-wise `optimize_adaround`에 qdrop_prob만 얹어서
+QDrop 원 논문의 재구성 단위(block-wise)와 달랐음). `pipeline/quant/` 사본 동기화
+완료. 스모크 테스트(iters=50, 4조건) crash 없이 통과 확인.
+
+**영향 범위**: `optimize_adaround`가 Combined 자신의 weight-rounding 1단계에도
+쓰이므로, **AdaRound/QDrop/BRECQ뿐 아니라 Combined의 COCO_AP/S_AP/H_eval_AP까지
+전부 재측정 대상**이다 — claim11(LVIS)보다 범위가 넓다. `scripts/58~61`은 이
+수정을 반영 안 함(QDrop이 여전히 layer-wise, `learn_act_scale` 파라미터 자체가
+없음) — claim5-d와 같은 성격의 staleness, 아직 안 고침.
+
+**상태**: 코드 수정 완료(커밋 전, uncommitted). **6-seed 재측정 완료**
+(`runs/71_recon_fix_review/seed{0..5}_full.log`, 09-18). 결과:
+
+| method | COCO_AP(구코드) | COCO_AP(신코드) |
+|---|---|---|
+| naive | 33.54 | 33.54(불변) |
+| AdaRound | 33.24(고정) | 33.26~33.41(33.34) |
+| QDrop | 33.30(고정) | 33.20~33.30(33.24) |
+| BRECQ | 33.30(고정) | 33.04~33.19(33.15) |
+| Combined | 35.86~36.07(35.98) | 35.53~35.95(35.83) |
+
+**가설 반박됨**: `flip_rate()` 진단으로 alpha가 실제로 5~7% 움직임을 확인했는데도
+(구코드 <1%) AdaRound/QDrop/BRECQ 전부 6-seed 내내 naive보다 여전히 낮다.
+"재구성 loss 정규화 버그가 AdaRound<naive의 원인"이라는 애초 가설은 데이터로
+반박됐다. baseline 4개도 이제 alpha 최적화에 매 iteration 무작위 샘플링이
+들어가 seed마다 값이 달라진다(이전엔 결정적 순환이라 6-seed 전부 동일했음).
+
+**사용자 지적(09-18)으로 프레임 수정**: 이 수정은 성능을 올리려는 게 아니라
+AdaRound/QDrop/BRECQ를 원 논문대로 정확히 구현하기 위한 것(claim4/5와 같은
+원칙 — 공정성/정확성 문제는 결과 방향과 무관하게 채택). "결과가 나빠졌으니
+되돌릴지"는 애초에 잘못된 질문이었다 — 신코드가 더 정확한 구현인 이상 그대로
+채택하고, "정확히 구현해도 baseline이 naive를 못 이긴다"는 걸 이상 현상이
+아니라 실제 발견으로 취급한다("reconstruction 최적화가 detection AP를
+보장하지 않는다"는 논문 핵심 주장과 같은 방향). `PROMPTCAL_CURRENT_MODEL_V2.md`
+§4/§8 갱신 완료. decision-preservation 4개 지표(Top1_flip/lost/LVIS_flip/
+LVIS_lost)에서 이제 QDrop·BRECQ 둘 다 Combined를 이긴다(구코드는 BRECQ만) —
+§8 참고.
+
+---
+
+## Claim 14 — Combined의 1단계(AdaRound)가 2단계 보호 영역 밖으로 손상을 샌다 (09-18, 협업으로 도출)
+
+**배경**: claim13 수정 직후 "Combined가 AP는 이기는데 Top1_flip/lost/
+LVIS_flip/LVIS_lost는 QDrop·BRECQ에 진다"는 게 확인됐다(claim13 상태 표
+참고). 사용자가 "우리가 주장하던 부분(flip/lost)에서 지는 게 아이러니하다"고
+지적 — 이 절이 그 원인 규명과 해결.
+
+**가설(사용자+대화로 도출)**: Combined도 s_mult 학습(2단계) 전에 자기 자신의
+weight rounding으로 `optimize_adaround`(1단계)를 쓴다. claim13 전엔 이
+함수가 거의 안 움직였으니(flip<1%) 1단계가 사실상 no-op이었는데, claim13
+수정으로 이제 alpha를 5~7% 실제로 움직인다. 이 1단계의 목적함수(순수
+layer-wise MSE reconstruction)는 2단계(margin_loss/s_mult)가 보호하는 영역
+(`train_cols`=S∪H_cal 60개 + `neighbor_cols`)과 완전히 무관하다 — 그 바깥
+(COCO 80개 전체 기준 Top1_flip/lost, 특히 LVIS 1203개 class 중 대부분)으로
+1단계가 만드는 손상이 2단계 보호 없이 그대로 샐 수 있다.
+
+**중간 시도 하나 기각**: 처음엔 "Combined의 1단계를 BRECQ의 block-wise
+재구성으로 바꾸자"고 제안했으나, 사용자가 "그러면 reconstruction으로
+decision error를 줄이자는 거 아니냐"고 지적 — 논문의 핵심 주장
+("reconstruction ≠ decision preservation")과 정면으로 충돌하는 프레이밍이라
+철회. 대신 baseline 메커니즘을 빌리지 않는 방향(1단계 자체를 줄이거나
+없애기)으로 방향 전환.
+
+**검증(`--combined-recon-iters`, `pipeline/run_comparison.py`)**: Combined의
+1단계 iters만 `--recon-iters-ada`와 별개로 조정할 수 있게 파라미터 추가.
+`--conditions combined`로 baseline 재빌드 없이 Combined만 테스트(baseline은
+claim13에서 이미 6-seed 확보돼 있어 재사용). seed0 1-seed로 iters=0(1단계
+완전 생략, alpha가 초기값=round-to-nearest에 남음)과 iters=200을 먼저 비교:
+
+| | 기본(1000) | iters=0 | iters=200 |
+|---|---|---|---|
+| COCO_AP | 35.53 | **36.07** | 35.84 |
+| Heval_flip | 10.04% | **8.88%** | 11.71%(더 나쁨) |
+| lost | 420 | **382** | 502(더 나쁨) |
+
+iters=200이 양 극단보다 나쁜 건 `temp_decay`의 beta 스케줄(20→2)이 전달된
+iters 자체를 기준으로 돌아서, 200을 주면 "1000짜리의 앞부분"이 아니라
+"200으로 압축된 완전한 스케줄"이 되기 때문으로 추정(불안정한 중간 수렴).
+그래서 "점진적으로 줄이기"가 아니라 "0이냐 아니냐"가 맞는 축이라고 판단.
+
+**6-seed 확정** (`runs/72_combined_recon_diag/seed{0..5}_iters0.log`, seed0은
+1-seed 예비실험 재사용):
+
+| method | COCO_AP | LVIS_AP | APr | Heval_flip | Top1_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|---|
+| Combined(1단계 유지, claim13 직후) | 35.83 | 0.2482 | 0.1692 | 10.38% | 0.782% | 0.218% | 382.0 | 5.69% | 1160.3 |
+| **Combined(1단계 제거, claim14)** | **36.09** | **0.2499** | **0.1745** | **9.58%** | 0.805% | 0.245% | 372.17 | 5.51% | **1077.17** |
+| QDrop(최강 baseline, 참고) | 33.24 | 0.2323 | 0.1596 | 10.50% | 0.703% | 0.245% | 345.8 | 5.50% | 1114.8 |
+
+**COCO_AP·LVIS_AP·APr·Heval_flip·LVIS_lost 5개 지표가 트레이드오프 없이
+동시에 개선**됐고, LVIS_flip은 QDrop과 사실상 동률(5.51 vs 5.50%)이 됐다.
+Top1_flip·UPIR·lost 세 개만 QDrop/BRECQ에 근소하게 남아 진다(claim13
+직후엔 네 개+LVIS_flip 다섯 개에서 졌었음).
+
+**해석**: "reconstruction이 decision을 지켜준다"가 아니라 "target 없는
+reconstruction이 target 밖 영역에 새 손상을 만든다"는 쪽으로 논문 주장이
+오히려 더 날카로워졌다. Combined는 이제 "AdaRound 방식 weight rounding +
+margin_loss"가 아니라 **"naive round-to-nearest weight + margin_loss 기반
+activation scale"**로 재정의된다 — AdaRound 메커니즘을 전혀 안 쓴다.
+
+**수정 완료**: `pipeline/run_comparison.py`에 `--combined-recon-iters`
+플래그 추가(기본값 `0`), `build()`의 `combined_recon_iters` 기본값도 `0`.
+`PROMPTCAL_CURRENT_MODEL_V2.md` §5.1/§8/§9 갱신 완료.
+
+**남은 격차(Top1_flip/UPIR/lost)에 대한 다음 방향** (baseline 메커니즘을
+빌리지 않는 순서로):
+1. `scale_reg_weight`/`iters`(2단계) 재튜닝 — 지금 값(10.0/1500)은 1단계가
+   AdaRound-refined weight였던 시절 튜닝된 것이라, 1단계가 naive rounding으로
+   바뀐 지금은 재스윕이 필요할 수 있음. 아직 안 함.
+2. margin_loss/neighbor 보호 범위 확장(`neighbor_k` 확대 또는 전체 80열
+   약한 정규화) — 우리 방법 자체의 확장이라 포지셔닝 문제 없음. 아직 안 함.
+3. 약한 weight-level 보정 재고려 — 1·2로도 안 좁혀지면 마지막 옵션. baseline
+   메커니즘 차용 프레이밍 위험 있으니 신중히.
+
+**상태**: 확정 설계로 채택 완료. 6-seed 검증 완료. 남은 격차 축소는 미착수.
+
+---
+
+## Claim 15 — 비교 축이 불공정했다: baseline엔 LSQ 없이 Combined와 비교 중이었다 (09-18~09-19, 사용자 발견)
+
+**주장**: claim14까지의 확정 §8 표는 QDrop/BRECQ의 activation scale 학습
+(LSQ, claim12에서 이미 원 논문에 있다고 확인한 기능)이 **꺼진 채로**
+Combined와 비교한 것이다. Combined는 이제 순수 activation-scale 방법인데
+baseline엔 그 손잡이가 없으니, 이건 "방법의 차이"가 아니라 "구현 축소와의
+비교"고 리뷰어 반론을 못 막는다. `--control-mse`(같은 s_mult·같은
+optimizer·같은 iters, margin_loss 대신 순수 MSE)가 이제 논문에서 유일하게
+결정적인 ablation이다.
+
+**부수 지적(같은 리뷰에서, 전부 검증됨)**:
+1. **bit-width 하드코딩**: `wrap_convs(m.model, 8, 8)`이 `run_comparison.py`에
+   박혀있고 `--w-bits`/`--a-bits` 플래그가 0개 — W8A32/W32A8 같은 메커니즘
+   실험(weight vs activation 중 뭐가 손상의 주범인지)을 못 돌림.
+2. **죽은 alpha 재계산**: `quant_weight()`가 `soft`/`alpha` 상태와 무관하게
+   매 forward마다 weight 크기 그대로 `h_alpha(alpha)`를 재계산 — Combined
+   에서는(alpha 학습 안 함) 이게 매번 상수인데 probe 5000장+LVIS 4809장
+   내내 낭비되고 있었음.
+3. **APr이 FP32와 "동일"하다는 서술은 부정확**: 6-seed 평균 0.1745(당시)
+   vs FP32 0.1767 — "근접"이 맞는 표현.
+4. `runs/72`의 `combined-recon-iters=200`이 0/1000보다 나쁘다는 결론은
+   n=1(seed0 하나)이라 확정 아님.
+
+**검증 및 수정**:
+1. `runs/71`(baseline 6-seed)/`runs/72`(Combined 6-seed) 둘 다
+   `learn_act_scale: False`였음을 `[args]` 로그로 직접 확인 — 지적이 맞았다.
+2. `quant_weight()`에 hard(soft=False) 경로 캐싱 추가(`_hard_weight_cache`,
+   soft=True로 돌아가면 무효화) — `src/quant/adaround.py`.
+3. `--w-bits`/`--a-bits` CLI 플래그 추가, `wrap_convs`에 전달 —
+   `pipeline/run_comparison.py`. W8A32/W32A8 스모크 테스트(calib=32,
+   eval-cap=200): naive COCO_AP가 FP32 대비 W8A32는 **-0.06**, W32A8은
+   **-1.01** — 손상이 activation quantization 쪽이 압도적이라는 가설을
+   지지(정식 스케일 재측정은 아직 안 함).
+4. **`--learn-act-scale`(단일 플래그, 기본 False)를 `--adaround-learn-act-scale`
+   (기본 False, AdaRound 원 논문엔 LSQ 없음)과
+   `--qdrop-brecq-learn-act-scale`(기본 **True**, QDrop/BRECQ 원 논문엔
+   있음)로 분리**해서 방법별로 정확한 기본값을 줬다 — claim12를 옵트인
+   실험 플래그로 방치했던 게 이번 세션의 실수(claim5-d와 같은 성격).
+   `build()`의 `adaround`/`qdrop`/`brecq` 분기도 각각 맞는 플래그를 쓰도록 수정.
+
+**6-seed 공정 비교 결과** (`runs/75_lsq_confirmed/seed{0..5}_full.log`):
+
+| method | COCO_AP | LVIS_AP | APr | Heval_flip | Top1_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|---|
+| QDrop+LSQ | 35.86 | 0.2475 | 0.1771 | 8.27% | 0.625% | 0.173% | 289.2 | 5.34% | 1108.3 |
+| BRECQ+LSQ | 35.78 | 0.2478 | 0.1757 | **7.95%** | **0.607%** | **0.155%** | **279.2** | **5.12%** | 1049.7 |
+| Combined(scale_reg_weight=10.0, 구값) | **36.09** | **0.2499** | 0.1745 | 9.58 | 0.805 | 0.245 | 372.2 | 5.51 | 1077.2 |
+
+Combined가 이기는 건 COCO_AP·LVIS_AP **2개뿐**, 나머지 7개(APr 포함)는
+BRECQ+LSQ한테 짐. `--control-mse` 재측정(iters=0 foundation 기준,
+`runs/74_learn_act_scale_v2/seed0_controlmse.log`, 1-seed)도 같이 확인:
+AP는 MSE-control이 이기고(손잡이 존재가 AP의 주 원인, claim12와 일관),
+LVIS_flip/LVIS_lost는 margin_loss가 이김(margin_loss의 기여가 "LVIS로의
+일반화"에 있어 보임).
+
+**`scale_reg_weight` 재튜닝**: 1-seed 스윕(10.0→20.0/5.0/2.5→0.0~1.5)한
+결과, **1.0이 최적점**임을 확인 — 0.0/0.5는 오히려 LVIS_flip 악화(이
+정규화가 원래 막으려던 현상, 09-07 도입 근거와 일치). `iters`(1500→3500)·
+`neighbor_k`(saturation 재확인, claim6과 일치)도 스윕했으나 GPU마다 결과가
+갈리는 걸 발견(완전히 동일한 설정을 다른 물리 GPU에서 돌렸더니 LVIS_flip
+5.26%→5.87%로 차이 남 — 기존에 문서화된 GPU 비결정성) — 이 둘의 세부
+순위는 신뢰 안 하고, `scale_reg_weight=1.0`만 동일 GPU 6-seed로 확정
+검증했다.
+
+**scale_reg_weight=1.0 6-seed 확정** (`runs/78_scalereg1_confirmed/`):
+
+| method | COCO_AP | LVIS_AP | APr | Heval_flip | Top1_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|---|
+| BRECQ+LSQ | 35.78 | 0.2478 | 0.1757 | **7.95%** | **0.607%** | **0.155%** | **279.2** | **5.12%** | 1049.7 |
+| **Combined(1.0)** | **36.55** | **0.2539** | **0.1797** | 9.52% | 0.735% | 0.173% | 339.2 | 5.30% | **959.0** |
+
+승리 지표 2개→**4개**(COCO_AP/LVIS_AP/APr/LVIS_lost)로 증가. UPIR은 BRECQ+LSQ와
+사실상 동률(0.173%=0.173%). LVIS_flip 격차 0.39pp→0.18pp.
+`--scale-reg-weight` 기본값을 1.0으로 전환.
+
+**BRECQ-stage1 진단(margin_loss 고유 기여 검증, 1-seed)**: "reconstruction
+error 최소화 ≠ decision error 최소화"라는 논문 핵심 주장과 충돌할까봐
+"Combined의 1단계를 BRECQ block-wise로 바꾸자"는 안을 한 번 철회한 적
+있는데(claim14 절 참고), 데이터가 이 질문을 다시 소환했다 — 재제안 시
+"reconstruction을 빌려서 숫자를 맞춘다"가 아니라 **"block-wise 재구성과
+margin_loss 중 뭐가 decision-preservation의 실제 원인인지 분리하는 통제
+실험"으로 재프레이밍**(제안 방법 자체는 불변). `--combined-stage1 brecq`
+(BRECQ의 block-wise 재구성, alpha만, LSQ는 안 켬 — activation scale은
+여전히 margin_loss/s_mult 전담) 추가, `pipeline/run_comparison.py`.
+
+3-way 비교(seed0, `runs/76_brecq_margin_diag/`):
+
+| method | COCO_AP | LVIS_AP | APr | Heval_flip | Top1_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|---|
+| BRECQ+LSQ(순수) | 35.85 | **0.2490** | **0.1728** | **7.28%** | **0.62%** | **0.19%** | **287** | **5.01%** | **1068** |
+| BRECQ-stage1+margin_loss | 35.96 | 0.2462 | 0.1685 | 7.82% | 0.63% | 0.22% | 311 | 5.24% | 1111 |
+| naive+margin_loss(당시 확정) | **36.07** | 0.2495 | 0.1765 | 8.88% | 0.79% | 0.34% | 382 | 5.59% | 1098 |
+
+1-seed에서 두 가지가 동시에 보였음: (1) BRECQ 기반 자체는 확실히 도움
+(naive 기반보다 5개 지표 우세). (2) **같은 BRECQ 기반 위에서 margin_loss가
+BRECQ 자신의 LSQ보다 COCO_AP 빼고 전부 못함** — margin_loss 고유의 순수
+기여가 지금 데이터로는 거의 없거나 마이너스로 보인다. 노벨티 우려(사용자
+지적: "BRECQ 위에 올리면 AdaRound 위에 올리는 것과 novelty 상 다를 게
+없지 않냐")로 헤드라인 제안 방법은 바꾸지 않고, 이 실험은 순수 discussion용
+진단으로 스코프를 한정했다.
+
+**6-seed 확정** (`runs/79_brecq_stage1_confirmed/seed{0..5}_full.log`,
+`--combined-stage1 brecq --combined-recon-iters 2000`):
+
+| method | COCO_AP | LVIS_AP | APr | Heval_flip | Top1_flip | UPIR | lost | LVIS_flip | LVIS_lost |
+|---|---|---|---|---|---|---|---|---|---|
+| BRECQ+LSQ(순수) | 35.78 | 0.2478 | 0.1757 | **7.95%** | **0.607%** | **0.155%** | **279.2** | **5.12%** | 1049.7 |
+| BRECQ-stage1+margin_loss | 36.46 | 0.2531 | 0.1781 | 9.67% | 0.703% | 0.185% | 339.5 | 5.28% | **984.5** |
+| naive+margin_loss(현재 확정) | 36.55 | 0.2539 | 0.1797 | 9.52% | 0.735% | 0.173% | 339.2 | 5.30% | 959.0 |
+
+**(2)는 6-seed로 재확인됨**: BRECQ-stage1+margin_loss는 BRECQ+LSQ 대비
+COCO_AP·LVIS_AP·APr·LVIS_lost 4개만 이기고 나머지 5개는 진다 — naive+
+margin_loss와 정확히 같은 4승 5패 패턴. **(1)은 1-seed 때와 결론이
+바뀌었다** — 6-seed로 보니 BRECQ-stage1과 naive-stage1(현재 확정)의 최종
+성능이 사실상 동일하다(위 표에서 두 행이 거의 모든 지표에서 거의 같음).
+즉 "BRECQ 기반이 naive보다 낫다"는 1-seed 결론은 노이즈였고, **weight-side
+foundation은 결과에 실질적 영향이 없다** — 남은 격차의 원인은 순전히
+margin_loss 자체다. §9 "남은 방향" (4)번(약한 weight-level 보정)은 이걸로
+막다른 길임이 확인돼 더 이상 유망하지 않음.
+
+**수정 완료**: `src/quant/adaround.py`(`_hard_weight_cache`),
+`pipeline/run_comparison.py`(`--w-bits`/`--a-bits`,
+`--adaround-learn-act-scale`/`--qdrop-brecq-learn-act-scale` 분리,
+`--combined-stage1`, `--scale-reg-weight` 기본값 1.0). `pipeline/quant/`
+사본 동기화 완료.
+
+**09-19 (이어서) 코드 리뷰로 발견된 4개 버그, 전부 수정 완료(사용자 발견)**:
+1. `--combined-stage1 adaround`인데 `--combined-recon-iters`가 기본값(0)이면
+   1단계가 조용히 생략돼 `none`과 동일한 결과가 나왔다(경고 없음) — 진단
+   실험을 돌리고 "adaround stage1이 none과 차이 없다"는 잘못된 결론을 내기
+   딱 좋은 형태였다. `combined_stage1 != "none"`인데 `combined_recon_iters
+   <= 0`이면 `AssertionError`로 명시적으로 막도록 수정.
+2. `combined_stage1="adaround"`는 `combined_recon_iters`, `"brecq"`는
+   `recon_iters_strong`을 써서 서로 다른 노브였다 — "1단계를 뭘로 할까"를
+   비교하려는 플래그 목적과 달리 예산까지 같이 바뀌어 단일 변수 비교가
+   안 됐다. 둘 다 `combined_recon_iters` 하나로 통일(기존
+   `runs/76_brecq_margin_diag`는 `recon_iters_strong` 기본값 2000을
+   암묵적으로 썼던 것이라, 재현하려면 이제 `--combined-recon-iters 2000`을
+   명시해야 함).
+3. `quantized_weight_mib`가 `total_elements / (1024**2)`로 원소당 1바이트
+   (=8bit)를 암묵 가정 — `--w-bits`를 CLI로 조정 가능하게 만든 뒤로는 실제
+   버그(`--w-bits 4`면 실제 크기는 절반인데 8bit 기준으로 찍힘). 각 conv의
+   `self.w_bits`로 직접 계산하도록 수정 — `--w-bits 4`로 검증하면
+   "이론적 모델 크기: 7.17 MiB"(정확한 기댓값)가 나옴.
+4. `_hard_weight_cache`(claim15 앞부분의 alpha 캐싱 수정)가 buffer가
+   아닌 일반 속성이라 `.to()`/`.half()`가 자동으로 안 따라감 —
+   `switch_vocab()`이 `model.to("cpu")` 후 다시 `.to(device)`를 하는데 그
+   사이 forward가 들어가면 device mismatch로 터질 수 있는 잠재 버그(현재
+   코드 경로에서는 아직 안 터짐, `set_classes`가 텍스트 인코더만 건드리고
+   `model.val()`도 half를 안 써서). `AdaRoundQuantConv2d._apply()`를
+   오버라이드해서 캐시도 나머지 파라미터/버퍼와 같은 device/dtype을
+   유지하도록 수정.
+
+4개 전부 `--conditions combined --combined-stage1 adaround
+--combined-recon-iters 50 --w-bits 4`로 재현 스모크 테스트, 크래시 없음·
+모델 크기 기댓값 일치 확인.
+
+**상태**: 코드 수정 완료(위 4개 버그 포함), `scale_reg_weight` 재튜닝과
+BRECQ-stage1 진단 둘 다 6-seed 확정 완료. **남은 5개 지표(Heval_flip/
+Top1_flip/UPIR/lost/LVIS_flip) 격차는 미해결** — 원인이 weight-side
+foundation이 아니라 margin_loss 자체임이 6-seed로 확정됐다. 다음 방향은
+`PROMPTCAL_CURRENT_MODEL_V2.md` §9 "남은 방향" 참고(neighbor_k 확장,
+margin_loss 설계 재검토 — weight-level 보정은 막다른 길로 확인돼 제외).
 
 ---
 
@@ -657,6 +1077,14 @@ GPU들은 비었다고 뜰 때까지 피했다.
 | `pipeline/run_comparison.py` | `--smult-per-tensor`, `--identity-aware-margin` CLI 플래그 추가, `build()`에 `channelwise_smult`/`identity_aware_margin` 파라미터 전달, `measure_ap`의 클래스별 AP 매핑 수정(claim7), `switch_vocab`의 names/predictor 갱신 추가(claim8), `--eval-cap` help 문구·결과 표 안내 문구 추가(claim10c), `cal_idx` 항상 전달로 confound 제거(claim5-a), `--conditions` 플래그 + `print(vars(args))` 추가(claim5-c) |
 | `requirements.txt` | `ultralytics>=8.3.0` → `ultralytics==8.4.121`로 고정(claim9) |
 | `scripts/58_full_baseline_official_data.py` | claim7/8과 동일한 두 수정 동기화 |
+| `src/quant/promptcal.py` | `optimize_promptcal_scale_neighbor`에 `control_mse` 파라미터 추가(claim12, margin_loss 대신 순수 MSE로 s_mult만 최적화하는 control 실험) |
+| `src/quant/adaround.py` | `learn_act_scale`/`act_lr`/`warmup` 파라미터 추가(claim12), `quant_act()`로 activation 양자화 경로 통합, `lp_rec_loss`/`temp_decay`/`DEFAULT_LR`/`DEFAULT_REG_WEIGHT`/`DEFAULT_WARMUP`/`DEFAULT_ACT_LR` 추가 및 `optimize_adaround` 전체 재작성(claim13, 공식 BRECQ 재구성 loss 정규화·lr·reg_weight·warmup 정합화), `flip_rate()` 진단 추가 |
+| `src/quant/brecq.py` | `optimize_brecq`에 `learn_act_scale`/`qdrop_prob`/`grad_clip` 파라미터 추가(claim12/13), `_to_cpu`/`_to_dev`/`_mix` 재귀 헬퍼로 다중 입력 list/tuple 처리 및 QDrop block 입력 drop 구현, 재구성 loss를 `lp_rec_loss`로 교체(claim13), QDrop을 여기로 이전 |
+| `pipeline/run_comparison.py` | `--control-mse`, `--learn-act-scale` CLI 플래그 추가, `build()`에 `control_mse`/`learn_act_scale` 파라미터 전달(claim12), QDrop 조건이 `optimize_brecq(qdrop_prob=...)`를 쓰도록 변경(claim13), `--combined-recon-iters`(기본 0) 플래그 추가 — Combined의 1단계(`optimize_adaround`) iters를 `--recon-iters-ada`와 분리, 0이면 1단계 생략(claim14, 새 확정 기본값) |
+| `pipeline/quant/adaround.py`, `pipeline/quant/brecq.py`, `pipeline/quant/promptcal.py` | 위 세 파일과 동기화(diff 없음 확인) |
+| `src/quant/adaround.py` | `quant_weight()`에 `_hard_weight_cache` 추가 — soft=False(고정)일 때 매 forward 재계산 낭비 제거, soft=True로 돌아가면 캐시 무효화(claim15) |
+| `pipeline/run_comparison.py` | `--w-bits`/`--a-bits` 플래그 추가(claim15, 메커니즘 실험용), `--learn-act-scale` 단일 플래그를 `--adaround-learn-act-scale`(기본 False)와 `--qdrop-brecq-learn-act-scale`(기본 True)로 분리해 방법별 원 논문 기본값 확정(claim15, claim12를 옵트인으로 방치했던 실수 수정), `--combined-stage1`(none/adaround/brecq) 추가 — BRECQ block-wise를 Combined 1단계로 쓰는 진단 실험용(claim15), `--scale-reg-weight` 기본값 10.0→1.0(claim15) |
+| `pipeline/quant/adaround.py` | 위 `src/quant/adaround.py`와 동기화(diff 없음 확인) |
 
 ## 부록 C — 실행 로그 위치
 
@@ -668,8 +1096,26 @@ GPU들은 비었다고 뜰 때까지 피했다.
 | claim5 identity-aware ON 6-seed | `runs/64_identity_margin/seed{0..5}_identity.log` |
 | claim5 identity-aware OFF 6-seed(seed0은 `62_anchorfix` 재사용) | `runs/65_identity_off/seed{1..5}_off.log` |
 | claim3 rounding_diff_rate 측정 | 스크립트만 존재(`/tmp` scratchpad, 저장소에 커밋 안 됨) — 재현하려면 이 문서의 claim3 절차대로 재실행 필요 |
+| claim11 LVIS-fix 6-seed 재측정 | `runs/68_lvis_fix_fullscale/seed{0..5}_lvisfix.log` |
+| claim12 control-mse 3-seed | `runs/69_control_mse/seed{0..2}_controlmse.log` |
+| claim12 learn-act-scale 1-seed(구 재구성 코드) | `runs/70_learn_act_scale/seed0_full.log` |
+| claim13 재구성 수정 6-seed 재측정(완료) | `runs/71_recon_fix_review/seed{0..5}_full.log` |
+| claim14 combined-recon-iters 예비(iters=0/200 비교, seed0) | `runs/72_combined_recon_diag/seed0_iters{0,200}.log` |
+| claim14 1단계 제거 6-seed 확정(완료) | `runs/72_combined_recon_diag/seed{0..5}_iters0.log` |
+| claim15 learn-act-scale 재측정(현재 코드, seed0) + control-mse 재측정 | `runs/74_learn_act_scale_v2/seed0_{full,controlmse}.log` |
+| claim15 공정 비교(QDrop+LSQ/BRECQ+LSQ 기본 적용) 6-seed 확정 | `runs/75_lsq_confirmed/seed{0..5}_full.log` |
+| claim15 BRECQ-stage1+margin_loss 진단 예비(seed0) | `runs/76_brecq_margin_diag/seed0_full.log` |
+| claim15 BRECQ-stage1+margin_loss 6-seed 확정(완료) | `runs/79_brecq_stage1_confirmed/seed{0..5}_full.log` |
+| claim15 scale_reg_weight 스윕(0.0~20.0, seed0) | `runs/77_hparam_sweep/scalereg_*.log` |
+| claim15 iters/neighbor_k 스윕(seed0, GPU 비결정성 확인됨 — 세부 순위 신뢰 안 함) | `runs/77_hparam_sweep/{iters,neighbork}_*.log` |
+| claim15 scale_reg_weight=1.0 6-seed 확정(완료) | `runs/78_scalereg1_confirmed/seed{0..5}_full.log` |
+| claim15 bit-width(W8A32/W32A8) 스모크 테스트(정식 재측정 아직 안 함) | `runs/73_review_fixes/smoke_w{8a32,32a8}.log` |
 
 ## 부록 D — 결정 현황 (2026-09-16 갱신)
+
+> 이 부록은 09-16 시점 스냅샷으로 고정, 이후 갱신 안 함. claim11~15의
+> 최신 결정 현황은 각 claim 절 자체와 이 문서 맨 위 배너, 그리고
+> `PROMPTCAL_CURRENT_MODEL_V2.md`를 볼 것.
 
 **09-16에 내려진 결정** (더 이상 "고민 중"이 아니라 확정된 방향):
 - **claim4(per-tensor)와 claim5(identity-aware margin, intrusion 수정판)

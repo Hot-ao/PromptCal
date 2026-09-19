@@ -12,6 +12,17 @@
 > 쓰지 말 것. **지금 확정 설계와 하이퍼파라미터는
 > [`PROMPTCAL_CURRENT_MODEL_V2.md`](PROMPTCAL_CURRENT_MODEL_V2.md)**를 볼 것,
 > 이 문서는 "왜 이런 구조로 설계했는가"의 개념적 배경 설명으로만 참고할 것.
+>
+> **09-18 추가 주의**: §의 "QDrop은 AdaRound 최적화 루프에 확률적 activation
+> drop을 추가한 것뿐"이라는 서술(아래 §)도 superseded — QDrop은 이제 BRECQ의
+> block-wise 재구성 위에서 돈다(claim13, `src/quant/brecq.py`
+> `optimize_brecq(qdrop_prob=...)`). 또한 §의 "Combined는 AP·Top1_flip·UPIR에서
+> 모든 baseline을 이긴다"는 서술도 claim13(재구성 loss 정규화 버그) 수정으로
+> **더 이상 성립하지 않는다** — 6-seed 재측정 결과 Top1_flip/lost/LVIS_flip/
+> LVIS_lost 네 지표에서 QDrop·BRECQ가 Combined를 이긴다(AdaRound/QDrop/BRECQ
+> 자체는 COCO_AP가 여전히 naive보다 낮다 — 정규화를 정확히 고쳐도 그렇다는 게
+> 확인된 실제 결과). 최신 수치는 `PROMPTCAL_CURRENT_MODEL_V2.md` §8, 경위는
+> `PROMPTCAL_CLAIMS_2026-09-15.md` claim12/13 참고.
 
 ---
 

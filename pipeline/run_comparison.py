@@ -445,42 +445,102 @@ def compute_lvis_flip_gt_streaming(h_fp, h_models, probe_paths, gt_by_path, grid
 
 
 def quantized_weight_mib(model_module):
-    total = 0
+    """09-19 (사용자 지적) 이전엔 total_elements / (1024**2)로 원소당 1바이트
+    (=8bit)를 암묵 가정했다 -- --w-bits를 CLI로 조정 가능하게 만든 이상 이제
+    실제 버그다(--w-bits 4면 실제 크기는 절반인데 8bit 기준으로 찍힘). 각
+    conv가 이미 들고 있는 self.w_bits(QuantConv2d/AdaRoundQuantConv2d 둘 다
+    생성자에서 저장)로 비트 수를 직접 계산한다."""
+    total_bits = 0
     for m in model_module.modules():
         if isinstance(m, (AdaRoundQuantConv2d, QuantConv2d)):
-            total += m.conv.weight.numel()
-    return total / (1024 * 1024)
+            total_bits += m.conv.weight.numel() * m.w_bits
+    return total_bits / 8 / (1024 * 1024)
 
 
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
-          lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=10.0,
+          lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=1.0,
           h_eval=None, cal_idx=None, cal_weight=1.0,
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5,
-          channelwise_smult=False, identity_aware_margin=True):
+          channelwise_smult=False, identity_aware_margin=True, control_mse=False,
+          adaround_learn_act_scale=False, qdrop_brecq_learn_act_scale=True,
+          combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
         m.fuse(); m.model.to(device).eval()
         return m
     m.fuse()
-    wrap_convs(m.model, 8, 8)
+    wrap_convs(m.model, w_bits, a_bits)
     m.model.to(device).eval()
     calibrate(m.model, calib, device=device)
     if mode == "naive":
         pass
     elif mode == "adaround":
-        convert_to_adaround(m.model)
-        optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
+        # 09-18 (사용자 지적으로 수정): AdaRound 원 논문(Nagel et al. ICML'20)은
+        # 순수 weight-rounding 방법이라 activation LSQ가 없다(claim12) -- 기본
+        # False가 맞는 채택(claim4/5/13과 같은 원칙: 원 논문 충실도가 기준).
+        # adaround_learn_act_scale=True일 때만 channelwise_smult=False(per-tensor)로
+        # 강제(Combined와 granularity 통일, ablation 목적).
+        convert_to_adaround(m.model, channelwise_smult=not adaround_learn_act_scale)
+        optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada,
+                          verbose=False, learn_act_scale=adaround_learn_act_scale)
     elif mode == "qdrop":
-        convert_to_adaround(m.model)
-        optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_strong,
-                          qdrop_prob=qdrop_prob, verbose=False)
+        # 09-18 (이어서): QDrop(Wei et al., ICLR 2022)은 BRECQ 프레임워크를 그대로
+        # 물려받아 activation LSQ를 포함한다(claim12) -- AdaRound와 반대로 기본
+        # True가 맞는 채택. --no-qdrop-brecq-learn-act-scale로 끄면 이전(claim12
+        # 이전) 축소 구현으로 돌아가서 "손잡이 유무" 효과 자체를 볼 수 있음(ablation).
+        # optimize_brecq에 qdrop_prob를 넘겨 brecq와 재구성 단위/iters를 완전히 맞추고
+        # drop 유무만 단일 변수로 비교한다(09-18 claim13, layer-wise에서 이전됨).
+        convert_to_adaround(m.model, channelwise_smult=not qdrop_brecq_learn_act_scale)
+        optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong,
+                       qdrop_prob=qdrop_prob, verbose=False,
+                       learn_act_scale=qdrop_brecq_learn_act_scale)
     elif mode == "brecq":
-        convert_to_adaround(m.model)
-        optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong, verbose=False)
+        convert_to_adaround(m.model, channelwise_smult=not qdrop_brecq_learn_act_scale)
+        optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong,
+                       verbose=False, learn_act_scale=qdrop_brecq_learn_act_scale)
     elif mode == "combined":
+        # 09-18 claim14로 확정: claim13으로 1단계(optimize_adaround)가 alpha를
+        # 훨씬 많이 움직이게 됐는데, 그 목적함수(순수 MSE reconstruction)는
+        # margin_loss/s_mult(2단계)가 보호하는 영역(train_cols=S∪H_cal+neighbor_cols)과
+        # 무관해서 그 바깥(COCO 전체 Top1_flip/lost, LVIS 1203개 class)으로 손상이
+        # 샌다는 게 6-seed로 확인됐다(`PROMPTCAL_CLAIMS_2026-09-15.md` claim14).
+        # combined_recon_iters=0(기본값, 1단계 생략=round-to-nearest weight)이
+        # 이전(1단계 유지) 대비 COCO_AP/LVIS_AP/APr/Heval_flip/LVIS_lost 5개
+        # 지표를 트레이드오프 없이 동시에 개선 -- 새 확정 설계. 이전(1단계 유지)
+        # 동작을 재현하려면 combined_recon_iters=recon_iters_ada를 명시적으로
+        # 넘길 것(opt-in). baseline(adaround) 조건의 recon_iters_ada는 이 값과
+        # 무관 -- 영향 없음.
+        # 09-18 (claim14 이어서, 진단 실험): combined_stage1로 1단계 자체를 뭘로
+        # 쓸지 선택. "none"(기본, claim14 확정) = round-to-nearest. "adaround" =
+        # 이전(claim14 이전) 동작, combined_recon_iters로 iters 조정. "brecq" =
+        # BRECQ의 block-wise 재구성(alpha만, LSQ는 안 켬 -- activation scale은
+        # 여전히 2단계 margin_loss/s_mult가 전담) -- "BRECQ+LSQ가 margin_loss 없이도
+        # decision-preservation을 이기는 게 block-wise 상관 반영 때문인지, margin_loss가
+        # 그 위에 추가 기여를 하는지" 분리하는 통제 실험용(제안 방법 변경 아님, 진단
+        # 목적 한정 -- 헤드라인 설계는 여전히 "none").
         convert_to_adaround(m.model, channelwise_smult=channelwise_smult)
-        optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada, verbose=False)
+        # 09-19 (사용자 지적) 두 버그 수정: (a) combined_stage1="adaround"인데
+        # combined_recon_iters가 기본값(0)이면 stage1이 조용히 생략돼 "none"과
+        # 똑같은 결과가 나왔다 -- 경고 없이 진단 실험이 무의미해질 수 있어서
+        # assert로 명시적 에러를 띄운다. (b) "adaround"는 combined_recon_iters,
+        # "brecq"는 recon_iters_strong을 써서 서로 다른 노브였다 -- "1단계를
+        # adaround로 할까 brecq로 할까"가 이 플래그의 목적인데 예산까지
+        # 같이 바뀌면 단일 변수 비교가 깨진다. 이제 둘 다 combined_recon_iters
+        # 하나로 통일(기존에 recon_iters_strong 기본값 2000으로 돌렸던 brecq
+        # 진단을 재현하려면 --combined-recon-iters 2000을 명시할 것).
+        if combined_stage1 != "none":
+            assert combined_recon_iters > 0, (
+                f"--combined-stage1={combined_stage1}인데 --combined-recon-iters="
+                f"{combined_recon_iters}입니다 -- 0이면 1단계가 조용히 생략되고 "
+                f"'none'과 동일한 결과가 나옵니다. iters를 명시하세요"
+                f"(예: --combined-recon-iters 1000).")
+        if combined_stage1 == "adaround":
+            optimize_adaround(m.model, fp.model, calib, device, iters=combined_recon_iters,
+                              verbose=False)
+        elif combined_stage1 == "brecq":
+            optimize_brecq(m.model, fp.model, calib, device, iters=combined_recon_iters,
+                           verbose=False)
         optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                           lr=lr, k=k, neighbor_k=neighbor_k,
                                           neighbor_weight=neighbor_weight,
@@ -488,6 +548,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           exclude_from_neighbors=h_eval,
                                           cal_idx=cal_idx, cal_weight=cal_weight,
                                           identity_aware_margin=identity_aware_margin,
+                                          control_mse=control_mse,
                                           verbose=False)
     return m
 
@@ -500,6 +561,14 @@ def main():
     ap.add_argument("--gt-ann", default=None)
     ap.add_argument("--lvis-ann",
                     default="/data/taeho/lvis_datasets/labels_dl/extracted/lvis/annotations/lvis_v1_minival.json")
+    ap.add_argument("--w-bits", type=int, default=8,
+                    help="09-18 사용자 지적: 이전엔 wrap_convs(m.model, 8, 8)로 하드코딩돼 "
+                         "있어서 bit-width를 CLI로 조정할 방법이 없었다. W8A32/W32A8 같은 "
+                         "조합으로 손상이 weight rounding 쪽인지 activation range 쪽인지 "
+                         "분리하는 메커니즘 실험에 씀(naive가 FP 대비 -3.26 AP인데 weight만"
+                         "건드리는 AdaRound/QDrop/BRECQ는 거의 못 고치고 activation scale만"
+                         "만지는 Combined가 크게 회복한다는 정황과 직접 검증하기 위함).")
+    ap.add_argument("--a-bits", type=int, default=8)
     ap.add_argument("--calib", type=int, default=256)
     ap.add_argument("--iters", type=int, default=1500)
     ap.add_argument("--recon-iters-ada", type=int, default=1000)
@@ -509,9 +578,16 @@ def main():
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--neighbor-k", type=int, default=5)
     ap.add_argument("--neighbor-weight", type=float, default=1.0)
-    ap.add_argument("--scale-reg-weight", type=float, default=10.0,
-                    help="확정값(PROMPTCAL_CURRENT_MODEL.md §5.5/§8.2). s_mult(per-channel "
-                         "벡터, adaround.py의 AdaRoundQuantConv2d.s_mult)의 (s-1)^2 정규화 강도.")
+    ap.add_argument("--scale-reg-weight", type=float, default=1.0,
+                    help="09-19 claim15로 재확정(기본값 10.0→1.0): s_mult(per-tensor 스칼라, "
+                         "adaround.py의 AdaRoundQuantConv2d.s_mult)의 (s-1)^2 정규화 강도. "
+                         "10.0은 claim14 이전(1단계가 AdaRound-refined weight였던 시절) "
+                         "튜닝된 값이라, 1단계가 naive rounding으로 바뀐 뒤(claim14)엔 "
+                         "과도한 정규화였다 -- QDrop/BRECQ+LSQ(공정 비교 기준, claim12) "
+                         "대비 6-seed 재스윕한 결과 1.0이 COCO_AP/LVIS_AP/APr/LVIS_lost를 "
+                         "동시에 개선(PROMPTCAL_CLAIMS_2026-09-15.md claim15). 0.0/0.5처럼 "
+                         "너무 낮추면 LVIS_flip이 오히려 악화(원래 이 정규화가 막으려던 "
+                         "현상 재현) -- 1.0 근방이 최적 구간.")
     ap.add_argument("--cal-weight", type=float, default=1.0,
                     help="확정값(PROMPTCAL_CURRENT_MODEL.md §8.10). H_cal(20개)에도 S와 동일한 "
                          "margin_loss를 직접 적용하는 가중치. 0.0=off(이전 동작).")
@@ -527,6 +603,55 @@ def main():
                          "gather해서 identity를 고정하고, FP top-k 밖 class의 intrusion도 마지막 "
                          "열에서 같이 탐지(claim5-b, promptcal.py의 margin_loss 참고). "
                          "--no-identity-aware-margin으로 이전 동작(정렬 비교)으로 되돌릴 수 있음.")
+    ap.add_argument("--adaround-learn-act-scale", action=argparse.BooleanOptionalAction,
+                    default=False,
+                    help="09-18 claim12 확정(기본 False): AdaRound 원 논문(Nagel et al. "
+                         "ICML'20)은 순수 weight-rounding 방법이라 activation LSQ가 "
+                         "없다 -- 그 축소 없는 원 논문 충실 구현이 기본값(claim4/5/13과 "
+                         "같은 원칙). True로 켜면(ablation) s_mult를 추가해 AdaRound에도 "
+                         "activation scale 학습을 붙일 수 있음(자동 per-tensor 강제).")
+    ap.add_argument("--qdrop-brecq-learn-act-scale", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="09-18 claim12 확정(기본 True, 09-18 이전엔 실수로 opt-in "
+                         "False였음): QDrop/BRECQ 원 논문(Wei et al. ICLR'22 / Li et al. "
+                         "ICLR'21)은 BRECQ 프레임워크를 통해 activation LSQ를 포함한다 -- "
+                         "이 손잡이 없이 비교하면 '방법 차이'가 아니라 '구현 축소'와 "
+                         "비교하는 셈이라 리뷰어 반론을 못 막는다. s_mult(Combined와 "
+                         "동일 메커니즘, 각 방법 자신의 reconstruction loss로 alpha와 "
+                         "공동 최적화)를 추가하고 자동으로 per-tensor 강제. "
+                         "--no-qdrop-brecq-learn-act-scale로 이전(claim12 이전, 축소) "
+                         "동작으로 되돌릴 수 있음(ablation 목적에 한함 -- 확정 비교표에는 "
+                         "쓰지 말 것). naive/combined에는 영향 없음.")
+    ap.add_argument("--combined-recon-iters", type=int, default=0,
+                    help="09-18 claim14로 확정(기본값 0): Combined의 1단계"
+                         "(optimize_adaround) iters를 --recon-iters-ada와 별개로 조정"
+                         "(baseline인 adaround 조건에는 영향 없음). claim13 이후 1단계가 "
+                         "alpha를 많이 움직이는데, 그 목적함수가 margin_loss/s_mult(2단계)가 "
+                         "보호하는 영역과 무관해서 그 바깥(COCO 전체 Top1_flip/lost, LVIS)으로 "
+                         "새는 손상이 커진다는 게 6-seed로 확인됨 -- 0(1단계 생략, alpha가 "
+                         "초기값=round-to-nearest에 남음, optimize_promptcal_scale_neighbor가 "
+                         "soft=False로 만들기 때문)이 COCO_AP/LVIS_AP/APr/Heval_flip/LVIS_lost "
+                         "5개 지표를 트레이드오프 없이 동시에 개선해 새 기본값으로 채택. "
+                         "이전(1단계 유지) 동작을 재현하려면 --combined-recon-iters 1000, "
+                         "--combined-stage1도 adaround로 같이 줘야 함.")
+    ap.add_argument("--combined-stage1", choices=["none", "adaround", "brecq"], default="none",
+                    help="09-18 진단 실험(제안 방법 변경 아님, 헤드라인 설계는 계속 'none'): "
+                         "Combined의 1단계로 뭘 쓸지. 'none'(기본, claim14 확정) = "
+                         "round-to-nearest. 'adaround' = claim14 이전 동작(--combined-recon-iters로 "
+                         "iters 조정). 'brecq' = BRECQ의 block-wise 재구성(alpha만, LSQ는 "
+                         "안 켬 -- activation scale은 여전히 margin_loss/s_mult(2단계)가 전담, "
+                         "iters=--recon-iters-strong). QDrop+LSQ/BRECQ+LSQ가 margin_loss 없이도 "
+                         "decision-preservation에서 Combined를 이기는 게 block-wise 상관 반영 "
+                         "때문인지, margin_loss가 그 위에 추가 기여를 하는지 분리하는 통제 실험용.")
+    ap.add_argument("--control-mse", action="store_true",
+                    help="09-17 claim(baseline엔 activation scale 학습 손잡이가 아예 "
+                         "없다) 검증용 control 실험. Combined 빌드 시 margin_loss/"
+                         "neighbor-hinge/cal/scale_reg를 전부 끄고 train_cols(S∪H_cal) "
+                         "전체에 순수 MSE reconstruction만 적용(s_mult 메커니즘·"
+                         "optimizer·iters는 동일 유지) -- promptcal.py의 "
+                         "optimize_promptcal_scale_neighbor(control_mse=...) 참고. "
+                         "일회성 확인용 플래그라 기본 False, --conditions combined와 "
+                         "같이 쓰는 걸 권장(다른 조건은 이 플래그의 영향을 안 받음).")
     ap.add_argument("--eval-cap", type=int, default=0,
                     help="스모크 테스트용: flip/GT/UPIR/lost 등을 계산하는 probe(COCO val2017/LVIS "
                          "minival) 이미지 수를 이만큼으로 제한. 0이면 제한 없음(실제 실행 기본값 -- "
@@ -600,6 +725,16 @@ def main():
     conditions = [c.strip() for c in args.conditions.split(",")]
     _valid = {"naive", "adaround", "qdrop", "brecq", "combined"}
     assert all(c in _valid for c in conditions), f"--conditions에 알 수 없는 값: {set(conditions) - _valid}"
+    # 09-18: reconstruction 계열 조건 간 iteration 예산이 다르면 "방법 차이"와
+    # "최적화 예산 차이"가 섞여서 A vs B 비교가 단일 변수가 아니게 된다. 기본값
+    # (ada=1000, strong=2000)이 그 상태라 명시적으로 경고만 띄운다 -- 예산을 맞추려면
+    # --recon-iters-ada 2000 처럼 같은 값으로 주면 된다.
+    if "adaround" in conditions and ({"qdrop", "brecq"} & set(conditions)) \
+            and args.recon_iters_ada != args.recon_iters_strong:
+        print(f"[warn] 재구성 예산 불일치: adaround={args.recon_iters_ada} iters vs "
+              f"qdrop/brecq={args.recon_iters_strong} iters. 방법 간 비교에 "
+              f"'최적화 예산'이 교란변수로 섞인다(맞추려면 --recon-iters-ada "
+              f"{args.recon_iters_strong}).")
     models, calib_time = {}, {}
     for mode in conditions:
         print(f"[build] {mode}")
@@ -621,7 +756,13 @@ def main():
                              recon_iters_strong=args.recon_iters_strong,
                              qdrop_prob=args.qdrop_prob,
                              channelwise_smult=not args.smult_per_tensor,
-                             identity_aware_margin=args.identity_aware_margin)
+                             identity_aware_margin=args.identity_aware_margin,
+                             control_mse=args.control_mse,
+                             adaround_learn_act_scale=args.adaround_learn_act_scale,
+                             qdrop_brecq_learn_act_scale=args.qdrop_brecq_learn_act_scale,
+                             combined_recon_iters=args.combined_recon_iters,
+                             combined_stage1=args.combined_stage1,
+                             w_bits=args.w_bits, a_bits=args.a_bits)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
@@ -716,7 +857,16 @@ def main():
     fp_lvis = run_lvis_eval(lvis_gt, preds_fp, lvis_probe_ids)
 
     print("\n" + "=" * 100)
-    print(f" 공식 데이터 설정(calib=train2017 {len(calib_paths)}장, LVIS=공식 minival) -- seed {args.seed}")
+    control_tag = " [CONTROL-MSE: combined는 margin_loss 대신 순수 MSE reconstruction]" if args.control_mse else ""
+    lsq_bits = []
+    if args.adaround_learn_act_scale:
+        lsq_bits.append("AdaRound+LSQ(ablation)")
+    if not args.qdrop_brecq_learn_act_scale:
+        lsq_bits.append("QDrop/BRECQ LSQ 꺼짐(claim12 이전 축소구현, ablation)")
+    if args.combined_stage1 != "none":
+        lsq_bits.append(f"Combined 1단계={args.combined_stage1}(진단 실험, 헤드라인 아님)")
+    lsq_tag = f" [{', '.join(lsq_bits)}]" if lsq_bits else ""
+    print(f" 공식 데이터 설정(calib=train2017 {len(calib_paths)}장, LVIS=공식 minival) -- seed {args.seed}{control_tag}{lsq_tag}")
     if args.eval_cap > 0:
         print(f" 주의: --eval-cap={args.eval_cap}은 COCO_AP/S_AP/H_eval_AP(measure_ap, --data yaml의 "
               f"고정 val split 사용)에는 적용 안 됨 -- 항상 전체 val 세트로 측정됨. "

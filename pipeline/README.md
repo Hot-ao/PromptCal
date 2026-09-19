@@ -23,6 +23,35 @@
 [`PROMPTCAL_CLAIMS_2026-09-15.md`](../PROMPTCAL_CLAIMS_2026-09-15.md)에
 정리돼 있다.
 
+**09-18**: `adaround.py`/`brecq.py`의 재구성 loss 정규화가 공식 BRECQ 대비
+축소돼 있던 버그가 발견·수정됐다(claim13) — `optimize_adaround`가 Combined
+자신의 weight-rounding 단계에도 쓰이므로 baseline 4개뿐 아니라 Combined의
+COCO_AP/S_AP/H_eval_AP까지 영향받았다. 6-seed 재측정 완료
+(`runs/71_recon_fix_review/`) — AdaRound/QDrop/BRECQ는 여전히 naive보다
+COCO_AP가 낮고(정확히 구현해도 그렇다는 게 확인된 실제 결과, 버그 아님),
+decision-preservation 4개 지표는 이제 QDrop·BRECQ가 Combined를 이긴다.
+
+**09-18 (이어서, claim14, 최신)**: claim13으로 Combined 자신의 1단계
+(`optimize_adaround`)도 alpha를 크게 움직이게 됐는데, 그 목적함수가
+2단계(margin_loss/s_mult)가 보호하는 영역과 무관해서 그 바깥으로 손상이
+샌다는 게 확인돼, **1단계를 아예 생략(`--combined-recon-iters 0`, 이제
+기본값)** 하는 걸로 확정했다 — round-to-nearest weight + margin_loss만으로
+COCO_AP/LVIS_AP/APr/Heval_flip/LVIS_lost 5개 지표가 트레이드오프 없이
+동시에 개선됐다(6-seed, `runs/72_combined_recon_diag/`). Combined는 이제
+AdaRound 메커니즘을 전혀 안 쓴다. `PROMPTCAL_CURRENT_MODEL_V2.md` §4/§5.1/§8
+갱신 완료.
+
+**09-19 (claim15, 최신)**: §8 표가 **불공정 비교**였다는 게 드러났다 —
+QDrop/BRECQ의 activation scale 학습(LSQ)이 꺼진 채로 Combined와 비교하고
+있었다(사용자 지적). QDrop/BRECQ는 원 논문대로 LSQ가 기본 적용되도록
+고치고(`--qdrop-brecq-learn-act-scale` 기본 True, AdaRound는 원 논문에
+없어서 기본 False 유지), 그 공정 비교에서 `scale_reg_weight`를 10.0→1.0으로
+재튜닝했다. 결과: Combined는 9개 지표 중 **4개(COCO_AP/LVIS_AP/APr/
+LVIS_lost)만 BRECQ+LSQ를 이기고 나머지 5개는 아직 진다.** 그 외
+`--w-bits`/`--a-bits`(bit-width 실험용), `--combined-stage1`(BRECQ
+block-wise를 1단계로 쓰는 진단 실험용) 추가, `quant_weight()`의 죽은 alpha
+재계산 캐싱. `PROMPTCAL_CURRENT_MODEL_V2.md` §4/§5.5/§8/§9 갱신 완료.
+
 ## 파일 지도
 
 ```
@@ -37,17 +66,33 @@ pipeline/
 │   │                            ActObserver(calibration으로 activation min/max 수집).
 │   ├── quant_model.py       -- wrap_convs(모델의 모든 Conv2d를 QuantConv2d로 교체),
 │   │                            calibrate(calibration 이미지로 activation scale 확정).
-│   ├── adaround.py          -- AdaRound(학습 가능한 weight rounding, alpha) +
-│   │                            QDrop(qdrop_prob로 확률적 activation drop, 같은 함수의
-│   │                            옵션). AdaRoundQuantConv2d에 Combined가 쓰는
+│   ├── adaround.py          -- AdaRound(학습 가능한 weight rounding, alpha).
+│   │                            AdaRoundQuantConv2d에 Combined가 쓰는
 │   │                            s_mult(연속 activation scale multiplier, conv당
 │   │                            스칼라가 아니라 in_channels별 벡터 --
-│   │                            PROMPTCAL_CURRENT_MODEL.md §5.2 참고)도 정의돼 있음.
+│   │                            PROMPTCAL_CURRENT_MODEL_V2.md §5.2 참고)도 정의돼 있음.
 │   │                            09-15: channelwise_smult(기본 True) 추가 --
 │   │                            False면 s_mult을 baseline과 동일한 per-tensor
 │   │                            스칼라로 강제(claim4 대조 실험, opt-in).
+│   │                            09-17: learn_act_scale(기본 False) 추가 -- True면
+│   │                            AdaRound/QDrop/BRECQ에도 s_mult를 켜서 alpha와
+│   │                            같은 reconstruction loss로 공동 최적화(claim12,
+│   │                            원 BRECQ 논문의 AdaRound+LSQ 공동 최적화 재현).
+│   │                            09-18: 재구성 loss를 공식 BRECQ의 lp_loss와 동일한
+│   │                            정규화(lp_rec_loss, 채널축 sum)로 교체하고
+│   │                            lr/reg_weight/warmup을 공식값(1e-3/0.01/0.2)으로
+│   │                            수정(claim13 -- 이전 정규화는 공식 대비 C_out배
+│   │                            작아서 rounding 정규화가 압도, alpha가 사실상
+│   │                            round-to-nearest에서 못 움직였음). flip_rate()
+│   │                            진단(nearest 대비 반올림이 실제로 바뀐 비율) 추가.
 │   ├── brecq.py             -- BRECQ(block-wise joint reconstruction, C2fAttn 등
-│   │                            다중 입력 블록 지원).
+│   │                            다중 입력 블록 지원). 09-18: QDrop이 여기로 이전됨
+│   │                            (`optimize_brecq(qdrop_prob=...)`) -- 이전엔
+│   │                            adaround.py의 layer-wise 경로에 붙어있어 QDrop
+│   │                            원 논문의 재구성 단위(block-wise)와 달랐다(claim13).
+│   │                            block 내부 quantizer drop + block 입력 drop(input_prob)
+│   │                            둘 다 구현. learn_act_scale도 adaround.py와 동일하게
+│   │                            지원(claim12).
 │   ├── pdquant.py           -- _find_head/_CV4Capture 헬퍼(promptcal.py가 사용).
 │   │                            optimize_pdquant 자체는 현재 5-way 비교에 포함 안 됨
 │   │                            (PD-Quant는 v1 시절 baseline, 지금 조건에서는 제외).
@@ -57,7 +102,9 @@ pipeline/
 │   │                            constraint, 현재 기본 비교에서는 미사용이지만
 │   │                            promptcal.py의 utility 변형 함수가 참조).
 │   └── promptcal.py         -- 제안 방법. 핵심은 optimize_promptcal_scale_neighbor:
-│                               AdaRound로 확정한 weight 위에, 각 conv의 per-channel
+│                               weight(09-18 claim14부터 round-to-nearest --
+│                               AdaRound 1단계 생략, 아래 run_comparison.py 참고)
+│                               위에, 각 conv의 per-channel
 │                               learnable activation scale(s_mult)을 (1) S 프롬프트의
 │                               top-k margin 보존 + (2) H_cal에도 동일 margin_loss
 │                               직접 적용(cal_weight) + (3) text-embedding 최근접
@@ -102,6 +149,34 @@ pipeline/
                                 실행 플래그 로그에 남김, --conditions(쉼표 구분,
                                 기본 5개 전부)로 Combined 변형만 볼 때 QDrop/BRECQ
                                 재빌드 생략 가능(claim5-c).
+                                09-17: --control-mse 추가(claim12) -- Combined
+                                빌드 시 margin_loss/neighbor-hinge를 전부 끄고
+                                s_mult만 순수 MSE reconstruction으로 최적화하는
+                                control 실험(손잡이 존재 자체의 효과 분리용).
+                                --learn-act-scale 추가(claim12) -- AdaRound/QDrop/
+                                BRECQ 세 baseline에도 s_mult 공동 최적화를 추가
+                                (naive/combined는 영향 없음, s_mult는 자동으로
+                                per-tensor 강제).
+                                09-18: QDrop 조건이 optimize_brecq(qdrop_prob=...)를
+                                쓰도록 변경(claim13, 이전엔 layer-wise 경로라
+                                brecq 조건과 재구성 단위가 달랐음).
+                                09-18 (이어서, claim14): --combined-recon-iters
+                                추가하고 기본값 0으로 확정 -- Combined의 1단계
+                                (optimize_adaround)를 생략(round-to-nearest
+                                weight)하는 게 트레이드오프 없이 5개 지표를
+                                동시에 개선함을 6-seed로 확인. build()의
+                                combined_recon_iters 기본값도 0.
+                                09-19 (claim15, 최신): --learn-act-scale(단일
+                                플래그)를 --adaround-learn-act-scale(기본 False)·
+                                --qdrop-brecq-learn-act-scale(기본 True)로 분리 --
+                                QDrop/BRECQ는 이제 플래그 없이도 원 논문대로 LSQ가
+                                기본 적용됨(claim12를 옵트인으로 방치했던 실수
+                                수정). --w-bits/--a-bits 추가(하드코딩된 8/8
+                                해소, 메커니즘 실험용). --combined-stage1
+                                (none/adaround/brecq) 추가 -- BRECQ의 block-wise
+                                재구성을 Combined 1단계로 쓰는 진단 실험(제안
+                                방법 변경 아님). --scale-reg-weight 기본값
+                                10.0→1.0(공정 비교 기준 재스윕 결과).
 ```
 
 ## 실행 방법
@@ -127,9 +202,13 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle GPU> python pipeline/run
   **전체**(5000장, `--eval-cap`으로 제한 안 하면). LVIS 평가는 공식
   `lvis_v1_minival.json`(ultralytics 공식 배포) — 확인 결과 "COCO val2017 ∩
   LVIS val"과 정확히 일치하는 4809장.
-- `--scale-reg-weight`(기본 10.0)·`--cal-weight`(기본 1.0): 둘 다 확정값
-  (`PROMPTCAL_CURRENT_MODEL_V2.md` §5.5). `--cal-weight 0.0`을 주면 H_cal 직접
-  보호를 끈 이전 동작으로 돌아감.
+- `--scale-reg-weight`(기본 **1.0**, 09-19 claim15로 10.0에서 하향)·
+  `--cal-weight`(기본 1.0): 둘 다 확정값(`PROMPTCAL_CURRENT_MODEL_V2.md`
+  §5.5). `--cal-weight 0.0`을 주면 H_cal 직접 보호를 끈 이전 동작으로
+  돌아감. `scale_reg_weight`의 10.0은 claim14 이전(1단계가 AdaRound-refined
+  weight였던 시절) 튜닝값이라 1단계가 naive로 바뀐 뒤(claim14)엔 과도한
+  정규화였음 — 공정 비교(claim15, QDrop/BRECQ+LSQ 기준) 재스윕 결과 1.0이
+  최적 구간(0.0/0.5는 LVIS_flip 악화).
 - **`--smult-per-tensor`·`--identity-aware-margin`(09-16, 둘 다 §8.1 확정
   설계라 기본값 True)**: `argparse.BooleanOptionalAction`이라
   `--no-smult-per-tensor`/`--no-identity-aware-margin`으로 끌 수 있음 —
@@ -141,6 +220,46 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle GPU> python pipeline/run
   claim5-b로 intrusion 탐지까지 보강). 즉 **위 "실행 방법" 예시 커맨드는
   플래그 추가 없이 그대로 §8.1 확정 설계를 재현**한다. 자세한 검증 경위는
   `PROMPTCAL_CLAIMS_2026-09-15.md` 참고.
+- **`--control-mse`(09-17, claim12, 기본 False — 진단/실험용, Combined
+  전용)**: margin_loss 대신 순수 MSE로 s_mult만 최적화. "Combined 우위가
+  손잡이 존재 자체에서 오는가"를 분리 측정하는 용도, 확정 §8 표에는 안 들어감.
+- **`--adaround-learn-act-scale`(기본 False)·`--qdrop-brecq-learn-act-scale`
+  (기본 **True**, 09-19 claim15로 확정 — claim12를 09-17에 opt-in
+  `--learn-act-scale`(기본 False, 단일 플래그)로 방치했던 걸 수정)**:
+  QDrop/BRECQ 원 논문(Wei et al. ICLR'22 / Li et al. ICLR'21)은 activation
+  scale 학습(LSQ)을 포함하고 AdaRound 원 논문(Nagel et al. ICML'20)은
+  없다 — 그래서 QDrop/BRECQ만 기본으로 켠다. **이게 이제 확정 §8 표
+  기준이다** — 이전엔 baseline 전부 LSQ가 꺼진 채로 Combined와 비교해서
+  "방법 차이"가 아니라 "구현 축소와의 비교"였다(사용자 지적, claim15).
+  `--no-qdrop-brecq-learn-act-scale`로 이전(claim12 이전, 축소 구현)
+  동작으로 되돌릴 수 있음(ablation 목적, 확정 비교표엔 쓰지 말 것).
+- **09-18(claim13) 재구성 loss 정합성 수정**: `adaround.py`/`brecq.py`의
+  재구성 loss(공식 BRECQ `lp_loss`와 동일 정규화로 교체) · lr(1e-3) ·
+  reg_weight(0.01) · warmup(0.2)이 전부 바뀌었다 — 이 CLI 플래그로 조정하는
+  값이 아니라 라이브러리 기본값 자체가 바뀐 것이라, baseline 4개(naive
+  제외)의 §8 수치가 이 수정 이후 영구적으로 달라졌다(6-seed 재측정 완료,
+  `PROMPTCAL_CLAIMS_2026-09-15.md` claim13 참고).
+- **`--combined-recon-iters`(09-18, claim14, 기본값 `0` — §8 확정 설계)**:
+  claim13으로 Combined 자신의 1단계(`optimize_adaround`)도 alpha를 크게
+  움직이게 됐는데, 그 목적함수가 2단계(margin_loss/s_mult)가 보호하는 영역
+  밖으로 손상을 샌다는 게 확인돼 **1단계를 기본적으로 생략**한다(값을
+  0보다 크게 주면 이전처럼 1단계를 되살릴 수 있음, opt-in). 자세한 경위는
+  `PROMPTCAL_CLAIMS_2026-09-15.md` claim14 참고. **위 "실행 방법" 예시
+  커맨드는 플래그 추가 없이 지금 §8(claim15까지 반영된 최신 버전)을 그대로
+  재현**한다 — claim13 직후 한동안 재현 안 됐다가 claim14로 원복, claim15
+  (LSQ 기본 적용 + scale_reg_weight=1.0)도 전부 기본값이라 여전히 재현됨.
+- **`--combined-stage1`(none/adaround/brecq, 기본 `none` — 09-19 claim15,
+  진단 전용, 제안 방법 아님)**: Combined의 1단계로 뭘 쓸지. `brecq`는 BRECQ의
+  block-wise 재구성(alpha만, LSQ는 안 켬)을 1단계로 써서, "BRECQ+LSQ가
+  margin_loss 없이도 decision-preservation을 이기는 게 block-wise 상관
+  반영 때문인지 margin_loss가 그 위에 추가 기여를 하는지" 분리하는 통제
+  실험용. 헤드라인 설계는 계속 `none`.
+- **`--w-bits`/`--a-bits`(기본 8/8, 09-19 claim15)**: 이전엔
+  `wrap_convs(m.model, 8, 8)`이 하드코딩돼 있어서 bit-width를 CLI로 조정할
+  방법이 없었다. W8A32/W32A8 같은 조합으로 손상이 weight rounding 쪽인지
+  activation range 쪽인지 분리하는 메커니즘 실험에 씀 — 스모크 테스트
+  (calib=32)에서 naive의 FP32 대비 손상이 W8A32는 -0.06, W32A8은 -1.01로
+  activation 쪽이 압도적임을 확인(정식 스케일 재측정은 아직 안 함).
 - `--eval-cap`은 COCO_AP/S_AP/H_eval_AP(`measure_ap`가 `--data` yaml의 고정
   val split을 씀)에는 적용 안 되고, LVIS_AP/APr/APc/APf와 flip/GT/UPIR/lost
   등 나머지 전부에는 적용됨 — 실행 시 표 위에 이 안내가 자동 출력됨(claim10).
@@ -246,6 +365,53 @@ pipeline/quant/*.py`처럼 직접 diff를 떠서 확인할 것 — 이 문서의
   만큼 두꺼워져서, 지금 확정 설계만 처음부터 깔끔하게 다시 쓴
   `PROMPTCAL_CURRENT_MODEL_V2.md`를 새로 작성 — v1은 역사적 감사 기록으로
   보존.
+- **2026-09-17 (이어서)**: `--control-mse`/`--learn-act-scale` 추가(claim12,
+  전부 opt-in, 기본 False). Combined의 margin_loss를 순수 MSE로 대체하는
+  control 실험과, baseline(AdaRound/QDrop/BRECQ)에 activation scale 학습
+  손잡이(s_mult)를 추가하는 실험 -- 둘 다 §8 확정 설계에는 영향 없음(진단용).
+- **2026-09-18**: `adaround.py`/`brecq.py`의 재구성 loss 정규화·lr·reg_weight·
+  warmup을 공식 BRECQ(Li et al. ICLR'21, `yhhhli/BRECQ` GitHub) 값으로
+  전면 수정(claim13) -- 기존 `.pow(2).mean()`은 공식 `lp_loss` 대비 C_out배
+  작아서 rounding 정규화가 압도, AdaRound의 alpha가 사실상 round-to-nearest에서
+  못 움직이고 있었다(nearest 대비 flip 0.069%→5~7%대로 수정, `flip_rate()`
+  진단으로 확인). **opt-in이 아니라 라이브러리 기본값 자체가 바뀐 것이라, 이
+  수정은 §8 확정 표 전체(baseline 4개 + Combined의 weight-rounding 단계까지)에
+  영향을 준다** -- 6-seed 재측정 완료(`runs/71_recon_fix_review/`). **결과:
+  alpha가 실제로 훨씬 많이 움직이는데도 AdaRound/QDrop/BRECQ는 여전히
+  naive보다 COCO_AP가 낮다** -- "정규화 버그가 원인"이라는 가설은 반박됐지만,
+  이 수정 자체는 baseline을 원 논문대로 정확히 구현하기 위한 것이었지 성능을
+  올리려던 게 아니므로(claim4/5와 같은 원칙) 결과 방향과 무관하게 유지한다.
+  "정확히 구현해도 naive를 못 이긴다"는 이제 실제 결과로 §8/§9에 반영됨.
+  QDrop을 layer-wise(`optimize_adaround`)에서 block-wise
+  (`optimize_brecq(qdrop_prob=...)`)로 이전 -- 원 논문(Wei et al. ICLR'22)의
+  재구성 단위와 일치시킴.
+- **2026-09-18 (이어서, claim14)**: claim13으로 Combined 자신의
+  1단계(`optimize_adaround`)도 alpha를 크게 움직이게 됐는데, 그 목적함수
+  (순수 MSE reconstruction)가 2단계(margin_loss/s_mult)가 보호하는 영역
+  (S∪H_cal+neighbor)과 무관해서 그 바깥(COCO 전체 Top1_flip/lost, LVIS)으로
+  손상이 새는 부작용이 확인됐다. 처음엔 "Combined의 1단계를 BRECQ의
+  block-wise 재구성으로 바꾸자"는 안이 나왔으나, 사용자가 "그러면
+  reconstruction으로 decision error를 줄이자는 거 아니냐"고 지적 -- 논문
+  핵심 주장과 충돌하는 프레이밍이라 철회. 대신 `--combined-recon-iters`
+  플래그를 추가해 **1단계를 아예 생략(기본값 0, round-to-nearest weight로
+  대체)**하는 쪽으로 확정 -- 6-seed 검증 결과 COCO_AP/LVIS_AP/APr/
+  Heval_flip/LVIS_lost 5개 지표가 트레이드오프 없이 동시에 개선됐다
+  (`runs/72_combined_recon_diag/`). Combined는 이제 AdaRound 메커니즘을
+  전혀 안 쓴다. `build()`의 `combined_recon_iters` 기본값도 0.
+- **2026-09-19 (claim15, 최신)**: §8 확정 표가 불공정 비교였음이 드러남 --
+  QDrop/BRECQ의 activation scale 학습(LSQ)이 꺼진 채로 Combined와 비교
+  중이었다(사용자 지적). `--learn-act-scale`(단일 플래그, 기본 False)를
+  `--adaround-learn-act-scale`(기본 False, 원 논문에 LSQ 없음)·
+  `--qdrop-brecq-learn-act-scale`(기본 **True**, 원 논문에 있음)로 분리 --
+  claim12를 opt-in으로 방치했던 실수를 바로잡음. 이 공정 비교 6-seed
+  (`runs/75_lsq_confirmed/`)에서 Combined는 9개 지표 중 COCO_AP·LVIS_AP
+  2개만 BRECQ+LSQ를 이겼다. `scale_reg_weight`를 10.0→1.0으로 재튜닝(1-seed
+  스윕 후 6-seed 확정, `runs/78_scalereg1_confirmed/`)해서 APr·LVIS_lost가
+  추가로 뒤집혀 승리 지표 4개로 증가 -- 나머지 5개(Heval_flip/Top1_flip/
+  UPIR/lost/LVIS_flip)는 아직 짐. `--w-bits`/`--a-bits`(하드코딩 8/8 해소,
+  메커니즘 실험용), `--combined-stage1`(BRECQ block-wise를 1단계로 쓰는
+  진단 실험, 제안 방법 아님) 추가. `quant_weight()`의 죽은 alpha 재계산도
+  캐싱으로 제거. `--scale-reg-weight` 기본값 10.0→1.0.
 - 최신 확정 하이퍼파라미터·공식 데이터 6-seed 결과의 단일 진실 공급원은
   저장소 루트의 `PROMPTCAL_CURRENT_MODEL_V2.md`다. 이 README와 수치가
   어긋나면 그쪽을 따를 것.

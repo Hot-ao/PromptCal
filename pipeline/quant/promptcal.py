@@ -376,7 +376,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       exclude_from_neighbors=None,
                                       cal_idx=None, cal_weight=1.0,
                                       conf_thres=0.25, verbose=True, eval_hook=None,
-                                      identity_aware_margin=False):
+                                      identity_aware_margin=False, control_mse=False):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -432,6 +432,17 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     풀에서도 제외한다(이미 margin_loss로 직접 보호받으므로 이중 처리 방지).
     cal_weight는 S 쪽 margin_loss 대비 H_cal 쪽 margin_loss의 상대 가중치.
     cal_idx=None(기본)이면 기존 동작과 완전히 동일(opt-in).
+
+    control_mse (09-17, claim: "baseline엔 activation scale을 학습하는 손잡이가
+    아예 없다" 검증용 control 실험): True면 margin_loss/neighbor-hinge/cal/
+    scale_reg를 전부 건너뛰고, train_cols(S∪H_cal) 전체에 대해 순수
+    F.mse_loss(sim_q, sim_fp)만 최적화한다. s_mult 파라미터화·optimizer·iters·
+    confident-anchor(aidx) 선정은 기존과 동일하게 유지 -- "손잡이가 있다는
+    사실 자체"가 이득의 원인인지, margin_loss/identity-aware 설계가 추가로
+    기여하는지를 분리하기 위한 단일 변수 ablation. k/boundary_w/neighbor_k/
+    neighbor_weight/asymmetric/scale_reg_weight/cal_idx/cal_weight/
+    identity_aware_margin은 control_mse=True일 때 전부 무시된다.
+    control_mse=False(기본)이면 기존 동작과 완전히 동일.
     """
     ada = list_adaround_convs(quant_model)
     for ac in ada:
@@ -499,10 +510,15 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     train_cols = pidx if cidx is None else torch.cat([pidx, cidx])
 
     if verbose:
-        cal_msg = f", cal {len(cal_idx_list)}개(cal_weight={cal_weight})" if cidx is not None else ""
-        print(f"[promptcal-C+neighbor] {len(fp_sims)} calib, prompt subset {len(prompt_idx)}개, "
-              f"neighbor {len(neighbor_cols)}개(k={neighbor_k}), s_mult {len(ada)}개, "
-              f"margin(k={k}) neighbor_weight={neighbor_weight}{cal_msg}")
+        if control_mse:
+            print(f"[promptcal-C+neighbor][CONTROL-MSE] {len(fp_sims)} calib, "
+                  f"train_cols(S∪H_cal) {len(train_cols)}개, s_mult {len(ada)}개 -- "
+                  f"margin_loss/neighbor-hinge 대신 순수 MSE reconstruction")
+        else:
+            cal_msg = f", cal {len(cal_idx_list)}개(cal_weight={cal_weight})" if cidx is not None else ""
+            print(f"[promptcal-C+neighbor] {len(fp_sims)} calib, prompt subset {len(prompt_idx)}개, "
+                  f"neighbor {len(neighbor_cols)}개(k={neighbor_k}), s_mult {len(ada)}개, "
+                  f"margin(k={k}) neighbor_weight={neighbor_weight}{cal_msg}")
 
     n = len(calib_tensors)
     for it in range(iters):
@@ -519,27 +535,30 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             B, P, H, W = q_cap.buf[i].shape
             parts.append(q_cap.buf[i].reshape(B, P, H*W))
         sim_q = torch.cat(parts, dim=2)[0].transpose(0, 1)
-        ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w,
-                         identity_aware=identity_aware_margin)
-        if cidx is not None and cal_weight > 0:
-            # 09-16: cal_weight=0이면 이 항의 기여가 0*ml_cal=0이라 결과는
-            # 원래도 같았지만(버그 아님), cal_idx가 이제 항상 전달되므로
-            # (claim5-a) cal_weight=0에서도 매 iter margin_loss를 불필요하게
-            # 계산하고 있었다. 게이트를 걸어서 그 계산 자체를 스킵한다.
-            ml_cal = margin_loss(sim_q[aidx][:, cidx], sim_fp[aidx][:, cidx], k=k, boundary_w=boundary_w,
-                                 identity_aware=identity_aware_margin)
-            ml = ml + cal_weight * ml_cal
-        if asymmetric:
-            # 경쟁자가 FP보다 강해지는 방향(sim_q > sim_fp)만 억제. 약해지는
-            # 방향은 벌점 없음 -- 우연히 유익한 흔들림(예: seed 0)을 보존.
-            diff = sim_q[aidx][:, neighbor_cols] - sim_fp[aidx][:, neighbor_cols]
-            nl = F.relu(diff).pow(2).mean()
+        if control_mse:
+            loss = F.mse_loss(sim_q[aidx][:, train_cols], sim_fp[aidx][:, train_cols])
         else:
-            nl = F.mse_loss(sim_q[aidx][:, neighbor_cols], sim_fp[aidx][:, neighbor_cols])
-        loss = ml + neighbor_weight * nl
-        if scale_reg_weight > 0:
-            sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
-            loss = loss + scale_reg_weight * sr
+            ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w,
+                             identity_aware=identity_aware_margin)
+            if cidx is not None and cal_weight > 0:
+                # 09-16: cal_weight=0이면 이 항의 기여가 0*ml_cal=0이라 결과는
+                # 원래도 같았지만(버그 아님), cal_idx가 이제 항상 전달되므로
+                # (claim5-a) cal_weight=0에서도 매 iter margin_loss를 불필요하게
+                # 계산하고 있었다. 게이트를 걸어서 그 계산 자체를 스킵한다.
+                ml_cal = margin_loss(sim_q[aidx][:, cidx], sim_fp[aidx][:, cidx], k=k, boundary_w=boundary_w,
+                                     identity_aware=identity_aware_margin)
+                ml = ml + cal_weight * ml_cal
+            if asymmetric:
+                # 경쟁자가 FP보다 강해지는 방향(sim_q > sim_fp)만 억제. 약해지는
+                # 방향은 벌점 없음 -- 우연히 유익한 흔들림(예: seed 0)을 보존.
+                diff = sim_q[aidx][:, neighbor_cols] - sim_fp[aidx][:, neighbor_cols]
+                nl = F.relu(diff).pow(2).mean()
+            else:
+                nl = F.mse_loss(sim_q[aidx][:, neighbor_cols], sim_fp[aidx][:, neighbor_cols])
+            loss = ml + neighbor_weight * nl
+            if scale_reg_weight > 0:
+                sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
+                loss = loss + scale_reg_weight * sr
         loss.backward()
         torch.nn.utils.clip_grad_norm_(smults, max_norm=1.0)
         opt.step()
