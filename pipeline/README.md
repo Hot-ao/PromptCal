@@ -254,12 +254,16 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle GPU> python pipeline/run
   margin_loss 없이도 decision-preservation을 이기는 게 block-wise 상관
   반영 때문인지 margin_loss가 그 위에 추가 기여를 하는지" 분리하는 통제
   실험용. 헤드라인 설계는 계속 `none`.
-- **`--w-bits`/`--a-bits`(기본 8/8, 09-19 claim15)**: 이전엔
-  `wrap_convs(m.model, 8, 8)`이 하드코딩돼 있어서 bit-width를 CLI로 조정할
-  방법이 없었다. W8A32/W32A8 같은 조합으로 손상이 weight rounding 쪽인지
-  activation range 쪽인지 분리하는 메커니즘 실험에 씀 — 스모크 테스트
-  (calib=32)에서 naive의 FP32 대비 손상이 W8A32는 -0.06, W32A8은 -1.01로
-  activation 쪽이 압도적임을 확인(정식 스케일 재측정은 아직 안 함).
+- **`--w-bits`/`--a-bits`(기본 8/8, 09-19 claim15, 09-20 claim17 정식 확정)**:
+  이전엔 `wrap_convs(m.model, 8, 8)`이 하드코딩돼 있어서 bit-width를 CLI로
+  조정할 방법이 없었다. W8A32/W32A8 같은 조합으로 손상이 weight rounding
+  쪽인지 activation range 쪽인지 분리하는 메커니즘 실험에 씀 — claim15
+  스모크 테스트(calib=32)에 이어 claim17에서 정식 스케일(calib=256, cap
+  없음)로 재측정 완료(`runs/82_bitwidth_confirmed/`): naive의 FP32 대비
+  COCO_AP 손상이 W8A32는 -0.05, W32A8은 -3.29(W8A8 전체 손상 -3.26과 거의
+  동일) — weight quantization은 거의 무손실이고 activation quantization이
+  W8A8 손상의 사실상 전부를 차지함을 확정. seed 무관(calibration이
+  결정적이라 1회 측정으로 확정).
 - `--eval-cap`은 COCO_AP/S_AP/H_eval_AP(`measure_ap`가 `--data` yaml의 고정
   val split을 씀)에는 적용 안 되고, LVIS_AP/APr/APc/APf와 flip/GT/UPIR/lost
   등 나머지 전부에는 적용됨 — 실행 시 표 위에 이 안내가 자동 출력됨(claim10).
@@ -412,6 +416,21 @@ pipeline/quant/*.py`처럼 직접 diff를 떠서 확인할 것 — 이 문서의
   메커니즘 실험용), `--combined-stage1`(BRECQ block-wise를 1단계로 쓰는
   진단 실험, 제안 방법 아님) 추가. `quant_weight()`의 죽은 alpha 재계산도
   캐싱으로 제거. `--scale-reg-weight` 기본값 10.0→1.0.
+- **2026-09-20 (claim16)**: 남은 5개 지표 격차를 좁히려는 두 시도, 둘 다
+  6-seed에서 부정적/무효로 확정 — 확정 설계 변경 없음. `--neighbor-of-cal`
+  (store_true, 기본 False): neighbor 선택 시 S의 이웃뿐 아니라 H_cal의
+  이웃도 후보에 포함 — COCO-80=S(40)+H_cal(20)+H_eval(20)이라 S의 이웃
+  풀이 이미 정확히 H_cal과 일치함을 수학적으로 확인, 구조적 막다른 길로
+  확정(`runs/80_neighbor_aux_sweep/`). `--aux-mse-weight`(기본 0.0):
+  `train_cols`(S∪H_cal, H_eval 제외) 위에서 sim_q/sim_fp MSE 보조 손실 추가
+  — 1-seed 스윕에서 0.2가 유망했으나 6-seed 확정에서 APr/UPIR/lost/
+  LVIS_flip/LVIS_lost 전부 악화(고전적 1-seed 노이즈 함정),
+  `runs/81_auxmse02_confirmed/`. 둘 다 held-out(H_eval) 무결성은 설계상
+  보장(`exclude_set`/`train_cols` 재사용).
+- **2026-09-20 (claim17)**: `--w-bits`/`--a-bits`(claim15에서 이미 구현)로
+  bit-width 메커니즘을 정식 스케일(calib=256, cap 없음)로 확정. 코드
+  변경 없음, 측정만 수행. 상세는 위 `--w-bits`/`--a-bits` 항목 참고
+  (`runs/82_bitwidth_confirmed/`).
 - 최신 확정 하이퍼파라미터·공식 데이터 6-seed 결과의 단일 진실 공급원은
   저장소 루트의 `PROMPTCAL_CURRENT_MODEL_V2.md`다. 이 README와 수치가
   어긋나면 그쪽을 따를 것.

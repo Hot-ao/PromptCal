@@ -4,7 +4,13 @@
 관점에서 제기된 claim 1~10(+ claim5의 하위 발견 a~f)을 코드로 검증하고
 실제로 바꾼 내용을 정리한다.
 
-**09-20 갱신(최신)**: claim16(neighbor_of_cal/aux_mse_weight로 남은 격차를
+**09-20 갱신(최신)**: claim17(bit-width 메커니즘 정식 확정 — activation
+양자화가 W8A8 손상의 사실상 전부, weight quantization은 거의 무손실)
+추가. 코드 변경 없음, 정식 스케일 측정만 수행. claim13/14의
+"AdaRound weight-rounding 최적화가 별 도움 안 됨" 및 Combined의
+activation-scale-only 설계와 메커니즘적으로 정합.
+
+**09-20 갱신**: claim16(neighbor_of_cal/aux_mse_weight로 남은 격차를
 좁히려는 두 시도, 둘 다 부정적 결과 — 하나는 구조적 막다른 길, 하나는
 1-seed 노이즈였음) 추가. 확정 설계 변경 없음. margin_loss의 남은 5개
 지표 격차를 어떻게 좁힐지는 사람의 판단이 필요한 지점.
@@ -1102,8 +1108,48 @@ scale_reg_weight/iters/neighbor_k 스윕의 GPU 비결정성 등 반복적으로
 **상태**: 두 방향 다 6-seed(또는 수학적으로) 확정된 부정적 결과.
 `PROMPTCAL_CURRENT_MODEL_V2.md` §9 "남은 방향" (2)(3)(4) 전부 소진 —
 top-k margin 자체를 근본적으로 다른 objective 형태로 바꾸는 것 외에는
-뚜렷한 다음 수가 안 보임. 사람의 판단이 필요한 지점이라 여기서 자동
-진행을 멈춤(치명적 문제는 아니지만, 사전에 합의된 다음 방향이 없어서).
+뚜렷한 다음 수가 안 보임. 사람의 판단이 필요한 지점이라 margin_loss
+재설계는 여기서 자동 진행을 멈추고(치명적 문제는 아니지만, 사전에 합의된
+다음 방향이 없어서), 설계 판단이 필요 없는 안전한 항목(claim17)으로
+대신 이어감.
+
+---
+
+## Claim 17 — bit-width 메커니즘 정식 확정: 손상은 activation 양자화가 거의 전부 (09-20, 야간 자동 진행)
+
+**배경**: claim15에서 `--w-bits`/`--a-bits`를 추가하고 스모크 스케일
+(calib=32)로만 확인했던 "손상이 weight보다 activation 쪽"이라는 가설을
+정식 스케일(calib=256, `--eval-cap` 없음)로 확정.
+
+**실측(naive, seed 무관 — calibration이 결정적이라 1회면 확정)**:
+
+| 설정 | COCO_AP | FP32 대비 | LVIS_AP | FP32 대비 |
+|---|---|---|---|---|
+| FP32 | 36.80 | - | 0.2589 | - |
+| W8A32(weight만 8bit) | 36.75 | **-0.05** | 0.2588 | **-0.0001** |
+| W32A8(activation만 8bit) | 33.51 | **-3.29** | 0.2324 | **-0.0265** |
+| W8A8(표준) | 33.54 | -3.26 | 0.2342 | -0.0247 |
+
+**weight quantization은 거의 무손실**(-0.05 COCO_AP, LVIS_AP는 사실상
+차이 없음)**이고, activation quantization이 전체 W8A8 손상의 사실상
+전부를 차지한다**(-3.29 vs 전체 -3.26 -- activation 단독이 전체보다도
+살짝 더 나쁘게 나온 것도 노이즈 수준). 스모크 스케일(calib=32) 신호가
+정식 스케일에서 그대로, 더 깨끗하게 재현됨.
+
+**의미**: naive weight-rounding(단순 round-to-nearest)은 이미 정보 손실이
+거의 없는 수준이라, AdaRound 같은 weight-rounding 최적화가 (claim13/14에서
+봤듯) 별 도움이 안 되는 이유를 설명해준다 -- 애초에 고칠 게 별로 없는
+곳을 고치려 한 셈. 반대로 Combined가 activation scale(s_mult)만 조정해서
+큰 개선을 낸 것도 이 메커니즘과 정확히 들어맞는다 -- 손상의 근원지를
+직접 건드리고 있었던 것.
+
+**수정 완료**: 정식 스케일 측정만 수행, 코드 변경 없음(claim15에서 이미
+구현된 `--w-bits`/`--a-bits` 사용).
+
+**상태**: 확정 완료(`runs/82_bitwidth_confirmed/`). 다른 PTQ 방법
+(AdaRound/QDrop/BRECQ/Combined)에도 W8A32/W32A8을 적용해서 "각 방법이
+weight 여유를 얼마나 쓰는지" 볼 수도 있지만, naive 결과만으로 메커니즘
+논증에는 충분하다고 판단 — 추가 측정은 필요시 사람 판단으로 진행.
 
 ---
 
@@ -1184,9 +1230,10 @@ GPU들은 비었다고 뜰 때까지 피했다.
 | claim15 scale_reg_weight 스윕(0.0~20.0, seed0) | `runs/77_hparam_sweep/scalereg_*.log` |
 | claim15 iters/neighbor_k 스윕(seed0, GPU 비결정성 확인됨 — 세부 순위 신뢰 안 함) | `runs/77_hparam_sweep/{iters,neighbork}_*.log` |
 | claim15 scale_reg_weight=1.0 6-seed 확정(완료) | `runs/78_scalereg1_confirmed/seed{0..5}_full.log` |
-| claim15 bit-width(W8A32/W32A8) 스모크 테스트(정식 재측정 아직 안 함) | `runs/73_review_fixes/smoke_w{8a32,32a8}.log` |
+| claim15 bit-width(W8A32/W32A8) 스모크 테스트(정식 재측정은 claim17 참고) | `runs/73_review_fixes/smoke_w{8a32,32a8}.log` |
 | claim16 neighbor_of_cal 확인(1-seed, 구조적으로 무의미함 확정) + aux_mse_weight 1-seed 스윕 | `runs/80_neighbor_aux_sweep/` |
 | claim16 aux_mse_weight=0.2 6-seed 확정(반박됨, 확정 설계 변경 없음) | `runs/81_auxmse02_confirmed/seed{0..5}_full.log` |
+| claim17 bit-width 정식 확정(W8A32/W32A8, naive, seed 무관) | `runs/82_bitwidth_confirmed/w{8a32,32a8}.log` |
 
 ## 부록 D — 결정 현황 (2026-09-16 갱신)
 
