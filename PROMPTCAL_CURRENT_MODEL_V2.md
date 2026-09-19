@@ -580,6 +580,15 @@ neighbor_weight, cal_weight 도입 등) 근거는 v1 §8.2~§8.10에 그대로 �
   유망한 방향이 아님. **(2)(3)(4) 전부 소진** — margin_loss 설계를 top-k
   margin에서 근본적으로 다른 형태로 바꾸는 것 외에는 뚜렷한 다음 수가
   안 보이는 상태, 사람의 판단이 필요한 지점.
+- **bit-width 메커니즘 정식 확정(claim17): 손상은 사실상 activation
+  quantization 전부다.** `--w-bits`/`--a-bits`(claim15에서 구현)로 정식
+  스케일(calib=256, cap 없음)에서 naive 측정(`runs/82_bitwidth_confirmed/`):
+  W8A32(weight만 8bit)는 FP32 대비 COCO_AP -0.05(거의 무손실), W32A8
+  (activation만 8bit)는 -3.29로 표준 W8A8의 -3.26과 거의 동일. 즉 weight
+  rounding은 이미 거의 무손실이라 AdaRound류 weight 최적화가 별 도움이
+  안 됐던 이유(claim13/14)와, Combined가 activation scale(`s_mult`)만
+  조정해서 개선을 낸 것이 이 메커니즘과 정합함을 보여준다. calibration이
+  결정적이라 seed 무관, 코드 변경 없음.
 - **아키텍처 레벨 confound (claim2, §5.4 참고)**: C2fAttn/ImagePoolingAttn이
   H_eval의 vocabulary상 "존재"만으로 비전 feature에 영향을 준다 — COCO-80
   H_eval 지표는 완전한 unseen-vocabulary 증거로 과신하지 말 것, LVIS
@@ -608,15 +617,18 @@ neighbor_weight, cal_weight 도입 등) 근거는 v1 §8.2~§8.10에 그대로 �
 | 내용 | 위치 |
 |---|---|
 | 이 문서 이전 버전(per-channel 시절 전체 서사 + 하이퍼파라미터 스윕 10개 절 원본) | `PROMPTCAL_CURRENT_MODEL.md`(v1) |
-| claim 1~14 검증 경위(무엇을 확인했고 무엇을 왜 고쳤는지 전체 감사 기록) | `PROMPTCAL_CLAIMS_2026-09-15.md` |
+| claim 1~17 검증 경위(무엇을 확인했고 무엇을 왜 고쳤는지 전체 감사 기록) | `PROMPTCAL_CLAIMS_2026-09-15.md` |
 | 측정 도구·baseline·평가지표 설계 배경(서술 중심) | `PROMPTCAL_HOW_IT_WORKS.md` |
 | `pipeline/` 디렉토리(공식 재현 진입점) | `pipeline/run_comparison.py`, `pipeline/README.md` |
 | Combined 학습 루프 | `src/quant/promptcal.py`(`optimize_promptcal_scale_neighbor`, `margin_loss`) |
 | s_mult/AdaRound 구현 | `src/quant/adaround.py` |
 | baseline 구현 | `src/quant/adaround.py`(AdaRound/QDrop), `src/quant/brecq.py` |
 | 측정 하네스 | `src/harness.py` |
-| §8 원본 로그(baseline 4개) | `runs/71_recon_fix_review/seed{0..5}_full.log` |
-| §8 원본 로그(Combined, claim14 확정 설계) | `runs/72_combined_recon_diag/seed{0..5}_iters0.log` |
+| §8 원본 로그(현재 확정 표, claim15 scale_reg_weight=1.0) | `runs/78_scalereg1_confirmed/seed{0..5}_full.log` |
+| §8 이전 로그(claim15 공정 비교 재측정, scale_reg_weight=10.0) | `runs/75_lsq_confirmed/seed{0..5}_full.log` |
+| §8 이전 로그(claim13/14 직후, LSQ 불공정 비교 — 폐기됨) | `runs/71_recon_fix_review/`, `runs/72_combined_recon_diag/` |
+| claim16 진단 로그(neighbor_of_cal/aux_mse_weight, 둘 다 부정) | `runs/80_neighbor_aux_sweep/`, `runs/81_auxmse02_confirmed/` |
+| claim17 로그(bit-width 메커니즘 정식 확정) | `runs/82_bitwidth_confirmed/` |
 | `_official_data` 계열 스크립트 — **stale, claim12/13/14 미반영**(claim5-d와 같은 성격) | `scripts/58_full_baseline_official_data.py`, `scripts/59_rw_sweep_official_data.py`, `scripts/60_hparam_sweep_official_data.py`, `scripts/61_combo_grid_official_data.py` — 재사용 전 갱신 필요 |
 
 ---
