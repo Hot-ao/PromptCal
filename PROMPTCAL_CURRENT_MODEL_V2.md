@@ -21,8 +21,16 @@
 > weight-side foundation을 naive→BRECQ block-wise로 바꿔도 Combined의
 > 최종 성능은 거의 안 변한다(9개 지표 거의 전부 오차범위 내) — claim14
 > 결정(naive로 충분)이 한 번 더 확인됐고, 남은 격차의 원인이 foundation이
-> 아니라 **margin_loss 자체**임이 명확해졌다 — §5.1/§9 참고. 다음 방향은
-> neighbor_k 확장·margin_loss 설계 재검토(§9).
+> 아니라 **margin_loss 자체**임이 명확해졌다 — §5.1/§9 참고.
+>
+> **09-20 갱신(claim16)**: 남은 격차를 좁히려던 두 방향(`neighbor_of_cal`
+> 보호 범위 확장, margin_loss에 dense 보조 신호 `aux_mse_weight` 추가)을
+> 시도했으나 **둘 다 부정적** — 전자는 COCO-80이 S+H_cal+H_eval로 정확히
+> 꽉 차 있어서 구조적으로 확장할 후보가 없고(claim6 "포화" 그 이상, 완전히
+> 동일함), 후자는 1-seed에서 9개 중 6개가 좋아 보였지만 6-seed로 전부
+> 반박됨(seed 노이즈). **확정 설계 변경 없음**. §9 "남은 방향"이 사실상
+> 소진돼서, margin_loss를 top-k 방식과 근본적으로 다른 objective로
+> 재설계할지는 사람의 판단이 필요한 지점 — §9 참고.
 >
 > **09-18 갱신(claim14)**: claim13 수정으로 Combined 자신의 1단계
 > (AdaRound weight rounding)도 alpha를 크게 움직이게 됐는데, 그 목적함수가
@@ -554,16 +562,24 @@ neighbor_weight, cal_weight 도입 등) 근거는 v1 §8.2~§8.10에 그대로 �
   margin_loss 고유의 기여는 재검토가 필요하다. **제안 방법 자체(naive+
   margin_loss)는 안 바꿨다** — 이건 진단용 실험이다.
 - **남은 격차(Heval_flip/Top1_flip/UPIR/lost/LVIS_flip)를 더 좁힐 수 있는
-  방향(claim15)**: (1) `scale_reg_weight` 재튜닝 — **완료**(10.0→1.0, 위
-  참고). (2) `neighbor_k` 확대나 전체 80열 약한 정규화로 margin_loss의
-  보호 범위 자체를 넓히는 것 — baseline 메커니즘을 안 빌리는 방향이라
-  포지셔닝 문제 없음, 아직 안 함(neighbor_k는 이 split에서 5 이상 포화됨을
-  확인, claim6). (3) BRECQ-stage1 진단이 6-seed로 확정한 대로, foundation을
-  바꾸는 건 무의미하다는 게 확인됐으니 margin_loss의
-  설계 자체(top-k 인접 margin, sparse anchor)를 재검토하는 것 — 더 dense한
-  신호나 다른 objective 형태 고려. **(4) 약한 weight-level 보정(BRECQ
-  block-wise 등)은 이미 시도해서 무의미함을 6-seed로 확인함(BRECQ-stage1
-  진단) — 더 이상 유망한 방향이 아님.**
+  방향(claim15/16)**: (1) `scale_reg_weight` 재튜닝 — **완료**(10.0→1.0, 위
+  참고). **(2) `neighbor_of_cal`(S 이웃뿐 아니라 H_cal 이웃까지 보호 범위
+  확장) — 시도했으나 구조적으로 무의미함을 확인(claim16)**: COCO-80이
+  S(40)+H_cal(20)+H_eval(20)로 정확히 꽉 차 있어서, S의 이웃 후보 풀(S∪H_eval
+  제외)이 이미 H_cal 20개 전부와 정확히 같다 — H_cal 자신의 이웃을 추가해도
+  같은 20개 안에서만 도니 `neighbor_cols`가 한 개도 안 바뀜(1-seed 결과가
+  기존값과 완전히 동일한 숫자로 확인). 이 방향은 COCO-80 80-class 폐쇄
+  구조 자체의 한계라 더 손댈 여지가 없음. **(3) margin_loss에 dense 보조
+  신호(`aux_mse_weight`, train_cols 전체에 대한 F.mse_loss를 margin_loss에
+  추가) — 1-seed에서 유망해 보였으나(9개 중 6개 개선) 6-seed로 반박됨
+  (claim16)**: aux_mse_weight=0.2를 6-seed 확정한 결과 APr/UPIR/lost/
+  LVIS_flip/LVIS_lost가 전부 기존 확정값보다 나빠짐 — 1-seed 스윕에서 좋아
+  보였던 건 seed 노이즈였다. **확정 설계는 변경 없음**(aux_mse_weight
+  기본값 0.0 유지). (4) 약한 weight-level 보정(BRECQ block-wise 등)은
+  이미 시도해서 무의미함을 6-seed로 확인함(BRECQ-stage1 진단) — 더 이상
+  유망한 방향이 아님. **(2)(3)(4) 전부 소진** — margin_loss 설계를 top-k
+  margin에서 근본적으로 다른 형태로 바꾸는 것 외에는 뚜렷한 다음 수가
+  안 보이는 상태, 사람의 판단이 필요한 지점.
 - **아키텍처 레벨 confound (claim2, §5.4 참고)**: C2fAttn/ImagePoolingAttn이
   H_eval의 vocabulary상 "존재"만으로 비전 feature에 영향을 준다 — COCO-80
   H_eval 지표는 완전한 unseen-vocabulary 증거로 과신하지 말 것, LVIS

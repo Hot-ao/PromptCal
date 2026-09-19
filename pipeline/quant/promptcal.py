@@ -376,7 +376,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       exclude_from_neighbors=None,
                                       cal_idx=None, cal_weight=1.0,
                                       conf_thres=0.25, verbose=True, eval_hook=None,
-                                      identity_aware_margin=False, control_mse=False):
+                                      identity_aware_margin=False, control_mse=False,
+                                      neighbor_of_cal=False, aux_mse_weight=0.0):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -443,6 +444,23 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     neighbor_weight/asymmetric/scale_reg_weight/cal_idx/cal_weight/
     identity_aware_margin은 control_mse=True일 때 전부 무시된다.
     control_mse=False(기본)이면 기존 동작과 완전히 동일.
+
+    neighbor_of_cal (09-20, claim16 방향 2 -- margin_loss 보호 범위 확장):
+    기존엔 S(prompt_idx)의 이웃만 neighbor_cols에 들어갔다. True면 H_cal
+    (cal_idx)의 이웃도 같은 exclude_set(H_eval 포함)으로 걸러서 추가한다 --
+    H_eval은 exclude_set에 이미 있으므로 이 확장은 held-out 불변식을 절대
+    깨지 않는다(같은 exclude_set을 재사용). claim6에서 S의 이웃 풀이 이미
+    H_cal 크기로 포화된다고 확인됐으니, 이건 "더 많이"가 아니라 "다른 각도
+    에서" 보호 범위를 넓히는 것 -- H_cal 자신의 최근접 이웃(S와는 다를 수
+    있음)까지 커버. 기본 False(기존 동작 유지, opt-in).
+
+    aux_mse_weight (09-20, claim16 방향 3 -- margin_loss에 dense 신호 추가):
+    margin_loss는 top-(k+1) 개 boundary만 보는 sparse한 신호다(BRECQ-stage1
+    진단, claim15에서 margin_loss가 BRECQ 자신의 dense reconstruction
+    objective보다 decision-preservation에 못한 것으로 확인됨). >0이면
+    train_cols(S∪H_cal, H_eval 무관) 전체에 대한 F.mse_loss를 margin_loss에
+    "더해서"(대체가 아니라 추가) 얹는다 -- control_mse가 margin_loss를
+    통째로 대체하는 것과 다르다. 기본 0.0(기존 동작 유지, opt-in).
     """
     ada = list_adaround_convs(quant_model)
     for ac in ada:
@@ -490,6 +508,13 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
         order = neighbor_order[c].tolist()
         picked = [o for o in order if o not in exclude_set][:neighbor_k]
         neighbor_set.update(picked)
+    if neighbor_of_cal and cal_idx:
+        # H_cal 자신의 이웃도 추가(같은 exclude_set 재사용 -- H_eval은 이미
+        # 그 안에 있으므로 held-out 불변식 안 깨짐). claim16 방향 2.
+        for c in cal_idx:
+            order = neighbor_order[c].tolist()
+            picked = [o for o in order if o not in exclude_set][:neighbor_k]
+            neighbor_set.update(picked)
     neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
 
     q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head)
@@ -556,6 +581,11 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             else:
                 nl = F.mse_loss(sim_q[aidx][:, neighbor_cols], sim_fp[aidx][:, neighbor_cols])
             loss = ml + neighbor_weight * nl
+            if aux_mse_weight > 0:
+                # claim16 방향 3: margin_loss(sparse top-k)에 dense 보조 신호를
+                # "더한다"(대체 아님) -- train_cols는 S∪H_cal뿐이라 H_eval 무관.
+                aux = F.mse_loss(sim_q[aidx][:, train_cols], sim_fp[aidx][:, train_cols])
+                loss = loss + aux_mse_weight * aux
             if scale_reg_weight > 0:
                 sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
                 loss = loss + scale_reg_weight * sr

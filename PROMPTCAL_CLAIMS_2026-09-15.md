@@ -4,7 +4,12 @@
 관점에서 제기된 claim 1~10(+ claim5의 하위 발견 a~f)을 코드로 검증하고
 실제로 바꾼 내용을 정리한다.
 
-**09-19 갱신(최신)**: claim15(비교 축 불공정 발견·수정 — QDrop/BRECQ LSQ
+**09-20 갱신(최신)**: claim16(neighbor_of_cal/aux_mse_weight로 남은 격차를
+좁히려는 두 시도, 둘 다 부정적 결과 — 하나는 구조적 막다른 길, 하나는
+1-seed 노이즈였음) 추가. 확정 설계 변경 없음. margin_loss의 남은 5개
+지표 격차를 어떻게 좁힐지는 사람의 판단이 필요한 지점.
+
+**09-19 갱신**: claim15(비교 축 불공정 발견·수정 — QDrop/BRECQ LSQ
 기본 적용, `scale_reg_weight` 10.0→1.0 재튜닝, BRECQ-stage1 진단) 추가.
 claim14(1단계 AdaRound 제거)가 맞았던 결정이었음을 재확인하면서도, 공정
 비교에서는 Combined가 9개 지표 중 4개만 이긴다는 게 드러남 — 지금까지
@@ -1032,6 +1037,76 @@ margin_loss 설계 재검토 — weight-level 보정은 막다른 길로 확인�
 
 ---
 
+## Claim 16 — 남은 격차를 좁히려는 두 시도, 둘 다 무산 (09-20, 사용자 지시로 야간 자동 진행)
+
+**배경**: claim15가 남긴 "남은 방향" 목록 중 (2) neighbor_k 확대/보호 범위
+확장과 (3) margin_loss 설계 재검토를 사용자가 자면서 자동으로 시도해보라고
+지시. "괜찮으면 6-seed 검증→문서화→커밋까지 알아서 하고, 치명적인 문제가
+있을 때만 멈추라"는 조건이었음. 결과: 둘 다 부정적(하나는 구조적 막다른
+길, 하나는 1-seed 노이즈였음) — 확정 설계 변경 없음, 코드와 발견 자체만
+기록.
+
+**시도 1 — `neighbor_of_cal`(H_cal의 이웃도 보호 범위에 추가)**:
+`optimize_promptcal_scale_neighbor`에 파라미터 추가 — S의 이웃을 계산하던
+루프와 똑같이 H_cal의 이웃도 계산해서 `neighbor_set`에 합침, **같은
+`exclude_set`(H_eval 포함)을 재사용**하므로 held-out 불변식은 코드
+구조상 절대 안 깨짐. `pipeline/run_comparison.py --neighbor-of-cal` 추가.
+
+**검증(1-seed, seed0)**: 결과가 `neighbor_of_cal` 끈 기존 확정값과
+**완전히 동일한 숫자**로 나옴. 원인: COCO-80이 정확히 S(40)+H_cal(20)+
+H_eval(20)이라, S의 이웃 후보 풀(S∪H_eval 제외)은 처음부터 H_cal 20개
+전부와 일치한다(claim6에서 "포화된다"고만 알고 있었는데, 이번에 "정확히
+같다"는 걸 확인). H_cal 자신의 이웃도 같은 후보 풀(exclude_set=S∪H_eval
+제외하면 H_cal만 남음) 안에서만 돌기 때문에 `neighbor_cols`에 새로 추가될
+원소가 하나도 없다. **구조적으로 무의미함 — 코드 버그가 아니라 COCO-80
+80-class 폐쇄 구조 자체의 한계**. 6-seed 검증 불필요(1-seed로 이미
+수학적으로 확정).
+
+**시도 2 — `aux_mse_weight`(margin_loss에 dense 보조 신호 추가)**:
+BRECQ-stage1 진단(claim15)에서 margin_loss(sparse top-k)가 BRECQ의 dense
+reconstruction objective보다 decision-preservation에 못한 게 확인돼서,
+margin_loss를 **대체**(`--control-mse`처럼)가 아니라 **보강**하는 방향으로
+`F.mse_loss(sim_q[aidx][:,train_cols], sim_fp[aidx][:,train_cols])`를
+margin_loss에 가중치를 줘서 더하는 항 추가(`train_cols`=S∪H_cal, H_eval
+무관). `pipeline/run_comparison.py --aux-mse-weight` 추가.
+
+**1-seed 스윕(seed0, `runs/80_neighbor_aux_sweep/`)**: 0.05/0.1/0.15/0.2/
+0.25/0.3/0.5 스윕. **0.2가 9개 지표 중 6개(LVIS_AP/Top1_flip/UPIR/lost/
+LVIS_flip/LVIS_lost)에서 기존 확정값보다 나은 것으로 보였음** — 유망해서
+6-seed 확정으로 진행.
+
+**6-seed 확정(`runs/81_auxmse02_confirmed/seed{0..5}_full.log`) — 반박됨**:
+
+| 지표 | 확정값(aux=0, 6-seed) | aux=0.2(6-seed) |
+|---|---|---|
+| COCO_AP | 36.55 | 36.56(무의미한 차이) |
+| LVIS_AP | 0.2539 | 0.2545(무의미한 차이) |
+| APr | **0.1797** | 0.1771(악화) |
+| UPIR | **0.173%** | 0.182%(악화) |
+| lost | **339.2** | 348.3(악화) |
+| LVIS_flip | **5.30%** | 5.39%(악화) |
+| LVIS_lost | **959.0** | 985.5(악화) |
+
+1-seed 스윕에서 좋아 보였던 6개 지표 중 실제로 6-seed까지 유지된 건 없다
+— 전형적인 1-seed 노이즈 함정(이 세션에서 `combined_recon_iters=200`,
+scale_reg_weight/iters/neighbor_k 스윕의 GPU 비결정성 등 반복적으로
+나왔던 패턴과 같은 성격). **확정 설계는 변경 없음**
+(`aux_mse_weight` 기본값 0.0 유지).
+
+**수정 완료(코드는 유지, 진단용)**: `src/quant/promptcal.py`
+(`optimize_promptcal_scale_neighbor`에 `neighbor_of_cal`/`aux_mse_weight`
+파라미터 추가), `pipeline/run_comparison.py`(`--neighbor-of-cal`/
+`--aux-mse-weight` CLI 플래그, 결과 표 태그). `pipeline/quant/promptcal.py`
+동기화 완료.
+
+**상태**: 두 방향 다 6-seed(또는 수학적으로) 확정된 부정적 결과.
+`PROMPTCAL_CURRENT_MODEL_V2.md` §9 "남은 방향" (2)(3)(4) 전부 소진 —
+top-k margin 자체를 근본적으로 다른 objective 형태로 바꾸는 것 외에는
+뚜렷한 다음 수가 안 보임. 사람의 판단이 필요한 지점이라 여기서 자동
+진행을 멈춤(치명적 문제는 아니지만, 사전에 합의된 다음 방향이 없어서).
+
+---
+
 ## 부록 A — 세션 중 발견한 실행/GPU 이슈
 
 **`CUDA_VISIBLE_DEVICES=N`만으로는 물리 GPU N이 보장 안 됨.**
@@ -1110,6 +1185,8 @@ GPU들은 비었다고 뜰 때까지 피했다.
 | claim15 iters/neighbor_k 스윕(seed0, GPU 비결정성 확인됨 — 세부 순위 신뢰 안 함) | `runs/77_hparam_sweep/{iters,neighbork}_*.log` |
 | claim15 scale_reg_weight=1.0 6-seed 확정(완료) | `runs/78_scalereg1_confirmed/seed{0..5}_full.log` |
 | claim15 bit-width(W8A32/W32A8) 스모크 테스트(정식 재측정 아직 안 함) | `runs/73_review_fixes/smoke_w{8a32,32a8}.log` |
+| claim16 neighbor_of_cal 확인(1-seed, 구조적으로 무의미함 확정) + aux_mse_weight 1-seed 스윕 | `runs/80_neighbor_aux_sweep/` |
+| claim16 aux_mse_weight=0.2 6-seed 확정(반박됨, 확정 설계 변경 없음) | `runs/81_auxmse02_confirmed/seed{0..5}_full.log` |
 
 ## 부록 D — 결정 현황 (2026-09-16 갱신)
 

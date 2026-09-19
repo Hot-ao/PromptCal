@@ -463,7 +463,8 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5,
           channelwise_smult=False, identity_aware_margin=True, control_mse=False,
           adaround_learn_act_scale=False, qdrop_brecq_learn_act_scale=True,
-          combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8):
+          combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8,
+          neighbor_of_cal=False, aux_mse_weight=0.0):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -549,6 +550,8 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           cal_idx=cal_idx, cal_weight=cal_weight,
                                           identity_aware_margin=identity_aware_margin,
                                           control_mse=control_mse,
+                                          neighbor_of_cal=neighbor_of_cal,
+                                          aux_mse_weight=aux_mse_weight,
                                           verbose=False)
     return m
 
@@ -643,6 +646,20 @@ def main():
                          "iters=--recon-iters-strong). QDrop+LSQ/BRECQ+LSQ가 margin_loss 없이도 "
                          "decision-preservation에서 Combined를 이기는 게 block-wise 상관 반영 "
                          "때문인지, margin_loss가 그 위에 추가 기여를 하는지 분리하는 통제 실험용.")
+    ap.add_argument("--neighbor-of-cal", action="store_true",
+                    help="09-20 claim16 방향 2 (진단/실험용, 기본 False): margin_loss의 "
+                         "neighbor 보호 범위를 S의 이웃뿐 아니라 H_cal의 이웃까지 넓힘. "
+                         "같은 exclude_set(H_eval 포함)을 재사용하므로 held-out 불변식은 "
+                         "절대 안 깨짐 -- claim6에서 S의 이웃 풀이 이미 H_cal 크기로 "
+                         "포화된다고 확인됐으니, 이건 다른 각도(H_cal 자신의 이웃)에서 "
+                         "보호 범위를 넓히는 것.")
+    ap.add_argument("--aux-mse-weight", type=float, default=0.0,
+                    help="09-20 claim16 방향 3 (진단/실험용, 기본 0.0=off): margin_loss"
+                         "(sparse top-k)에 train_cols(S∪H_cal) 전체에 대한 dense "
+                         "F.mse_loss를 '더해서'(대체 아님, --control-mse와 다름) 보조 "
+                         "신호로 준다. BRECQ-stage1 진단(claim15)에서 margin_loss가 "
+                         "BRECQ의 dense reconstruction objective보다 decision-preservation에 "
+                         "못한 게 확인돼서, sparse 신호를 dense하게 보강하면 나아지는지 확인.")
     ap.add_argument("--control-mse", action="store_true",
                     help="09-17 claim(baseline엔 activation scale 학습 손잡이가 아예 "
                          "없다) 검증용 control 실험. Combined 빌드 시 margin_loss/"
@@ -762,7 +779,9 @@ def main():
                              qdrop_brecq_learn_act_scale=args.qdrop_brecq_learn_act_scale,
                              combined_recon_iters=args.combined_recon_iters,
                              combined_stage1=args.combined_stage1,
-                             w_bits=args.w_bits, a_bits=args.a_bits)
+                             w_bits=args.w_bits, a_bits=args.a_bits,
+                             neighbor_of_cal=args.neighbor_of_cal,
+                             aux_mse_weight=args.aux_mse_weight)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
@@ -865,6 +884,10 @@ def main():
         lsq_bits.append("QDrop/BRECQ LSQ 꺼짐(claim12 이전 축소구현, ablation)")
     if args.combined_stage1 != "none":
         lsq_bits.append(f"Combined 1단계={args.combined_stage1}(진단 실험, 헤드라인 아님)")
+    if args.neighbor_of_cal:
+        lsq_bits.append("neighbor_of_cal(claim16 방향2, 진단 실험)")
+    if args.aux_mse_weight > 0:
+        lsq_bits.append(f"aux_mse_weight={args.aux_mse_weight}(claim16 방향3, 진단 실험)")
     lsq_tag = f" [{', '.join(lsq_bits)}]" if lsq_bits else ""
     print(f" 공식 데이터 설정(calib=train2017 {len(calib_paths)}장, LVIS=공식 minival) -- seed {args.seed}{control_tag}{lsq_tag}")
     if args.eval_cap > 0:
