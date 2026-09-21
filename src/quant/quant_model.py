@@ -41,8 +41,11 @@ def set_mode(module: nn.Module, calibrating: bool = False, quantized: bool = Fal
 
 
 @torch.no_grad()
-def calibrate(model_module: nn.Module, calib_tensors, device: str = "cuda:0"):
+def calibrate(model_module: nn.Module, calib_tensors, device: str = "cuda:0", act_observer: str = "minmax"):
     """calib_tensors: 전처리된 [1,3,H,W] 텐서들의 iterable."""
+    for m in model_module.modules():
+        if isinstance(m, QuantConv2d):
+            m.a_obs.method = act_observer
     set_mode(model_module, calibrating=True, quantized=False)
     n = 0
     for t in calib_tensors:

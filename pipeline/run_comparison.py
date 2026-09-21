@@ -463,7 +463,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5,
           channelwise_smult=False, identity_aware_margin=True, control_mse=False,
           adaround_learn_act_scale=False, qdrop_brecq_learn_act_scale=True,
-          combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8,
+          combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8, act_observer="minmax",
           neighbor_of_cal=False, aux_mse_weight=0.0):
     m = model_cls(w)
     m.set_classes(names)
@@ -473,7 +473,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
     m.fuse()
     wrap_convs(m.model, w_bits, a_bits)
     m.model.to(device).eval()
-    calibrate(m.model, calib, device=device)
+    calibrate(m.model, calib, device=device, act_observer=act_observer)
     if mode == "naive":
         pass
     elif mode == "adaround":
@@ -564,6 +564,8 @@ def main():
     ap.add_argument("--gt-ann", default=None)
     ap.add_argument("--lvis-ann",
                     default="/data/taeho/lvis_datasets/labels_dl/extracted/lvis/annotations/lvis_v1_minival.json")
+    ap.add_argument("--act-observer", choices=["minmax", "mse"], default="minmax",
+                    help="activation scale 초기화. mse=공식 BRECQ/QDrop 방식(L2.4 탐색), minmax=현재 기본값")
     ap.add_argument("--w-bits", type=int, default=8,
                     help="09-18 사용자 지적: 이전엔 wrap_convs(m.model, 8, 8)로 하드코딩돼 "
                          "있어서 bit-width를 CLI로 조정할 방법이 없었다. W8A32/W32A8 같은 "
@@ -779,7 +781,7 @@ def main():
                              qdrop_brecq_learn_act_scale=args.qdrop_brecq_learn_act_scale,
                              combined_recon_iters=args.combined_recon_iters,
                              combined_stage1=args.combined_stage1,
-                             w_bits=args.w_bits, a_bits=args.a_bits,
+                             w_bits=args.w_bits, a_bits=args.a_bits, act_observer=args.act_observer,
                              neighbor_of_cal=args.neighbor_of_cal,
                              aux_mse_weight=args.aux_mse_weight)
         calib_time[mode] = time.perf_counter() - t0
