@@ -15,6 +15,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .fake_quant import mse_weight_scale_symmetric_channelwise, mse_weight_scale_symmetric_perlayer
+
 try:
     _LIBC = ctypes.CDLL("libc.so.6")
 except OSError:
@@ -50,14 +52,29 @@ DEFAULT_WARMUP = 0.2       # 앞 20% iteration은 round_loss=0 (공식 warmup)
 # 쓰면(=Combined와 완전히 동일) 1000 iters 기준 실측(conv 2개, stem 3→32 / mid 64→64)에서
 # 마지막 10% 구간에도 값이 계속 진동(각각 변동폭 0.0517/0.0052, 2e-3+cosine 대비 10배 이상)해서
 # 수렴하지 않는다 -- CosineAnnealing은 유지하고 peak lr만 Combined와 맞춘다.
-DEFAULT_ACT_LR = 1e-2
+DEFAULT_ACT_LR = 1e-2      # Combined s_mult / AdaRound ablation(adaround_learn_act_scale)용 -- 배율 파라미터화 전용, 절대 scale과 무관
+# 09-21: BRECQ/QDrop의 baseline LSQ를 Combined의 s_mult(배율)와 완전히 분리된 독립
+# 구현(LSQActQuant, 절대 delta 파라미터)으로 새로 만들면서 공식 lr을 그대로 쓴다
+# (더 이상 s_mult 배율 단위로 환산할 필요가 없다 -- 절대 파라미터라 공식 수치를
+# 그대로 옮기면 된다). BRECQ 공식(main_imagenet.py --lr 기본값) 4e-4, QDrop 공식
+# (논문 부록 E, ImageNet 실험값 -- COCO 절도 "다른 설정은 분류와 동일"이라 명시돼
+# 그대로 씀) 4e-5.
+DEFAULT_ACT_LR_BRECQ = 4e-4
+DEFAULT_ACT_LR_QDROP = 4e-5
+
+# 09-23: calibration forward 배치화(CAPTURE_BATCH)를 시도했으나, batch=1 대비 batch=32
+# forward가 cuDNN 알고리즘 선택 차이로 레이어를 지날수록 활성화값이 눈에 띄게 갈라짐을
+# 확인(레이어 25 근처에서 최대 절대오차 0.51, 신호 크기와 맞먹음 -- 직접 버퍼 대조로 검증)
+# -- 재구성 목표값 자체가 바뀌어 최종 지표(Heval_flip 등)가 유의미하게 달라졌다. 속도
+# 최적화치고 리스크가 커서 되돌림(이미지 1장씩 순차 forward, 기존 동작). 배치화는 편향
+# 없이 노이즈 수준인지 별도로 검증한 뒤에만 재도입할 것.
 
 
 def h_alpha(alpha):
     return torch.clamp(torch.sigmoid(alpha) * (ZETA - GAMMA) + GAMMA, 0, 1)
 
 
-def lp_rec_loss(pred, target):
+def lp_rec_loss(pred, target, p=2.0):
     """재구성 오차. BRECQ 공식 lp_loss(p=2, reduction='none')와 동일한 정규화:
     채널축은 sum, 나머지(batch/spatial)는 mean.
 
@@ -69,7 +86,7 @@ def lp_rec_loss(pred, target):
     재현 실험에서 nearest 대비 반올림 flip이 0.069%(수정 전) vs 0.797%(공식
     정규화), 출력 MSE 개선이 0.08% vs 0.85%로 약 10배 차이 -- 즉 수정 전
     AdaRound는 사실상 naive rounding과 같은 모델을 만들고 있었다."""
-    d = (pred - target).abs().pow(2)
+    d = (pred - target).abs().pow(p)
     return d.sum(1).mean() if d.dim() > 1 else d.mean()
 
 
@@ -84,9 +101,56 @@ def temp_decay(it, iters, warmup=DEFAULT_WARMUP, start_b=20.0, end_b=2.0):
     return end_b + (start_b - end_b) * max(0.0, 1.0 - rel)
 
 
+def _grad_scale(x, scale):
+    """LSQ(Esser et al. 2019) grad scaling trick: forward는 항등, backward gradient만
+    scale배. 공식 QDrop LSQFakeQuantize.forward의 grad_factor 적용과 동일 메커니즘."""
+    return (x - x * scale).detach() + x * scale
+
+
+class LSQActQuant(nn.Module):
+    """09-21: BRECQ/QDrop의 baseline activation LSQ를 Combined의 s_mult(_quantize_smult,
+    배율 파라미터화)와 완전히 분리된 독립 구현으로 새로 만든다 -- 파라미터도, 코드 경로도
+    공유하지 않는다(이전엔 s_mult를 그대로 재사용해서 "baseline이 제안 방법의 메커니즘을
+    쓴다"고 읽힐 여지가 있었다). 공식 LSQ 그대로 절대 scale(delta) 파라미터 + grad_factor.
+    """
+    def __init__(self, init_delta: torch.Tensor, bits: int = 8, use_grad_scaling: bool = True):
+        super().__init__()
+        self.delta = nn.Parameter(init_delta.clone().detach().abs().clamp(min=1e-8))
+        self.bits = bits
+        self.use_grad_scaling = use_grad_scaling
+
+    def forward(self, x: torch.Tensor, zero_point: torch.Tensor) -> torch.Tensor:
+        qmin, qmax = 0, 2 ** self.bits - 1
+        delta = self.delta.clamp(min=1e-8)
+        if self.use_grad_scaling:
+            # 공식 LSQFakeQuantize(per-tensor): grad_factor = 1/sqrt(numel * qmax)
+            grad_factor = 1.0 / (x.numel() * qmax) ** 0.5
+            delta = _grad_scale(delta, grad_factor)
+        x_s = x / delta
+        x_r = x_s + (torch.round(x_s) - x_s).detach()      # round STE
+        x_c = torch.clamp(x_r + zero_point, qmin, qmax)
+        return (x_c - zero_point) * delta
+
+
 class AdaRoundQuantConv2d(nn.Module):
-    """기존 QuantConv2d를 AdaRound 반올림으로 확장."""
-    def __init__(self, qconv, channelwise_smult=True):
+    """기존 QuantConv2d를 AdaRound 반올림으로 확장.
+
+    w_quant_mode (09-21, weight scale 정합성 수정):
+      - "brecq"(기본, BRECQ/QDrop/Combined 공용): qconv가 calibrate()에서 이미 채널별
+        비대칭 MSE로 계산해둔 w_scale/w_zero_point(QuantConv2d.freeze_weight_quant())를
+        그대로 재사용한다 -- naive/BRECQ/QDrop/Combined가 "재구성 시작 전 round-to-nearest
+        지점"을 정확히 공유하게 되고(공식 BRECQ도 delta는 재구성 중 고정, alpha만 학습),
+        탐색을 다시 돌릴 필요도 없다.
+      - "adaround": 대칭(zero_point 없음)이지만 채널별(dim0) scale을 새로 탐색한다
+        (qconv의 비대칭 채널별 scale과는 무관 -- "대칭 vs 비대칭"만 BRECQ와 다른
+        단일 변수로 남긴다). 09-21: 원 논문 Table 6 본문 그대로(레이어 전체 스칼라
+        하나)를 먼저 시도했으나, 이 모델은 채널 간 weight 최대값 편차가 최대 12배라
+        정식 스케일에서도 COCO_AP -1.62/Heval_flip 5.3%->21.5%로 실측 손상이 컸다
+        (`runs/89_weight_mse`) -- Table 7 각주("일부는 더 유리한 per-channel을
+        썼다")가 이미 허용하는 채널별로 전환. 순수 레이어-전체 재현이 필요하면
+        mse_weight_scale_symmetric_perlayer를 직접 쓸 것(ablation용으로 유지).
+    """
+    def __init__(self, qconv, channelwise_smult=True, w_quant_mode="brecq"):
         super().__init__()
         self.conv = qconv.conv               # 원본 Conv2d (weight 고정)
         self.w_bits = qconv.w_bits
@@ -122,12 +186,23 @@ class AdaRoundQuantConv2d(nn.Module):
         else:
             self.s_mult = nn.Parameter(torch.tensor(1.0, device=self.conv.weight.device))
         self.use_smult = False               # True일 때만 s_mult 적용(scale 학습 모드)
+        self.act_quant_enabled = True        # False면 activation 양자화 생략(BRECQ 2단계의 1단계 weight-only 재구성용)
+        # 09-21: baseline(BRECQ/QDrop) 전용 독립 LSQ -- s_mult와 무관(위 LSQActQuant 참고).
+        # a_obs가 이미 calibrate()로 얼려져 있어 scale이 유효한 초기값(공식 leaf_param 초기화와 동일).
+        self.lsq_act = LSQActQuant(self.a_obs.scale, bits=self.a_obs.bits)
+        self.use_lsq = False                 # True일 때만 lsq_act 적용(baseline LSQ 모드)
 
         w = self.conv.weight.detach()
-        qmax = 2 ** (self.w_bits - 1) - 1
-        dims = list(range(1, w.dim()))
-        amax = w.abs().amax(dim=dims, keepdim=True).clamp(min=1e-8)
-        self.register_buffer("w_scale", amax / qmax)
+        self.w_asym = (w_quant_mode == "brecq")
+        if self.w_asym:
+            # qconv가 calibrate() 때 이미 채널별 비대칭 MSE로 계산해둔 값 재사용(위 docstring).
+            assert qconv._w_quant_ready, "qconv가 calibrate()를 거치지 않음 -- w_scale 미계산"
+            self.register_buffer("w_scale", qconv.w_scale.clone())
+            self.register_buffer("w_zero_point", qconv.w_zero_point.clone())
+        else:
+            scale = mse_weight_scale_symmetric_channelwise(w, self.w_bits)
+            self.register_buffer("w_scale", scale)
+            self.register_buffer("w_zero_point", torch.zeros((), device=w.device))  # 미사용(대칭)
         self.register_buffer("w_floor", torch.floor(w / self.w_scale))
         # alpha 초기화: h(alpha) ≈ 소수부(초기 soft = 원래 weight)
         rest = (w / self.w_scale) - self.w_floor
@@ -154,23 +229,34 @@ class AdaRoundQuantConv2d(nn.Module):
         임계값 판정은 상수다 -- 그런데도 매 forward마다 weight 크기 그대로
         재계산되고 있었다(probe 5000장 + LVIS 4809장 전부). soft가 다시 True가 되면
         캐시를 무효화해서 정확성은 그대로 유지한다."""
-        qmax = 2 ** (self.w_bits - 1) - 1
         if self.soft:
             self._hard_weight_cache = None
             w_int = self.w_floor + h_alpha(self.alpha)
-            w_int = torch.clamp(w_int, -(qmax + 1), qmax)
-            return w_int * self.w_scale
+            return self._dequant(w_int)
         if self._hard_weight_cache is None:
             w_int = self.w_floor + (h_alpha(self.alpha) >= 0.5).float()
-            w_int = torch.clamp(w_int, -(qmax + 1), qmax)
-            self._hard_weight_cache = w_int * self.w_scale
+            self._hard_weight_cache = self._dequant(w_int)
         return self._hard_weight_cache
 
+    def _dequant(self, w_int):
+        """w_int(=floor+반올림결정, zero_point 미적용)를 clamp+역양자화. 대칭/비대칭 분기."""
+        if self.w_asym:
+            n_levels = 2 ** self.w_bits - 1
+            w_q = torch.clamp(w_int + self.w_zero_point, 0, n_levels)
+            return (w_q - self.w_zero_point) * self.w_scale
+        qmax = 2 ** (self.w_bits - 1) - 1
+        w_int = torch.clamp(w_int, -(qmax + 1), qmax)
+        return w_int * self.w_scale
+
     def quant_act(self, x):
-        """activation 양자화 한 경로로 통합(use_smult > ste > plain 우선순위).
+        """activation 양자화 한 경로로 통합(use_lsq > use_smult > ste > plain 우선순위).
+        use_lsq(baseline)와 use_smult(Combined)는 동시에 켜질 일이 없다(서로 다른
+        모드 전용) -- 그래도 명시적으로 use_lsq를 먼저 검사해 절대 우선하게 둔다.
         qdrop_prob > 0이면 QDrop: 원소별 확률 qdrop_prob로만 양자화값을 쓰고
         나머지는 양자화 전 x를 그대로 흘린다."""
-        if self.use_smult:
+        if self.use_lsq:
+            xq = self.lsq_act(x, self.a_obs.zero_point)
+        elif self.use_smult:
             xq = self._quantize_smult(x)
         elif self.ste:
             xq = self.a_obs.quantize_ste(x)
@@ -182,7 +268,7 @@ class AdaRoundQuantConv2d(nn.Module):
         return xq
 
     def forward(self, x):
-        if self.quantized and self.a_obs.ready:
+        if self.quantized and self.a_obs.ready and self.act_quant_enabled:
             x = self.quant_act(x)
         wq = self.quant_weight()
         return F.conv2d(x, wq, self.conv.bias, self.conv.stride,
@@ -217,18 +303,20 @@ class AdaRoundQuantConv2d(nn.Module):
             return float((learned != nearest).float().mean()) * 100
 
 
-def convert_to_adaround(model_module, channelwise_smult=True):
+def convert_to_adaround(model_module, channelwise_smult=True, w_quant_mode="brecq"):
     """model 하위 QuantConv2d를 AdaRoundQuantConv2d로 교체(in-place). 교체 개수 반환.
     channelwise_smult=False면 s_mult을 per-tensor 스칼라로 생성(claim4 대조 실험용,
-    §AdaRoundQuantConv2d 주석 참고)."""
+    §AdaRoundQuantConv2d 주석 참고). w_quant_mode: "brecq"(기본, qconv의 채널별 비대칭
+    MSE 재사용) | "adaround"(원 논문 그대로 대칭·레이어 스칼라 재탐색)."""
     from .fake_quant import QuantConv2d
     count = 0
     for name, child in list(model_module.named_children()):
         if isinstance(child, QuantConv2d):
-            setattr(model_module, name, AdaRoundQuantConv2d(child, channelwise_smult=channelwise_smult))
+            setattr(model_module, name, AdaRoundQuantConv2d(
+                child, channelwise_smult=channelwise_smult, w_quant_mode=w_quant_mode))
             count += 1
         else:
-            count += convert_to_adaround(child, channelwise_smult=channelwise_smult)
+            count += convert_to_adaround(child, channelwise_smult=channelwise_smult, w_quant_mode=w_quant_mode)
     return count
 
 

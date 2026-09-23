@@ -14,22 +14,23 @@ from .fake_quant import QuantConv2d
 
 
 def wrap_convs(module: nn.Module, w_bits: int = 8, a_bits: int = 8,
-               skip_names=None) -> int:
+               skip_names=None, skip_modules=None) -> int:
     """module 하위 Conv2d를 QuantConv2d로 교체. 교체 개수 반환. DFL은 스킵.
     skip_names: 이 이름의 하위 트리는 통째로 제외(예: {'projections'} — v1의 vision-text
     정렬 모듈. 민감해서 양자화 시 AP 대폭 하락 → baseline 공정성 위해 제외 가능)."""
     skip_names = skip_names or set()
+    skip_modules = skip_modules or []
     if type(module).__name__ == "DFL":
         return 0
     count = 0
     for name, child in list(module.named_children()):
-        if name in skip_names:
+        if name in skip_names or any(child is sm for sm in skip_modules):
             continue                                   # 하위 트리 통째로 제외
         if isinstance(child, nn.Conv2d):
             setattr(module, name, QuantConv2d(child, w_bits, a_bits))
             count += 1
         else:
-            count += wrap_convs(child, w_bits, a_bits, skip_names)
+            count += wrap_convs(child, w_bits, a_bits, skip_names, skip_modules)
     return count
 
 
@@ -54,5 +55,6 @@ def calibrate(model_module: nn.Module, calib_tensors, device: str = "cuda:0", ac
     for m in model_module.modules():
         if isinstance(m, QuantConv2d):
             m.a_obs.freeze()
+            m.freeze_weight_quant()
     set_mode(model_module, calibrating=False, quantized=True)
     return n

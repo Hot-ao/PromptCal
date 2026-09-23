@@ -463,15 +463,17 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           recon_iters_ada=1000, recon_iters_strong=2000, qdrop_prob=0.5,
           channelwise_smult=False, identity_aware_margin=True, control_mse=False,
           adaround_learn_act_scale=False, qdrop_brecq_learn_act_scale=True,
-          combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8, act_observer="minmax",
-          neighbor_of_cal=False, aux_mse_weight=0.0):
+          combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8, act_observer="mse",
+          brecq_two_stage=True, brecq_act_iters=5000, brecq_batch=2, skip_head=True,
+          neck_layerwise=True, neighbor_of_cal=False, aux_mse_weight=0.0):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
         m.fuse(); m.model.to(device).eval()
         return m
     m.fuse()
-    wrap_convs(m.model, w_bits, a_bits)
+    wrap_convs(m.model, w_bits, a_bits,
+               skip_modules=[m.model.model[-1]] if skip_head else None)
     m.model.to(device).eval()
     calibrate(m.model, calib, device=device, act_observer=act_observer)
     if mode == "naive":
@@ -482,7 +484,12 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         # False가 맞는 채택(claim4/5/13과 같은 원칙: 원 논문 충실도가 기준).
         # adaround_learn_act_scale=True일 때만 channelwise_smult=False(per-tensor)로
         # 강제(Combined와 granularity 통일, ablation 목적).
-        convert_to_adaround(m.model, channelwise_smult=not adaround_learn_act_scale)
+        # 09-21: activation calibration은 논문 그대로 min-max -- 다른 방법(BRECQ/QDrop/
+        # naive/Combined)은 기본 act_observer가 mse로 바뀌었지만, AdaRound 논문은
+        # "min/max of observed activations"를 명시하므로 여기서만 재보정해서 강제한다.
+        calibrate(m.model, calib, device=device, act_observer="minmax")
+        convert_to_adaround(m.model, channelwise_smult=not adaround_learn_act_scale,
+                            w_quant_mode="adaround")
         optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada,
                           verbose=False, learn_act_scale=adaround_learn_act_scale)
     elif mode == "qdrop":
@@ -495,11 +502,14 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         convert_to_adaround(m.model, channelwise_smult=not qdrop_brecq_learn_act_scale)
         optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong,
                        qdrop_prob=qdrop_prob, verbose=False,
-                       learn_act_scale=qdrop_brecq_learn_act_scale)
+                       learn_act_scale=qdrop_brecq_learn_act_scale, batch=brecq_batch,
+                       neck_layerwise=neck_layerwise)   # two_stage 기본 False 유지(QDrop 공식=공동 최적화)
     elif mode == "brecq":
         convert_to_adaround(m.model, channelwise_smult=not qdrop_brecq_learn_act_scale)
         optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong,
-                       verbose=False, learn_act_scale=qdrop_brecq_learn_act_scale)
+                       verbose=False, learn_act_scale=qdrop_brecq_learn_act_scale,
+                       two_stage=brecq_two_stage, act_iters=brecq_act_iters,
+                       batch=brecq_batch, neck_layerwise=neck_layerwise)
     elif mode == "combined":
         # 09-18 claim14로 확정: claim13으로 1단계(optimize_adaround)가 alpha를
         # 훨씬 많이 움직이게 됐는데, 그 목적함수(순수 MSE reconstruction)는
@@ -564,8 +574,39 @@ def main():
     ap.add_argument("--gt-ann", default=None)
     ap.add_argument("--lvis-ann",
                     default="/data/taeho/lvis_datasets/labels_dl/extracted/lvis/annotations/lvis_v1_minival.json")
-    ap.add_argument("--act-observer", choices=["minmax", "mse"], default="minmax",
-                    help="activation scale 초기화. mse=공식 BRECQ/QDrop 방식(L2.4 탐색), minmax=현재 기본값")
+    ap.add_argument("--brecq-two-stage", action=argparse.BooleanOptionalAction, default=False,
+                    help="09-22: 공식 BRECQ 순차 2단계(1: activation 양자화 끄고 alpha만, 2: weight "
+                         "고정 후 LSQ만, act_iters=5000 고정). 1-seed 정식 스케일 비교(runs/85_brecq_"
+                         "two_stage)에서 공동 최적화보다 전 지표(COCO_AP 35.55 vs 36.10 등)가 나빴고, "
+                         "메인 루프(iters=2000) 대비 act_iters=5000이 추가로 붙어 6-seed 병렬 실행"
+                         "시간을 크게 늘려서(09-22 밤) 기본값을 False(공동 최적화)로 되돌림. 공식 "
+                         "그대로는 --brecq-two-stage로 켤 수 있음. QDrop 모드에는 애초에 적용 안 됨"
+                         "(공식이 공동 최적화라 이 플래그와 무관하게 항상 공동 최적화)")
+    ap.add_argument("--brecq-act-iters", type=int, default=5000,
+                    help="--brecq-two-stage의 2단계(activation scale) iters (공식 iters_a=5000)")
+    ap.add_argument("--brecq-batch", type=int, default=1,
+                    help="09-21: BRECQ/QDrop 재구성 스텝당 이미지 수. 공식 COCO 설정(QDrop 논문"
+                         "부록 E)은 2지만, 1-seed에서 batch=1 대비 결과가 노이즈 수준으로만 달랐고"
+                         "(runs/86_batch2_skiphead) 6-seed 병렬 실행 시간을 눈에 띄게 늘려서"
+                         "(09-22 밤 실측, neck-layerwise와 함께 seed당 5배+ 지연) 기본값은 1로"
+                         "되돌림 -- 공식 그대로는 --brecq-batch 2로 재현 가능")
+    ap.add_argument("--skip-head", action=argparse.BooleanOptionalAction, default=True,
+                    help="09-21 확정 기본값(True): detection head(WorldDetect)를 모든 방법에서 "
+                         "양자화하지 않음 -- QDrop COCO 프로토콜('we didn't quantize the head but "
+                         "applied block reconstruction to backbone and layer reconstruction to "
+                         "neck')과 동일. --no-skip-head로 이전(head까지 양자화) 동작 재현 가능(ablation)")
+    ap.add_argument("--act-observer", choices=["minmax", "mse"], default="mse",
+                    help="09-21 확정 기본값(mse): activation scale 초기화. 공식 BRECQ/QDrop 방식"
+                         "(L_2.4 grid search). AdaRound 모드는 이 플래그와 무관하게 항상 min-max로 "
+                         "재보정됨(원 논문이 min-max를 명시). --act-observer minmax로 전체를 이전 "
+                         "동작(모든 방법 min-max)으로 되돌릴 수 있음")
+    ap.add_argument("--neck-layerwise", action=argparse.BooleanOptionalAction, default=False,
+                    help="09-21: BRECQ/QDrop 재구성 단위를 backbone(block-wise)/neck(layer-wise, "
+                         "SPPF 이후 head 제외)으로 분리 -- QDrop COCO 프로토콜과 동일. 재구성 대상이 "
+                         "17->35개로 늘어 6-seed 병렬 실행 시간이 감당 못 할 만큼 늘었는데(09-22 밤), "
+                         "결과 영향은 검증한 적이 없어 기본값을 False(전부 block-wise, 이전 동작)로 "
+                         "되돌림. 공식 그대로는 --neck-layerwise로 켤 수 있음 -- 결과 영향은 별도 "
+                         "1-seed 진단으로 확인 예정")
     ap.add_argument("--w-bits", type=int, default=8,
                     help="09-18 사용자 지적: 이전엔 wrap_convs(m.model, 8, 8)로 하드코딩돼 "
                          "있어서 bit-width를 CLI로 조정할 방법이 없었다. W8A32/W32A8 같은 "
@@ -681,7 +722,16 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
-    ap.add_argument("--torch-seed", type=int, default=0)
+    ap.add_argument("--torch-seed", type=int, default=None,
+                    help="09-23 버그 수정: 기본값이 항상 0으로 고정돼 있어서, --seed로 S/H_cal/"
+                         "H_eval 분할은 바뀌어도 재구성 루프의 배치 샘플링(torch.randint 등) "
+                         "무작위성은 6-seed 내내 완전히 똑같았다 -- calibration 이미지도 --seed와 "
+                         "무관하게 고정(sorted train2017[:calib])이라, COCO_AP/LVIS_AP/lost/"
+                         "LVIS_flip/LVIS_lost처럼 분할과 무관한 지표는 6-seed 내내 값이 그대로였다"
+                         "(cudnn.deterministic=True라 진짜로 bit-level 동일). 분할 의존 지표"
+                         "(S_AP/H_eval_AP/Heval_flip)만 seed 효과를 받고 있었다. 이제 명시하지 "
+                         "않으면 --seed를 그대로 따라간다(아래 args.torch_seed 처리) -- 명시하면 "
+                         "분할과 학습 무작위성을 분리하는 ablation도 가능")
     ap.add_argument("--conditions", default="naive,adaround,qdrop,brecq,combined",
                     help="쉼표로 구분된 조건 목록(콤마 뒤 공백 없이). 09-16 추가 -- Combined 변형 "
                          "하나만 볼 때도 항상 5개 조건(특히 QDrop/BRECQ, 900~1400s대)을 다 "
@@ -691,6 +741,8 @@ def main():
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
     print(f"[args] {vars(args)}")
 
+    if args.torch_seed is None:
+        args.torch_seed = args.seed          # 09-23: 기본으로 --seed를 그대로 따라가게(버그 수정)
     torch.manual_seed(args.torch_seed)
     torch.cuda.manual_seed_all(args.torch_seed)
     torch.backends.cudnn.deterministic = True
@@ -782,6 +834,8 @@ def main():
                              combined_recon_iters=args.combined_recon_iters,
                              combined_stage1=args.combined_stage1,
                              w_bits=args.w_bits, a_bits=args.a_bits, act_observer=args.act_observer,
+                             brecq_two_stage=args.brecq_two_stage, brecq_act_iters=args.brecq_act_iters,
+                             brecq_batch=args.brecq_batch, skip_head=args.skip_head, neck_layerwise=args.neck_layerwise,
                              neighbor_of_cal=args.neighbor_of_cal,
                              aux_mse_weight=args.aux_mse_weight)
         calib_time[mode] = time.perf_counter() - t0
@@ -882,6 +936,16 @@ def main():
     lsq_bits = []
     if args.adaround_learn_act_scale:
         lsq_bits.append("AdaRound+LSQ(ablation)")
+    if not args.skip_head:
+        lsq_bits.append("head 양자화(QDrop COCO 프로토콜과 다름, ablation)")
+    if args.brecq_batch != 2:
+        lsq_bits.append(f"BRECQ/QDrop batch={args.brecq_batch}(공식 COCO=2와 다름, ablation)")
+    if not args.brecq_two_stage:
+        lsq_bits.append("BRECQ 공동 최적화(공식 순차 2단계와 다름, ablation)")
+    if args.act_observer != "mse":
+        lsq_bits.append(f"act-observer={args.act_observer}(공식 mse와 다름, ablation)")
+    if not args.neck_layerwise:
+        lsq_bits.append("neck도 block-wise(공식 layer-wise와 다름, ablation)")
     if not args.qdrop_brecq_learn_act_scale:
         lsq_bits.append("QDrop/BRECQ LSQ 꺼짐(claim12 이전 축소구현, ablation)")
     if args.combined_stage1 != "none":

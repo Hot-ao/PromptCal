@@ -25,7 +25,18 @@ import torch.nn.functional as F
 
 from .adaround import (AdaRoundQuantConv2d, list_adaround_convs, h_alpha, free_cpu_mem,
                        lp_rec_loss, temp_decay,
-                       DEFAULT_LR, DEFAULT_REG_WEIGHT, DEFAULT_ACT_LR, DEFAULT_WARMUP)
+                       DEFAULT_LR, DEFAULT_REG_WEIGHT, DEFAULT_WARMUP,
+                       DEFAULT_ACT_LR_BRECQ, DEFAULT_ACT_LR_QDROP)
+
+
+def _backbone_end_idx(blocks):
+    """SPPF(YOLOv8 backbone 마지막 블록)의 인덱스를 backbone/neck 경계로 쓴다.
+    QDrop 공식 COCO 프로토콜(부록 E): backbone은 block-wise, neck(FPN)은 layer-wise
+    재구성. 못 찾으면 None(경계 없음 = 전부 block-wise, 이전 동작과 동일)."""
+    for i, b in enumerate(blocks):
+        if type(b).__name__ == "SPPF":
+            return i
+    return None
 
 
 def _hpairs(qm, fm):
@@ -62,6 +73,25 @@ def _to_dev(x, device):
     return x
 
 
+def _collate(items):
+    """batch=1 항목들을 배치로 합친다(텐서는 dim0 cat, list/tuple은 재귀, 그 외는 첫 항목)."""
+    first = items[0]
+    if torch.is_tensor(first):
+        return torch.cat(items, dim=0)
+    if isinstance(first, list):
+        return [_collate([it[k] for it in items]) for k in range(len(first))]
+    if isinstance(first, tuple):
+        return tuple(_collate([it[k] for it in items]) for k in range(len(first)))
+    return first
+
+
+# 09-23: calibration forward 배치화를 시도했으나(CAPTURE_BATCH+_split1), batch=1 대비
+# batch=32 forward가 cuDNN 알고리즘 선택 차이로 레이어를 지날수록 활성화값이 눈에 띄게
+# 갈라짐을 확인(직접 버퍼 대조, 레이어 25 근처 최대 절대오차 0.51 -- 신호 크기와 맞먹음)
+# -- 재구성 목표값 자체가 바뀌어 최종 지표가 유의미하게 달라졌다. 리스크가 커서 되돌림
+# (이미지 1장씩 순차 forward, 기존 동작). 편향 없이 노이즈 수준인지 검증 전엔 재도입 안 함.
+
+
 def _mix(q, f, prob):
     """QDrop의 input_prob: block 입력을 원소별 확률 prob로만 양자화 경로 값(q)으로,
     나머지는 FP 값(f)으로 쓴다. 구조(list/tuple)는 그대로 유지."""
@@ -74,10 +104,60 @@ def _mix(q, f, prob):
     return q
 
 
+def _brecq_act_stage(targets, quant_module, fp_module, calib_list, device,
+                     iters, act_lr, p, verbose, batch=1):
+    """공식 BRECQ 2단계: weight는 hard 고정, activation scale(LSQActQuant.delta, 09-21부터
+    Combined의 s_mult와 독립)만 block/conv 단위로 순차 재구성. 입력은 앞 단위의 학습이
+    반영된 quant_module 현재 상태에서 캡처."""
+    for ti, (label, qm, fm, convs, is_block) in enumerate(targets):
+        out_buf, in_buf = [], []
+
+        def fp_hook(m, inp, out):
+            if torch.is_tensor(out):
+                out_buf.append(out.detach().half().cpu())
+        hh = fm.register_forward_hook(fp_hook)
+        with torch.no_grad():
+            for t in calib_list:
+                fp_module(t.to(device))
+        hh.remove()
+
+        def q_hook(m, inp, out):
+            in_buf.append(_to_cpu(inp))
+        hh = qm.register_forward_hook(q_hook)
+        with torch.no_grad():
+            for t in calib_list:
+                quant_module(t.to(device))
+        hh.remove()
+
+        n = min(len(in_buf), len(out_buf))
+        if n == 0:
+            continue
+        for c in convs:
+            c.soft = False
+            c.use_lsq = True
+        opt_a = torch.optim.Adam([c.lsq_act.delta for c in convs], lr=act_lr)
+        sched_a = torch.optim.lr_scheduler.CosineAnnealingLR(opt_a, T_max=iters, eta_min=0.0)
+        for it in range(iters):
+            js = torch.randint(0, n, (batch,)).tolist()
+            args = _to_dev(_collate([in_buf[j] for j in js]), device)
+            tgt = torch.cat([out_buf[j] for j in js], dim=0).to(device).float()
+            opt_a.zero_grad()
+            loss = lp_rec_loss(qm(*args), tgt, p=p)
+            loss.backward()
+            opt_a.step()
+            sched_a.step()
+        if verbose:
+            print(f"  [act-stage {ti+1}/{len(targets)}] {label} done")
+        del in_buf, out_buf
+        free_cpu_mem()
+
+
 def optimize_brecq(quant_module, fp_module, calib_tensors, device,
                    iters=2000, lr=DEFAULT_LR, reg_weight=DEFAULT_REG_WEIGHT, verbose=True,
-                   learn_act_scale=False, act_lr=DEFAULT_ACT_LR, warmup=DEFAULT_WARMUP,
-                   qdrop_prob=0.0, grad_clip=None):
+                   learn_act_scale=False, act_lr=None, warmup=DEFAULT_WARMUP,
+                   qdrop_prob=0.0, grad_clip=None,
+                   two_stage=False, act_iters=5000, act_p=2.4, batch=1,
+                   neck_layerwise=True):
     """
     09-06 수정: 순차/누적 오차 반영. 이전 버전은 block의 입력과 출력(target)을
     둘 다 fp_module에서만 캡처해서, 앞선 block들의 실제 양자화 오차가 뒤쪽 block
@@ -107,15 +187,40 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
           (공식 block_recon.py의 input_prob).
     최적화가 끝나면 전부 0으로 되돌려 추론에는 drop이 남지 않는다.
 
+    neck_layerwise (09-21): QDrop 공식 COCO 프로토콜(논문 부록 E, "we didn't
+    quantize the head but applied block reconstruction to backbone and layer
+    reconstruction to neck like BRECQ")과 동일하게, backbone(SPPF까지)은
+    block-wise joint, neck(그 이후, head 제외)은 head와 같은 conv 단위(layer-wise)로
+    재구성한다. False면 이전 동작(전부 block-wise) 유지.
+
     learn_act_scale (09-17, adaround.py의 optimize_adaround와 동일 취지):
     원 BRECQ 논문은 alpha(rounding)와 activation step size(LSQ)를 block
     reconstruction loss 하나로 공동 최적화한다. True면 AdaRoundQuantConv2d의
-    s_mult를 켜서(forward()가 use_smult 분기를 이미 지원) alpha와 같이
-    최적화 -- STE 처리는 forward()의 _quantize_smult 경로가 대신하므로
-    ste=True를 따로 켤 필요 없음(use_smult가 우선). 호출 전
-    convert_to_adaround(channelwise_smult=False)로 만들어야 Combined와
-    granularity가 맞는다. 기본 False(기존 동작과 완전히 동일).
+    lsq_act(LSQActQuant, 절대 delta 파라미터)를 켜서 alpha와 같이 최적화 -- STE
+    처리는 forward()의 lsq_act 경로가 대신하므로 ste=True를 따로 켤 필요 없음
+    (use_lsq가 우선). 09-21: 이전엔 Combined의 s_mult(배율 파라미터화)를 그대로
+    재사용했는데(코드 공유 -- baseline이 제안 방법의 메커니즘을 쓰는 것처럼 읽힐
+    위험 지적됨), 이제 완전히 독립된 LSQActQuant + 공식 lr(act_lr, 위 참고)을
+    쓴다 -- s_mult/Combined와 파라미터도 코드 경로도 공유하지 않는다. 기본 False
+    (기존 동작과 완전히 동일).
+
+    two_stage (09-21): 공식 BRECQ(main_imagenet.py)는 순차 2단계다 -- (1) activation
+    양자화를 끈 채(act_quant=False) alpha만 재구성, (2) weight를 hard로 고정하고
+    activation 양자화를 켠 뒤 activation step(LSQ)만 iters_a=5000, cosine, L_p(p=2.4)
+    손실로 별도 학습. True면 이 절차를 따른다(learn_act_scale은 2단계를 켜는 스위치로
+    쓰이며 alpha 루프에서는 꺼진다). QDrop(qdrop_prob>0)은 공식이 공동 최적화라 해당 없음.
     """
+    if act_lr is None:
+        # 09-21: baseline LSQ가 이제 절대 delta 파라미터(LSQActQuant)라 공식 lr을 그대로
+        # 쓴다 -- BRECQ 공식(main_imagenet.py --lr) 4e-4, QDrop 공식(논문 부록 E) 4e-5.
+        act_lr = DEFAULT_ACT_LR_QDROP if qdrop_prob > 0 else DEFAULT_ACT_LR_BRECQ
+    if two_stage:
+        assert qdrop_prob == 0.0, "two_stage는 BRECQ 전용(QDrop 공식은 alpha와 LSQ를 공동 최적화)"
+    stage2 = two_stage and learn_act_scale
+    if two_stage:
+        learn_act_scale = False
+        for c in list_adaround_convs(quant_module):
+            c.act_quant_enabled = False
     q_seq = quant_module.model      # DetectionModel.model = Sequential(blocks)
     fp_seq = fp_module.model
     q_blocks = list(q_seq)
@@ -124,17 +229,21 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
     head_idx = n_blocks - 1
     calib_list = list(calib_tensors)
 
+    backbone_end = _backbone_end_idx(fp_blocks) if neck_layerwise else None
+
     # 재구성 대상 구성: (label, q_module, fp_module, convs, is_block)
     targets = []
     for i, (qb, fb) in enumerate(zip(q_blocks, fp_blocks)):
         convs = list_adaround_convs(qb)
         if not convs:
-            continue
-        if i == head_idx:
-            for hi, (qc, fc) in enumerate(_hpairs(qb, fb)):     # head: conv 단위
-                targets.append((f"head.conv{hi}", qc, fc, [qc], False))
+            continue                                            # skip_head 등으로 미양자화면 자동 제외
+        is_neck = backbone_end is not None and i > backbone_end and i != head_idx
+        if i == head_idx or is_neck:
+            tag = "head" if i == head_idx else f"neck{i}"
+            for hi, (qc, fc) in enumerate(_hpairs(qb, fb)):     # head/neck: conv 단위(layer-wise)
+                targets.append((f"{tag}.conv{hi}", qc, fc, [qc], False))
         else:
-            targets.append((f"block{i}", qb, fb, convs, True))   # block 단위 joint
+            targets.append((f"block{i}", qb, fb, convs, True))   # backbone: block 단위 joint
 
     if verbose:
         nb = sum(1 for t in targets if t[4])
@@ -191,20 +300,20 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
             c.ste = True                       # block 내부로 grad 흐르게
             c.qdrop_prob = qdrop_prob          # QDrop (a): block 내부 quantizer drop
             if learn_act_scale:
-                c.use_smult = True             # forward()가 이 분기를 ste보다 우선함
+                c.use_lsq = True               # forward()가 이 분기를 ste보다 우선함
         params = [c.alpha for c in convs]
         opt = torch.optim.Adam(params, lr=lr)
         opt_a = sched_a = None
         if learn_act_scale:
-            opt_a = torch.optim.Adam([c.s_mult for c in convs], lr=act_lr)
+            opt_a = torch.optim.Adam([c.lsq_act.delta for c in convs], lr=act_lr)
             sched_a = torch.optim.lr_scheduler.CosineAnnealingLR(opt_a, T_max=iters, eta_min=0.0)
         for it in range(iters):
-            j = int(torch.randint(0, n, (1,)))
+            js = torch.randint(0, n, (batch,)).tolist()
             # 입력 복원: 텐서는 device로, 비텐서(있으면)는 그대로
-            args = _to_dev(in_buf[j], device)
+            args = _to_dev(_collate([in_buf[j] for j in js]), device)
             if qdrop_prob > 0:                 # QDrop (b): block 입력 drop(input_prob)
-                args = _mix(args, _to_dev(fp_in_buf[j], device), qdrop_prob)
-            tgt = out_buf[j].to(device).float()
+                args = _mix(args, _to_dev(_collate([fp_in_buf[j] for j in js]), device), qdrop_prob)
+            tgt = torch.cat([out_buf[j] for j in js], dim=0).to(device).float()
             opt.zero_grad()
             if opt_a is not None:
                 opt_a.zero_grad()
@@ -235,6 +344,13 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
                   f"done, h→0/1 {hconv:.0f}%, nearest 대비 flip {fl:.3f}%")
         del in_buf, out_buf, fp_in_buf
         free_cpu_mem()
+
+    if two_stage:
+        for c in list_adaround_convs(quant_module):
+            c.act_quant_enabled = True
+    if stage2:
+        _brecq_act_stage(targets, quant_module, fp_module, calib_list, device,
+                         act_iters, act_lr, act_p, verbose, batch)
 
     if n_skipped:
         # verbose=False(run_comparison 기본)여도 조용히 넘어가면 안 되는 정보.
