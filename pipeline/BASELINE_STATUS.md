@@ -143,14 +143,27 @@ naive/AdaRound/QDrop/BRECQ는 **독립된 run 사이에서 bit-identical**이다
 (`runs/91`↔`92`, `runs/97`↔`98` 6-seed 전부 확인). 따라서 **6-seed 분산 전체가 seed
 효과**(클래스 분할 + torch RNG)이고 실행 노이즈가 0이다 — 기준자로서 필요한 성질.
 
-**반면 Combined만 같은 seed·같은 코드·같은 RNG 스트림에서도 결과가 달라진다**
-(`runs/97`↔`98`에서 seed 2·4, 2/6 ≈ 33%). 나머지 넷이 bit-identical한 가운데
-Combined만 흔들리므로 비결정 연산의 위치는 `quant/promptcal.py`의
-`optimize_promptcal_scale_neighbor` 내부로 확정된다(index/scatter backward의
-atomicAdd 계열 추정. `cudnn.deterministic=True`로는 안 잡힌다).
+**반면 Combined는 같은 seed·같은 코드·같은 RNG 스트림에서도 결과가 달라졌다**
+(`runs/97`↔`98`에서 seed 2·4, 2/6). 원인을 격리한 결과(09-24):
 
-→ **Combined의 마진을 주장할 때는 seed 분산뿐 아니라 실행 분산도 반영해야 한다.**
-`--deterministic`으로 원인 연산을 특정할 수 있다(경고를 띄운다).
+| full scale(calib 256, iters 1500) Combined를 같은 seed로 2회 빌드 | s_mult 불일치 | max\|Δ\| | 빌드 |
+|---|---|---|---|
+| 기본 | **52/52 conv** | 2.48e-01 | 111s / 114s |
+| `torch.use_deterministic_algorithms(True, warn_only=True)` | **0/52** | — | 114s / 115s |
+
+**→ `--deterministic`으로 완전히 해결된다.** `cudnn.deterministic=True`는 conv
+알고리즘만 고정할 뿐 backward의 atomicAdd 계열을 못 잡는다. (`--deterministic`
+상태에서도 `adaptive_max_pool2d_backward_cuda`(ImagePoolingAttn의 AdaptiveMaxPool2d)만
+결정적 구현이 없다는 경고가 남지만, 그건 범인이 아니다 — 그 상태로 0/52가 나온다.)
+
+**baseline 수치는 `--deterministic`으로 바뀌지 않는다.** AdaRound/BRECQ/QDrop을
+켜고/끄고 빌드해 비교하면 quant weight와 LSQ delta가 전부 bit-identical이다
+(52/52 동일, iters=200·calib=64). **즉 §1의 확정 표는 그대로 유효하고 재측정이
+필요 없다.** 빌드가 느려지는 비용만 있다(Combined +2~3%, baseline +13~47%
+— baseline은 어차피 이미 결정적이라 켤 필요가 없다).
+
+→ **Combined를 다루는 모든 실행에 `--deterministic`을 켤 것.** 켜면 Combined도
+실행 분산 0이 되어, 설계 A vs B를 같은 seed에서 짝비교하면 차이가 전부 실재한다.
 
 ### 5.2 `--conditions` 목록이 RNG 스트림 위치를 정한다
 

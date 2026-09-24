@@ -466,9 +466,17 @@ AdaRound·QDrop·BRECQ에게는 decision 지표 **0/6 전패**다. 유일한 우
 모두 동일함이 나머지 세 조건으로 증명되므로, 비결정성의 위치가
 `optimize_promptcal_scale_neighbor` 내부로 확정된다.
 
-baseline은 실행 분산 0, Combined만 실행 분산 있음 → **Combined의 마진을 주장할 때
-seed 분산뿐 아니라 실행 분산도 반영해야 한다.** (Combined 측정 단계에서 `--deterministic`으로
-원인 연산을 특정할 것. 지금은 baseline 정립이 우선이라 보류.)
+**09-24 해결됨**: full scale에서 같은 seed로 Combined를 2회 빌드하면 기본 설정에서는
+s_mult가 **52/52 conv 전부 다르고**(max|Δ| 2.48e-01), `--deterministic`
+(`torch.use_deterministic_algorithms(True, warn_only=True)`)을 켜면 **0/52**로
+완전히 재현된다. 비용은 빌드 +2~3%.
+
+그리고 **`--deterministic`은 baseline 수치를 바꾸지 않는다** — AdaRound/BRECQ/QDrop을
+켜고/끄고 비교하면 quant weight·LSQ delta가 전부 bit-identical이다. §7.3 확정 표는
+그대로 유효하다.
+
+→ **Combined를 다루는 실행에는 `--deterministic`을 켤 것.** 그러면 설계 A vs B를
+같은 seed에서 짝비교할 때 차이가 전부 실재하는 값이 된다.
 
 ---
 
