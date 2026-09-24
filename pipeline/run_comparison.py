@@ -465,13 +465,17 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           adaround_learn_act_scale=False, qdrop_brecq_learn_act_scale=True,
           combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8, act_observer="mse",
           brecq_two_stage=True, brecq_act_iters=5000, brecq_batch=2, skip_head=True,
-          neck_layerwise=True, neighbor_of_cal=False, aux_mse_weight=0.0):
+          neck_layerwise=True, neighbor_of_cal=False, aux_mse_weight=0.0,
+          adaround_act_observer="minmax"):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
         m.fuse(); m.model.to(device).eval()
         return m
     m.fuse()
+    # 09-23: CLIP 인코더(clip_model) 제외는 quant_model.ALWAYS_SKIP_NAMES가 담당한다
+    # -- set_classes()가 캐싱하는 CLIP vision tower의 patch-embed conv가 양자화 대상에
+    # 섞여 모델 크기를 22.8% 과대계상하던 버그(경위는 wrap_convs 주석 참고).
     wrap_convs(m.model, w_bits, a_bits,
                skip_modules=[m.model.model[-1]] if skip_head else None)
     m.model.to(device).eval()
@@ -487,7 +491,10 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         # 09-21: activation calibration은 논문 그대로 min-max -- 다른 방법(BRECQ/QDrop/
         # naive/Combined)은 기본 act_observer가 mse로 바뀌었지만, AdaRound 논문은
         # "min/max of observed activations"를 명시하므로 여기서만 재보정해서 강제한다.
-        calibrate(m.model, calib, device=device, act_observer="minmax")
+        # adaround_act_observer="mse"로 두면 재보정을 생략해 다른 방법과 같은 관측기를
+        # 공유한다(교란변수 격리용 ablation, 기본값 minmax는 기존 동작과 동일).
+        if adaround_act_observer != act_observer:
+            calibrate(m.model, calib, device=device, act_observer=adaround_act_observer)
         convert_to_adaround(m.model, channelwise_smult=not adaround_learn_act_scale,
                             w_quant_mode="adaround")
         optimize_adaround(m.model, fp.model, calib, device, iters=recon_iters_ada,
@@ -600,6 +607,12 @@ def main():
                          "(L_2.4 grid search). AdaRound 모드는 이 플래그와 무관하게 항상 min-max로 "
                          "재보정됨(원 논문이 min-max를 명시). --act-observer minmax로 전체를 이전 "
                          "동작(모든 방법 min-max)으로 되돌릴 수 있음")
+    ap.add_argument("--adaround-act-observer", choices=["minmax", "mse"], default="minmax",
+                    help="AdaRound 모드 전용 activation observer. 기본 minmax(원 논문이 "
+                         "'min/max of observed activations'를 명시 -- 기존 동작과 동일). "
+                         "mse로 두면 다른 방법(naive/BRECQ/QDrop/Combined)과 같은 관측기를 써서 "
+                         "'재구성 단위 차이'와 'activation calibration 차이'를 분리한 단일 변수 "
+                         "비교가 된다(교란변수 격리 ablation용)")
     ap.add_argument("--neck-layerwise", action=argparse.BooleanOptionalAction, default=False,
                     help="09-21: BRECQ/QDrop 재구성 단위를 backbone(block-wise)/neck(layer-wise, "
                          "SPPF 이후 head 제외)으로 분리 -- QDrop COCO 프로토콜과 동일. 재구성 대상이 "
@@ -722,6 +735,11 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
+    ap.add_argument("--deterministic", action="store_true",
+                    help="torch.use_deterministic_algorithms(warn_only=True) 활성화. 같은 seed "
+                         "재실행에서 baseline 4개는 bit-identical이지만 Combined만 재현이 안 "
+                         "되는데(09-23 실측), 그 비결정 연산을 특정/제거하기 위한 스위치. "
+                         "기본 꺼짐 -- 켜면 일부 연산 구현이 바뀌어 기존 확정 수치와 달라질 수 있음")
     ap.add_argument("--torch-seed", type=int, default=None,
                     help="09-23 버그 수정: 기본값이 항상 0으로 고정돼 있어서, --seed로 S/H_cal/"
                          "H_eval 분할은 바뀌어도 재구성 루프의 배치 샘플링(torch.randint 등) "
@@ -747,6 +765,17 @@ def main():
     torch.cuda.manual_seed_all(args.torch_seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    if args.deterministic:
+        # 09-23: 같은 seed로 두 번 돌렸을 때 naive/AdaRound/QDrop/BRECQ는 모든 지표가
+        # bit-identical인데 Combined만 재현되지 않는다(실측: COCO_AP 36.61 vs 36.64,
+        # Heval_flip 4.79% vs 5.26%, lost 226 vs 239 -- runs/91 seed0 vs runs/92_env_recheck).
+        # cudnn.deterministic은 conv 알고리즘만 고정할 뿐 index/scatter backward의
+        # atomicAdd 계열 비결정성은 못 잡는다. 이 플래그를 켜면 결정적 구현이 있는
+        # 연산은 그걸 쓰고, 없는 연산은 경고를 띄워 "어디가 비결정적인지"를 특정할 수
+        # 있다. 기본 False -- 켜면 일부 연산 구현이 바뀌어 기존 확정 수치와 달라질 수
+        # 있으므로 진단/재현성 확보용으로만 쓸 것.
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.use_deterministic_algorithms(True, warn_only=True)
 
     from lvis import LVIS
     print(f"[lvis] loading GT {args.lvis_ann}")
@@ -837,7 +866,8 @@ def main():
                              brecq_two_stage=args.brecq_two_stage, brecq_act_iters=args.brecq_act_iters,
                              brecq_batch=args.brecq_batch, skip_head=args.skip_head, neck_layerwise=args.neck_layerwise,
                              neighbor_of_cal=args.neighbor_of_cal,
-                             aux_mse_weight=args.aux_mse_weight)
+                             aux_mse_weight=args.aux_mse_weight,
+                             adaround_act_observer=args.adaround_act_observer)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반

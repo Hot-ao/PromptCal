@@ -14,6 +14,15 @@
 이 README는 "어느 파일이 무슨 역할을 하는가"에 집중한다 — 수치를 인용할 땐
 항상 `PROMPTCAL_CURRENT_MODEL_V2.md`를 우선한다.
 
+> **09-24 — baseline을 먼저 읽을 것.** baseline(naive/AdaRound/QDrop/BRECQ)의
+> **확정 수치·재현 절차(환경 포함)·남은 결정 사항**은
+> [`BASELINE_STATUS.md`](BASELINE_STATUS.md)에 따로 정리했다. 실행하기 전에
+> 반드시 §2(환경·커맨드)를 볼 것 — 기존 ultralytics 설치가 깨져 있어 저장소 안
+> `.venv`를 써야 하고, 확정 설정은 `--recon-iters-ada 2000`이다(기본값 아님).
+> 원 논문과의 항목별 대조는 루트의
+> [`PROMPTCAL_BASELINE_FIDELITY_2026-09-23.md`](../PROMPTCAL_BASELINE_FIDELITY_2026-09-23.md)
+> (§7이 6-seed 확정판).
+
 **09-16에 §8.1이 per-tensor `s_mult` + identity-aware `margin_loss`
 설계로 갱신됐다** — 둘 다 이제 `run_comparison.py`의 **기본 동작**이다
 (claim4/claim5, `--no-smult-per-tensor`/`--no-identity-aware-margin`으로
