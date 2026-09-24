@@ -466,7 +466,9 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_recon_iters=0, combined_stage1="none", w_bits=8, a_bits=8, act_observer="mse",
           brecq_two_stage=True, brecq_act_iters=5000, brecq_batch=2, skip_head=True,
           neck_layerwise=True, neighbor_of_cal=False, aux_mse_weight=0.0,
-          adaround_act_observer="minmax"):
+          adaround_act_observer="minmax",
+          combined_learn_alpha=False, combined_alpha_lr=1e-2,
+          combined_alpha_reg_weight=1e-2, combined_range_blend=0.0):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -479,7 +481,10 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
     wrap_convs(m.model, w_bits, a_bits,
                skip_modules=[m.model.model[-1]] if skip_head else None)
     m.model.to(device).eval()
-    calibrate(m.model, calib, device=device, act_observer=act_observer)
+    # 09-24: combined만 activation 초기 범위를 MSE 최적(0.0)과 클리핑 없는
+    # min-max(1.0) 사이에서 보간할 수 있게 한다. 다른 조건은 0.0 고정이라 영향 없음.
+    calibrate(m.model, calib, device=device, act_observer=act_observer,
+              range_blend=(combined_range_blend if mode == "combined" else 0.0))
     if mode == "naive":
         pass
     elif mode == "adaround":
@@ -569,6 +574,9 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           control_mse=control_mse,
                                           neighbor_of_cal=neighbor_of_cal,
                                           aux_mse_weight=aux_mse_weight,
+                                          learn_alpha=combined_learn_alpha,
+                                          alpha_lr=combined_alpha_lr,
+                                          alpha_reg_weight=combined_alpha_reg_weight,
                                           verbose=False)
     return m
 
@@ -735,6 +743,26 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
+    ap.add_argument("--combined-range-blend", type=float, default=0.0,
+                    help="09-24: Combined의 activation 초기 범위를 MSE 최적(0.0, 기존 동작)과 "
+                         "클리핑 없는 min-max(1.0) 사이에서 보간. 근거: MSE observer는 "
+                         "calibration 분포 기준으로 범위를 잘라내는데 그게 COCO는 개선하고 "
+                         "LVIS(held-out vocabulary)는 6/6 seed 전부 악화시킨다(fidelity 문서 "
+                         "§7.2) -- 재구성 최적 범위 != cross-vocabulary 최적 범위. "
+                         "combined 모드에만 적용되며 다른 조건은 항상 0.0")
+    ap.add_argument("--combined-learn-alpha", action="store_true",
+                    help="09-24: Combined 2단계에서 alpha(weight rounding)를 s_mult와 함께 "
+                         "margin 목적함수로 공동 최적화. 기본 꺼짐(alpha 동결 = 기존 확정 설계). "
+                         "동기: s_mult는 conv당 스칼라 52개뿐이라 BRECQ/QDrop(alpha 수백만 개)과 "
+                         "자유도 차이가 크다. claim14가 실패한 건 1단계 AdaRound가 MSE 목적함수로 "
+                         "alpha를 움직여 보호 범위 밖으로 손상이 샜기 때문이므로, 같은 alpha를 "
+                         "margin_loss 아래에서 직접 푸는 것은 별개의 시도다")
+    ap.add_argument("--combined-alpha-lr", type=float, default=1e-2,
+                    help="--combined-learn-alpha의 alpha용 Adam lr (s_mult의 --lr과 분리). "
+                         "기본 1e-2. 공식 AdaRound/BRECQ는 1e-3이지만 여기선 iters=1500 예산 안에 h가 0/1로 수렴하지 못한다(실측 56%) -- 1e-2에서 99% 수렴하고 배포되는 hard 모델의 margin도 최저였다")
+    ap.add_argument("--combined-alpha-reg-weight", type=float, default=1e-2,
+                    help="--combined-learn-alpha의 rounding 정규화 가중치. margin_loss가 mean "
+                         "스케일이라 reg도 reduction='mean'으로 맞춰져 있다")
     ap.add_argument("--deterministic", action="store_true",
                     help="torch.use_deterministic_algorithms(warn_only=True) 활성화. 같은 seed "
                          "재실행에서 baseline 4개는 bit-identical이지만 Combined만 재현이 안 "
@@ -867,7 +895,11 @@ def main():
                              brecq_batch=args.brecq_batch, skip_head=args.skip_head, neck_layerwise=args.neck_layerwise,
                              neighbor_of_cal=args.neighbor_of_cal,
                              aux_mse_weight=args.aux_mse_weight,
-                             adaround_act_observer=args.adaround_act_observer)
+                             adaround_act_observer=args.adaround_act_observer,
+                             combined_learn_alpha=args.combined_learn_alpha,
+                             combined_alpha_lr=args.combined_alpha_lr,
+                             combined_alpha_reg_weight=args.combined_alpha_reg_weight,
+                             combined_range_blend=args.combined_range_blend)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반

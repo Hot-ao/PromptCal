@@ -143,6 +143,14 @@ naive/AdaRound/QDrop/BRECQ는 **독립된 run 사이에서 bit-identical**이다
 (`runs/91`↔`92`, `runs/97`↔`98` 6-seed 전부 확인). 따라서 **6-seed 분산 전체가 seed
 효과**(클래스 분할 + torch RNG)이고 실행 노이즈가 0이다 — 기준자로서 필요한 성질.
 
+> **09-24 정정 — `--deterministic`을 켠 BRECQ는 예외다.** `runs/99`↔`runs/101`(5 run)에서
+> `naive`는 7/7 bit-identical인데 `brecq`만 두 값 중 하나에 무작위로 떨어졌다
+> (AP 36.74↔36.75, Heval_flip 3.72↔3.68, lost 190↔188). `--deterministic`에서도 결정적
+> 구현이 없어 경고만 뜨는 `adaptive_max_pool2d_backward_cuda`(`ImagePoolingAttn`의
+> `AdaptiveMaxPool2d`)가 유력하다 — BRECQ는 `ImagePoolingAttn`을 블록 타깃으로 재구성하므로
+> 그 backward를 정면으로 통과한다. 위 6-seed 확정값(`runs/97`, `--deterministic` 미사용)은
+> 영향 없고, 변동폭도 통상 측정 대상의 1/25 수준이다. 자세한 내용은 claim18-d.
+
 **반면 Combined는 같은 seed·같은 코드·같은 RNG 스트림에서도 결과가 달라졌다**
 (`runs/97`↔`98`에서 seed 2·4, 2/6). 원인을 격리한 결과(09-24):
 

@@ -56,8 +56,11 @@ def set_mode(module: nn.Module, calibrating: bool = False, quantized: bool = Fal
 
 
 @torch.no_grad()
-def calibrate(model_module: nn.Module, calib_tensors, device: str = "cuda:0", act_observer: str = "minmax"):
-    """calib_tensors: 전처리된 [1,3,H,W] 텐서들의 iterable."""
+def calibrate(model_module: nn.Module, calib_tensors, device: str = "cuda:0", act_observer: str = "minmax",
+              range_blend: float = 0.0):
+    """calib_tensors: 전처리된 [1,3,H,W] 텐서들의 iterable.
+    range_blend: activation 범위를 MSE 최적(0.0, 기존 동작)과 클리핑 없는
+    min-max(1.0) 사이에서 보간 -- ActObserver.freeze 참고."""
     for m in model_module.modules():
         if isinstance(m, QuantConv2d):
             m.a_obs.method = act_observer
@@ -68,7 +71,7 @@ def calibrate(model_module: nn.Module, calib_tensors, device: str = "cuda:0", ac
         n += 1
     for m in model_module.modules():
         if isinstance(m, QuantConv2d):
-            m.a_obs.freeze()
+            m.a_obs.freeze(range_blend=range_blend)
             m.freeze_weight_quant()
     set_mode(model_module, calibrating=False, quantized=True)
     return n

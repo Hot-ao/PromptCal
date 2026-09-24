@@ -121,6 +121,14 @@ class ActObserver(nn.Module):
         self.register_buffer("min_val", torch.tensor(float("inf")))
         self.register_buffer("max_val", torch.tensor(float("-inf")))
         self._mse_buf = None                 # method="mse": calibration 전체에서 모은 표본(1회 탐색용)
+        # 09-24: method와 무관하게 "클리핑 없는" 실제 min/max도 항상 같이 관측한다.
+        # freeze(range_blend>0)에서 MSE 최적 범위와 이 범위를 보간하기 위함.
+        # 근거: MSE observer는 calibration 분포에서 L_2.4 오차를 최소화하려고 범위를
+        # 잘라내는데, 그게 COCO(=calibration vocabulary)는 개선하고 LVIS(=held-out
+        # vocabulary)는 6/6 seed 전부 악화시킨다(fidelity 문서 §7.2). 즉 재구성 최적
+        # 범위가 cross-vocabulary 최적 범위가 아니다 -- 그 사이를 열어두는 손잡이.
+        self.register_buffer("mm_min", torch.tensor(float("inf")))
+        self.register_buffer("mm_max", torch.tensor(float("-inf")))
         self.register_buffer("scale", torch.tensor(1.0))
         self.register_buffer("zero_point", torch.tensor(0.0))
         self.ready = False
@@ -149,6 +157,10 @@ class ActObserver(nn.Module):
 
     @torch.no_grad()
     def observe(self, x: torch.Tensor):
+        # 클리핑 없는 범위는 method와 무관하게 항상 추적(난수를 쓰지 않으므로
+        # 기존 RNG 스트림에 영향 없음 -- range_blend=0이면 결과 bit-identical).
+        self.mm_min = torch.minimum(self.mm_min, x.min())
+        self.mm_max = torch.maximum(self.mm_max, x.max())
         if self.method == "mse":
             # 09-21 수정: 이전엔 이미지마다 80-후보 탐색을 따로 돌려 평균(calib=256이면
             # 탐색 256회, 게다가 이미지별 결과 평균은 공식 semantics도 아님) -- 공식
@@ -168,10 +180,17 @@ class ActObserver(nn.Module):
         self.max_val = torch.maximum(self.max_val, x.max())
 
     @torch.no_grad()
-    def freeze(self):
+    def freeze(self, range_blend: float = 0.0):
+        """range_blend: 0.0=MSE 최적 범위 그대로(기존 동작), 1.0=클리핑 없는 min-max,
+        사이 값은 선형 보간. method="mse"일 때만 의미가 있다."""
         if self.method == "mse" and self._mse_buf is not None:
             mn, mx = self._mse_range(self._mse_buf)
-            self.min_val, self.max_val = torch.as_tensor(mn), torch.as_tensor(mx)
+            mn, mx = torch.as_tensor(mn), torch.as_tensor(mx)
+            if range_blend > 0:
+                b = float(range_blend)
+                mn = (1.0 - b) * mn + b * self.mm_min.to(mn)
+                mx = (1.0 - b) * mx + b * self.mm_max.to(mx)
+            self.min_val, self.max_val = mn, mx
             self._mse_buf = None
         qmin, qmax = 0, 2 ** self.bits - 1
         mn = torch.minimum(self.min_val, torch.zeros_like(self.min_val))

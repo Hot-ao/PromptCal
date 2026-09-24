@@ -18,7 +18,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from .adaround import AdaRoundQuantConv2d, list_adaround_convs, h_alpha
+from .adaround import AdaRoundQuantConv2d, list_adaround_convs, h_alpha, temp_decay
 from .pdquant import _find_head, _CV4Capture
 from .semantic_calib import get_txt_feats, text_neighbor_order, _LevelCapture, utility_refinement_terms
 
@@ -377,7 +377,9 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       cal_idx=None, cal_weight=1.0,
                                       conf_thres=0.25, verbose=True, eval_hook=None,
                                       identity_aware_margin=False, control_mse=False,
-                                      neighbor_of_cal=False, aux_mse_weight=0.0):
+                                      neighbor_of_cal=False, aux_mse_weight=0.0,
+                                      learn_alpha=False, alpha_lr=1e-2,
+                                      alpha_reg_weight=1e-2, alpha_warmup=0.2):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -464,10 +466,12 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     """
     ada = list_adaround_convs(quant_model)
     for ac in ada:
-        ac.soft = False
+        # learn_alpha면 반올림을 연속(soft)으로 열어 alpha에 grad가 흐르게 한다.
+        # 기본(False)은 기존 동작 -- round-to-nearest 고정 + s_mult만 학습.
+        ac.soft = bool(learn_alpha)
         ac.ste = False
         ac.use_smult = True
-        ac.alpha.requires_grad_(False)
+        ac.alpha.requires_grad_(bool(learn_alpha))
 
     fp_head = _find_head(fp_model); fp_cap = _CV4Capture(fp_head)
     fp_sims = []
@@ -521,6 +525,14 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     smults = [ac.s_mult for ac in ada]
     s0 = [s.detach().clone() for s in smults]
     opt = torch.optim.Adam(smults, lr=lr)
+    # learn_alpha (09-24): alpha를 margin 목적함수 아래에서 s_mult와 공동 최적화.
+    # s_mult(conv당 스칼라 52개)만으로는 BRECQ/QDrop(alpha 수백만 개 + LSQ delta 52개)과
+    # 자유도 차이가 너무 크다는 진단에서 나온 방향. claim14가 실패한 건 1단계 AdaRound가
+    # **MSE 목적함수**로 alpha를 움직여 보호 범위 밖으로 손상이 샜기 때문이므로,
+    # 같은 alpha를 margin_loss 아래에서 직접 푸는 것은 별개의 시도다.
+    # lr은 s_mult(1e-2)와 분리 -- 공식 AdaRound/BRECQ와 같은 1e-3.
+    alphas = [ac.alpha for ac in ada] if learn_alpha else []
+    opt_a = torch.optim.Adam(alphas, lr=alpha_lr) if learn_alpha else None
     pidx = torch.tensor(prompt_idx, device=device)
     cal_idx_list = list(cal_idx) if cal_idx else []
     cidx = torch.tensor(cal_idx_list, device=device, dtype=torch.long) if cal_idx_list else None
@@ -589,9 +601,26 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             if scale_reg_weight > 0:
                 sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
                 loss = loss + scale_reg_weight * sr
+        if learn_alpha and it >= alpha_warmup * iters:
+            # rounding 정규화: h(alpha)를 0/1로 몰아 hard 확정 때의 점프를 줄인다.
+            # 공식 AdaRound와 동일하게 reduction="sum". 09-24에 reduction="mean"으로
+            # (margin_loss가 mean 스케일이니 맞춰야 한다고 생각해서) 뒀다가 실측으로
+            # 틀렸음을 확인했다 -- mean은 원소당 gradient를 1/N(수백만분의 1)로 나눠서
+            # alpha_reg_weight를 5.0까지 올려도 h 수렴률이 10%(=초기 균일분포 그대로)
+            # 에서 꿈쩍하지 않았다. 맞춰야 하는 건 손실 "값"의 크기가 아니라 alpha
+            # 원소당 gradient 크기다. sum이면 loss 값은 커지지만 s_mult에는 영향이
+            # 없고(reg는 s_mult와 무관), alpha 원소마다 O(alpha_reg_weight) 크기의
+            # push를 받는다. control_mse 분기와 무관해야 하므로 루프 레벨에 둔다.
+            beta = temp_decay(it, iters, alpha_warmup)
+            rl = sum(ac.reg_loss(beta, reduction="sum") for ac in ada)
+            loss = loss + alpha_reg_weight * rl
+        if opt_a is not None:
+            opt_a.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(smults, max_norm=1.0)
         opt.step()
+        if opt_a is not None:
+            opt_a.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
             sd = sum(float((s.detach()-s0i).abs().mean()) for s, s0i in zip(smults, s0)) / len(smults)
@@ -605,6 +634,15 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             eval_hook(it + 1, quant_model)
 
     q_cap.close()
+    if learn_alpha:
+        for ac in ada:
+            ac.soft = False                      # hard 확정(round 결정 고정)
+        fl = [ac.flip_rate() for ac in ada]
+        hc = [float(((h_alpha(ac.alpha.detach()) < 0.05) |
+                     (h_alpha(ac.alpha.detach()) > 0.95)).float().mean()) * 100 for ac in ada]
+        print(f"[promptcal][learn_alpha] hard 확정. nearest 대비 평균 flip "
+              f"{sum(fl)/len(fl):.3f}% (max {max(fl):.3f}%), h->0/1 수렴 "
+              f"{sum(hc)/len(hc):.0f}% -- flip이 0에 가까우면 alpha가 안 움직인 것")
     if verbose:
         tot = sum(float((s.detach()-s0i).abs().sum()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C+neighbor] 완료 (s_mult 총 변화={tot:.3f})")

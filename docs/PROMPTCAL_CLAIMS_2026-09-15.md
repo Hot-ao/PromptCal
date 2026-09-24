@@ -1288,3 +1288,151 @@ seed5를 물리 GPU2(46GB 카드, 다른 모델)에 띄웠다가, §9의 GPU-비
 3. 이 문서와 코드 변경 전체는 이미 커밋됨(`87157e5`, `645f910`, `d5ce828`,
    `4629adf`, `345e71e`, `4332e46` + README 갱신 3건) — 새 변경이 생기면
    그때그때 커밋.
+
+---
+
+## Claim 18 — "자유도를 늘려 격차를 좁힌다"와 "범위 축이 cross-vocabulary를 가른다", 둘 다 반박됨 (09-24)
+
+**배경**: baseline 정합성 작업(→ `PROMPTCAL_BASELINE_FIDELITY_2026-09-23.md` §7)이
+끝나고 확정된 기준선은 다음과 같다(`runs/97`, 6-seed).
+
+| | COCO_AP | Heval_flip | Top1_flip | lost | LVIS_AP |
+|---|---|---|---|---|---|
+| naive | 36.617 | 5.945% | 0.667% | 291 | 0.2554 |
+| AdaRound(예산 정렬) | 36.648 | 5.142% | 0.472% | 234 | 0.2577 |
+| QDrop | 36.807 | 4.090% | 0.397% | 180 | 0.2556 |
+| **BRECQ** | 36.755 | **3.705%** | **0.345%** | **166** | 0.2560 |
+| Combined | 36.642 | 5.602% | 0.527% | 248 | 0.2576 |
+
+**Combined는 BRECQ에 Pareto-dominated 상태다.** seed별 짝비교에서 naive에만 전승이고
+AdaRound·QDrop·BRECQ에게는 decision 지표 0/6 전패. 유일한 우위인 LVIS_AP(+0.0016)도
+예산을 정렬한 AdaRound(0.2577)가 사실상 따라잡았다. **넘어야 할 선은 BRECQ의
+`Heval_flip 3.705% / lost 166`.**
+
+### 18-a. alpha를 margin 목적함수 아래에서 여는 시도 — 실패
+
+**가설**: Combined는 s_mult(conv당 스칼라 **52개**)뿐인데 BRECQ/QDrop은 alpha 수백만 개 +
+LSQ 52개다. claim14가 실패한 건 1단계 AdaRound가 **MSE 목적함수**로 alpha를 움직여
+보호 범위 밖으로 손상이 샜기 때문이니, **같은 alpha를 margin_loss 아래에서 직접 푸는
+것은 별개의 시도**일 것이다.
+
+**구현**: `--combined-learn-alpha`(기본 꺼짐). `optimize_promptcal_scale_neighbor`에서
+`ac.alpha.requires_grad_(True)` + `soft=True`, alpha 전용 Adam, AdaRound와 같은 rounding
+정규화(`temp_decay`, warmup 0.2), 종료 시 hard 확정.
+
+**하이퍼파라미터에서 두 번 틀렸다(기록용)**:
+1. 정규화를 `reduction="mean"`으로 뒀다 — margin_loss가 mean 스케일이니 손실 **값**을
+   맞춰야 한다고 생각했는데, mean은 **원소당 gradient를 1/N(수백만분의 1)로 나눈다.**
+   `alpha_reg_weight=5.0`까지 올려도 h 수렴률이 10%(=초기 균일분포 그대로)에서 꿈쩍
+   안 했다. 맞춰야 하는 건 손실 값이 아니라 **alpha 원소당 gradient 크기** →
+   공식대로 `sum`으로 수정(10%→23%).
+2. 그래도 부족했던 건 **예산**이었다. h를 0/1로 밀려면 alpha가 ~2.0 움직여야 하는데
+   `lr=1e-3 × 240 step ≈ 0.24`뿐이다. `alpha_lr`을 1e-2로 올리니 93~99% 수렴.
+
+**스윕(iters=1500, calib=64)**: `lr=1e-2, reg=1e-2`에서 h 99% 수렴, 배포되는 hard 모델의
+margin 목적함수가 기준 0.0896 → **0.0589로 34% 개선**. 여기까지는 전부 긍정적이었다.
+
+**실제 지표(`runs/99` vs `runs/100`, seed 0·1, `--deterministic`, `naive,brecq,combined`
+고정)**: `naive`/`brecq`가 두 run에서 bit-identical해 격리는 완벽. 그런데
+**10개 지표 전부, 2개 seed 전부 악화**.
+
+| 지표 | alpha 동결 | learn_alpha | |
+|---|---|---|---|
+| COCO_AP | 36.665 | 36.460 | −0.21 |
+| S_AP(보호 대상) | 37.345 | 37.135 | −0.21 |
+| Heval_flip | 5.345% | **8.040%** | +50% |
+| Top1_flip | 0.505% | **0.970%** | +92% |
+| lost | 250 | **370** | +48% |
+| LVIS_AP | 0.2579 | 0.2550 | −0.0029 |
+| LVIS_flip | 2.900% | **4.710%** | +62% |
+| LVIS_lost | 672 | **912** | +36% |
+
+alpha는 제대로 움직였다(h 수렴 98%, nearest 대비 flip 5.0% — AdaRound의 7.6%와 같은
+수준). **calibration 목적함수는 34% 개선됐는데 배포 지표는 전부 나빠졌다 = 전형적 과적합.**
+
+**교훈(가설의 전제가 틀렸다)**: 문제는 *어떤 목적함수냐*가 아니라 **감독 신호의 밀도
+대비 자유도**다.
+
+| | 파라미터 | 감독 신호 |
+|---|---|---|
+| BRECQ | alpha ~수백만 | **dense** — 모든 블록의 모든 출력 원소 |
+| Combined(기존) | s_mult **52개** | **sparse** — confident anchor의 top-(k+1) 경계, 40~60 컬럼 |
+| Combined+learn_alpha | alpha ~수백만 | **sparse (그대로)** |
+
+BRECQ가 수백만 파라미터를 감당하는 건 감독이 촘촘하기 때문이다. margin_loss는 설계상
+sparse한데(claim15가 이미 지적) 거기 수백만 손잡이를 붙이면 calibration anchor를
+외운다. **s_mult가 52개뿐인 게 약점이 아니라 정규화 장치였다.** 손상이 일반화가 필요한
+곳일수록 큰 것(LVIS_flip +62% > lost +48% > COCO_AP −0.21)과, **보호 대상인 S_AP조차
+떨어진 것**(margin 목적함수가 자기 타깃 지표에도 좋은 프록시가 아님)이 이 해석을 뒷받침한다.
+
+### 18-b. activation 범위(클리핑) 축을 여는 시도 — 실패
+
+**가설**: fidelity 문서 §7.2에서 AdaRound의 activation observer를 min-max(클리핑 없음)
+↔ MSE(클리핑)로 바꾸면 **COCO와 LVIS가 6/6 seed 양방향으로 갈린다**는 걸 확인했다.
+논문 §Reconstruction–Utility Misalignment("reconstruction-optimal scale ≠ semantic/task-
+optimal scale")의 직접적 실례이고, 논문 §Optimization이 "scale/**clipping**/rounding"을
+최적화 대상으로 명시하므로, **cross-vocabulary 일반화가 범위 축에 산다**고 보았다.
+
+**구현**: `ActObserver`가 method와 무관하게 클리핑 없는 실제 min/max를 항상 같이 관측하고,
+`freeze(range_blend)`에서 MSE 최적 범위와 선형 보간. `--combined-range-blend`(기본 0.0 =
+기존 동작, combined 모드에만 적용). 난수를 안 쓰므로 blend=0에서 bit-identical.
+
+**결과(`runs/101`, blend ∈ {0, 0.5, 1.0} × seed {0,1})**: **10개 중 7개가 2/2 seed 악화,
+나머지는 무변화. 기대했던 트레이드오프가 아예 없다.**
+
+| 지표 | b0.0 | b0.5 | b1.0 | |
+|---|---|---|---|---|
+| COCO_AP | 36.665 | 36.605 | 36.590 | 악화 2/2 |
+| Heval_flip | 5.345 | 5.500 | **6.015** | 악화 2/2 |
+| lost | 250 | 239 | **277** | 악화 2/2 |
+| **LVIS_flip** | 2.900 | 3.030 | **3.485** | **악화 2/2** |
+| **LVIS_lost** | 672 | 658 | **750** | **악화 2/2** |
+| LVIS_AP | 0.2579 | 0.2572 | 0.2577 | 무변화 |
+| LVIS_APr | 0.1788 | 0.1760 | 0.1764 | 악화 2/2 |
+
+**교훈: §7.2의 방향이 Combined에서는 뒤집힌다.**
+
+| | LVIS_flip | LVIS_lost | LVIS_AP |
+|---|---|---|---|
+| AdaRound + **min-max**(넓음) | **2.813** | **639** | **0.2577** |
+| AdaRound + MSE(좁음) | 3.603 | 824 | 0.2542 |
+| Combined + MSE(좁음) = b0.0 | **2.900** | **672** | **0.2579** |
+| Combined + **min-max**(넓음) = b1.0 | 3.485 | 750 | 0.2577 |
+
+`Combined+MSE ≈ AdaRound+min-max`, `Combined+min-max ≈ AdaRound+MSE`. **범위 자체가
+원인이 아니라, 범위와 그 위에서 최적화되는 것 사이의 상호작용이었다.** AdaRound는
+alpha를 그 격자에 맞춰 다시 푼다 — MSE 격자에서는 alpha와 격자가 같이 COCO에 과적합하고,
+min-max 격자에서는 재구성이 넓은 격자를 감당해야 해서 덜 COCO-특화된다. Combined는
+weight가 round-to-nearest 고정이라 보상 수단이 없어, 8bit에서 범위만 넓히면 해상도만
+굵어진다.
+
+**확정 설계 변경 없음.** `--combined-range-blend` 기본 0.0 유지.
+
+### 18-c. 종합 — 네 번의 시도가 같은 벽을 가리킨다
+
+| 시도 | 무엇을 바꿨나 | 결과 |
+|---|---|---|
+| claim14 | 1단계 AdaRound(MSE로 alpha) | 보호 범위 밖 손상 |
+| claim16 | aux_mse(train_cols에 dense 신호 추가) | 6-seed 반박 |
+| **18-a** | **margin_loss로 alpha** | **10/10 지표 악화** |
+| **18-b** | **activation 범위 확장** | **7/10 악화, 이득 0** |
+
+원인이 "목적함수 선택"이 아니라 **감독 신호의 밀도**로 특정됐다. 자유도를 늘리려면
+감독을 먼저 촘촘하게 만들어야 하는데, 그 시도(claim16 aux_mse)는 이미 반박됐다.
+
+뒤집어 보면 이게 논문의 이야기일 수 있다 — **Combined의 LVIS 우위는 자유도가 낮아서
+나오는 것**이고, 그렇다면 목표는 "BRECQ를 decision 지표에서 이긴다"가 아니라
+**"capacity/generalization 곡선에서 다른 지점을 차지한다"** 가 된다.
+
+### 18-d. 부수 발견: `--deterministic`에서도 BRECQ는 완전히 결정적이지 않다
+
+`runs/101`의 5개 run과 `runs/99` 사이에서 `naive`는 7/7 bit-identical인데 **`brecq`만
+두 값 중 하나에 무작위로 떨어진다**(AP 36.74↔36.75, Heval_flip 3.72↔3.68, lost 190↔188).
+`--deterministic`에서도 결정적 구현이 없어 경고만 뜨는
+**`adaptive_max_pool2d_backward_cuda`**(`ImagePoolingAttn`의 `AdaptiveMaxPool2d`)가
+유력하다 — BRECQ는 `ImagePoolingAttn`을 블록 타깃으로 재구성하므로 그 backward를
+정면으로 통과한다.
+
+변동폭이 측정 대상의 1/25 수준이라 위 결론에는 영향이 없지만, **"baseline은 실행 분산
+0"이라는 서술은 `--deterministic`을 켠 BRECQ에 한해 정정이 필요하다**(fidelity 문서
+§7.0, `pipeline/BASELINE_STATUS.md` §5.1).
