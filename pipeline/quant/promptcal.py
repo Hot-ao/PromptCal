@@ -379,7 +379,9 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       identity_aware_margin=False, control_mse=False,
                                       neighbor_of_cal=False, aux_mse_weight=0.0,
                                       learn_alpha=False, alpha_lr=1e-2,
-                                      alpha_reg_weight=1e-2, alpha_warmup=0.2):
+                                      alpha_reg_weight=1e-2, alpha_warmup=0.2,
+                                      utility_stage2_frac=0.0, thresh_w=1.0, box_w=0.5,
+                                      det_thres=0.25, margin_thres=0.5):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -473,17 +475,35 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
         ac.use_smult = True
         ac.alpha.requires_grad_(bool(learn_alpha))
 
+    # utility_stage2_frac > 0 (09-24): 논문 §4.3 Utility-Constrained Refinement.
+    # margin/neighbor(=ranking 보존)만으로는 최종 탐지 성능이 보장되지 않는다는
+    # 논문 motivation(§Reconstruction--Utility Misalignment)에 직접 대응하는 항으로,
+    # 마지막 stage2_frac 구간에서만 켜진다:
+    #   l_thresh -- FP가 det_thres를 넘었던 target의 quant 확률이 그 밑으로
+    #               떨어지지 않게 하는 one-sided hinge (threshold crossing)
+    #   l_box    -- 같은 anchor에서 cv2(box regression) 출력을 FP와 MSE로 맞춤
+    # 구현은 semantic_calib.utility_refinement_terms를 그대로 쓴다(30번/구
+    # optimize_..._utility와 동일). 기본 0.0 = 꺼짐 = 기존 동작과 bit-identical.
+    use_utility = utility_stage2_frac > 0
     fp_head = _find_head(fp_model); fp_cap = _CV4Capture(fp_head)
-    fp_sims = []
+    fp_cv2_cap = _LevelCapture(fp_head.cv2) if use_utility else None
+    fp_sims, fp_cv2s = [], []
     with torch.no_grad():
         for t in calib_tensors:
-            fp_cap.clear(); fp_model(t.to(device))
+            fp_cap.clear()
+            if fp_cv2_cap is not None:
+                fp_cv2_cap.clear()
+            fp_model(t.to(device))
             parts = []
             for i in sorted(fp_cap.buf):
                 B, P, H, W = fp_cap.buf[i].shape
                 parts.append(fp_cap.buf[i].reshape(B, P, H*W))
             fp_sims.append(torch.cat(parts, dim=2)[0].transpose(0, 1).detach())
+            if fp_cv2_cap is not None:
+                fp_cv2s.append(fp_cv2_cap.assemble().detach())
     fp_cap.close()
+    if fp_cv2_cap is not None:
+        fp_cv2_cap.close()
 
     txt_feats = get_txt_feats(fp_model).to(device)
     neighbor_order = text_neighbor_order(txt_feats)
@@ -522,6 +542,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
 
     q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head)
+    q_cv2_cap = _LevelCapture(q_head.cv2) if use_utility else None
+    stage2_start = int((1 - utility_stage2_frac) * iters) if use_utility else iters
     smults = [ac.s_mult for ac in ada]
     s0 = [s.detach().clone() for s in smults]
     opt = torch.optim.Adam(smults, lr=lr)
@@ -566,6 +588,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             continue
         aidx = conf.nonzero(as_tuple=True)[0]
         q_cap.clear(); opt.zero_grad()
+        if q_cv2_cap is not None:
+            q_cv2_cap.clear()
         quant_model(t)
         parts = []
         for i in sorted(q_cap.buf):
@@ -601,6 +625,11 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             if scale_reg_weight > 0:
                 sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
                 loss = loss + scale_reg_weight * sr
+        if use_utility and it >= stage2_start:
+            l_thresh, l_box = utility_refinement_terms(
+                sim_q, sim_fp, q_cv2_cap.assemble(), fp_cv2s[j], pidx,
+                det_thres=det_thres, conf_thres=conf_thres, margin_thres=margin_thres)
+            loss = loss + thresh_w * l_thresh + box_w * l_box
         if learn_alpha and it >= alpha_warmup * iters:
             # rounding 정규화: h(alpha)를 0/1로 몰아 hard 확정 때의 점프를 줄인다.
             # 공식 AdaRound와 동일하게 reduction="sum". 09-24에 reduction="mean"으로
@@ -634,6 +663,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             eval_hook(it + 1, quant_model)
 
     q_cap.close()
+    if q_cv2_cap is not None:
+        q_cv2_cap.close()
     if learn_alpha:
         for ac in ada:
             ac.soft = False                      # hard 확정(round 결정 고정)

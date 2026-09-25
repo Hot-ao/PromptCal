@@ -165,8 +165,19 @@ def utility_refinement_terms(sim_q, sim_fp, cv2_q, cv2_fp, pidx, det_thres=0.25,
 
     # threshold crossing: FP가 det_thres 위였던 target column의 quant 확률이
     # 그 밑으로 떨어지지 않도록 one-sided hinge.
+    #
+    # 09-25 버그 수정: prob_fp는 **전체 anchor** 배열인데 행 인덱스를
+    # torch.arange(len(aidx))로 주고 있었다 -- 선택된 reliable anchor(aidx)가 아니라
+    # 앞에서부터 len(aidx)개 행(대부분 배경 anchor)을 보게 된다. 같은 함수의 다른
+    # 줄(sub_fp[aidx], sim_q[aidx, targets], cv2_q[aidx])은 전부 aidx를 제대로 쓴다.
+    # 실측 결과 reliable anchor 538개 중 fp_positive가 **0개**라 l_thresh가 항상
+    # 정확히 0이었다 -- 즉 논문 §4.3의 threshold-crossing 항이 한 번도 작동한 적이
+    # 없다(이 helper를 쓰는 optimize_semantic_pcal(30번)과 구
+    # optimize_promptcal_scale_neighbor_utility도 마찬가지). thresh_w를 1.0/2.0으로
+    # 바꿔도 결과가 bit-identical하게 나온 것으로 확인됨(runs/103).
+    # 올바른 인덱싱은 prob_fp[aidx, local_argmax] (= maxp[aidx]).
     q_prob_t = sim_q[aidx, targets].sigmoid()
-    fp_positive = prob_fp[torch.arange(len(aidx), device=device), local_argmax] > det_thres
+    fp_positive = prob_fp[aidx, local_argmax] > det_thres
     if fp_positive.any():
         l_thresh = F.relu(det_thres - q_prob_t[fp_positive]).pow(2).mean()
     else:

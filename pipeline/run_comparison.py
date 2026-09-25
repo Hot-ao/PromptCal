@@ -468,7 +468,8 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           neck_layerwise=True, neighbor_of_cal=False, aux_mse_weight=0.0,
           adaround_act_observer="minmax",
           combined_learn_alpha=False, combined_alpha_lr=1e-2,
-          combined_alpha_reg_weight=1e-2, combined_range_blend=0.0):
+          combined_alpha_reg_weight=1e-2, combined_range_blend=0.0,
+          combined_utility_frac=0.0, combined_thresh_w=1.0, combined_box_w=0.5):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -574,6 +575,8 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           control_mse=control_mse,
                                           neighbor_of_cal=neighbor_of_cal,
                                           aux_mse_weight=aux_mse_weight,
+                                          utility_stage2_frac=combined_utility_frac,
+                                          thresh_w=combined_thresh_w, box_w=combined_box_w,
                                           learn_alpha=combined_learn_alpha,
                                           alpha_lr=combined_alpha_lr,
                                           alpha_reg_weight=combined_alpha_reg_weight,
@@ -743,6 +746,19 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
+    ap.add_argument("--combined-utility-frac", type=float, default=0.0,
+                    help="09-24: 논문 §4.3 Utility-Constrained Refinement. 마지막 이 비율만큼의 "
+                         "iteration에서 threshold-crossing hinge(l_thresh)와 box consistency"
+                         "(l_box)를 margin/neighbor 위에 추가한다. 0.0=꺼짐(기존 동작과 "
+                         "bit-identical), 0.3=마지막 30%%. 동기: 논문 motivation의 'rank "
+                         "preservation alone이 AP를 보장하지 않음'에 직접 대응하는 항인데 "
+                         "구현만 돼 있고(semantic_calib.utility_refinement_terms) 확정 "
+                         "경로에서 호출된 적이 없다. 둘 다 sparse/저자유도라 claim18-a의 "
+                         "과적합 패턴에 걸리지 않는다")
+    ap.add_argument("--combined-thresh-w", type=float, default=1.0,
+                    help="--combined-utility-frac의 threshold-crossing hinge 가중치")
+    ap.add_argument("--combined-box-w", type=float, default=0.5,
+                    help="--combined-utility-frac의 box consistency 가중치")
     ap.add_argument("--combined-range-blend", type=float, default=0.0,
                     help="09-24: Combined의 activation 초기 범위를 MSE 최적(0.0, 기존 동작)과 "
                          "클리핑 없는 min-max(1.0) 사이에서 보간. 근거: MSE observer는 "
@@ -759,7 +775,7 @@ def main():
                          "margin_loss 아래에서 직접 푸는 것은 별개의 시도다")
     ap.add_argument("--combined-alpha-lr", type=float, default=1e-2,
                     help="--combined-learn-alpha의 alpha용 Adam lr (s_mult의 --lr과 분리). "
-                         "기본 1e-2. 공식 AdaRound/BRECQ는 1e-3이지만 여기선 iters=1500 예산 안에 h가 0/1로 수렴하지 못한다(실측 56%) -- 1e-2에서 99% 수렴하고 배포되는 hard 모델의 margin도 최저였다")
+                         "기본 1e-2. 공식 AdaRound/BRECQ는 1e-3이지만 여기선 iters=1500 예산 안에 h가 0/1로 수렴하지 못한다(실측 56%%) -- 1e-2에서 99%% 수렴하고 배포되는 hard 모델의 margin도 최저였다")
     ap.add_argument("--combined-alpha-reg-weight", type=float, default=1e-2,
                     help="--combined-learn-alpha의 rounding 정규화 가중치. margin_loss가 mean "
                          "스케일이라 reg도 reduction='mean'으로 맞춰져 있다")
@@ -899,7 +915,10 @@ def main():
                              combined_learn_alpha=args.combined_learn_alpha,
                              combined_alpha_lr=args.combined_alpha_lr,
                              combined_alpha_reg_weight=args.combined_alpha_reg_weight,
-                             combined_range_blend=args.combined_range_blend)
+                             combined_range_blend=args.combined_range_blend,
+                             combined_utility_frac=args.combined_utility_frac,
+                             combined_thresh_w=args.combined_thresh_w,
+                             combined_box_w=args.combined_box_w)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
