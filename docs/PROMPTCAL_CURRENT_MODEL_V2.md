@@ -1,5 +1,11 @@
 # Combined 모델 현재 설계 전체 문서 v2 (2026-09-17 작성)
 
+> **09-25 — V3가 이 문서를 잇는다.** baseline이 09-24 정합성 수정으로 바뀌었고
+> (AdaRound 예산 정렬 등), 그 위에서 격차를 좁히려는 다섯 번의 시도가 전부 실패했다.
+> **현재 위치·닫힌 방향·열린 선택지는 [`PROMPTCAL_CURRENT_MODEL_V3.md`](PROMPTCAL_CURRENT_MODEL_V3.md)**
+> 를 볼 것. 이 문서의 **설계 세부(§5 목적함수·프롬프트 3분할)는 그대로 유효**하지만,
+> **§8 성능 표는 stale**이다(baseline 수치가 바뀌었다 — `pipeline/BASELINE_STATUS.md` §1).
+
 **이 문서가 지금부터의 단일 진실 공급원이다.** [`PROMPTCAL_CURRENT_MODEL.md`](PROMPTCAL_CURRENT_MODEL.md)
 (v1, 2026-09-08~09-16 작성)는 per-channel `s_mult` 설계를 중심으로 쓰였고
 그 뒤로 수많은 패치(09-09 H_eval 버그, 09-10~09-12 하이퍼파라미터 스윕

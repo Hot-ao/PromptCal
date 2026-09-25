@@ -1436,3 +1436,107 @@ weight가 round-to-nearest 고정이라 보상 수단이 없어, 8bit에서 범�
 변동폭이 측정 대상의 1/25 수준이라 위 결론에는 영향이 없지만, **"baseline은 실행 분산
 0"이라는 서술은 `--deterministic`을 켠 BRECQ에 한해 정정이 필요하다**(fidelity 문서
 §7.0, `pipeline/BASELINE_STATUS.md` §5.1).
+
+---
+
+## Claim 19 — 논문 §4.3 Utility-Constrained Refinement: 절반은 죽은 코드였고, 고쳐도 순수 이득은 없다 (09-25)
+
+**배경**: claim18-c에서 "자유도를 늘리는 방향"이 닫혔고, 남은 건 **감독의 종류를
+바꾸는 것**이었다. 논문 §4.3(Utility Constraints: prompt ranking/margin, threshold
+crossing, box consistency)이 명시한 두 항 `l_thresh`/`l_box`가
+`semantic_calib.utility_refinement_terms`에 **구현만 돼 있고 확정 경로에서 호출된 적이
+없었다**. 파라미터를 하나도 안 늘리면서(s_mult 52개 그대로) 감독만 추가하는 방향이라
+claim18-a의 과적합 패턴에 안 걸린다고 보았다.
+
+**구현**: 구 `optimize_promptcal_scale_neighbor_utility`를 그대로 쓰지 않았다 — 확정
+설계 이전 버전이라 `cal_idx`/`identity_aware_margin`/`scale_reg_weight`가 없어서 변수가
+여러 개 동시에 바뀐다. 확정 함수 `optimize_promptcal_scale_neighbor`에 옵트인으로
+얹어 단일 변수 비교가 되게 했다(`--combined-utility-frac`, 기본 0.0 = bit-identical).
+
+### 19-a. 1차 측정: 개선은 있으나 트레이드오프 (`runs/102`)
+
+`frac=0.3`(마지막 30% 구간), `thresh_w=1.0, box_w=0.5`(구 함수에서 상속한 미튜닝 값):
+
+| | 개선 2/2 seed | 악화 2/2 seed |
+|---|---|---|
+| | `Heval_flip` 5.345→5.180, `lost` 250→**229**, `LVIS_lost` 672→646 | `LVIS_AP` 0.2579→0.2566, `LVIS_APr` 0.1788→**0.1758**, `H_eval_AP` 32.94→32.79 |
+
+네 번의 시도 중 **처음으로 일관된 개선**이 나왔다. 그러나 대가가 하필 Combined의
+유일한 차별점이었다 — LVIS_AP 마진이 BRECQ 대비 +0.0028→+0.0015로 반토막, LVIS_APr는
+동률(0.1788 vs 0.1789)에서 열세(0.1758)로 전환. `frac=0.5`는 0.3보다 나쁨.
+
+### 19-b. 두 항 분해에서 버그 발견 (`runs/103`)
+
+`l_thresh`는 sparse/AP정렬, `l_box`는 dense MSE(=claim16 `aux_mse`와 같은 패턴)라
+성격이 정반대여서 분해했다. 결과가 결정적이었다:
+
+| 지표 | base | both | **thresh만**(box_w=0) | **box만**(thresh_w=0) |
+|---|---|---|---|---|
+| Heval_flip | 5.345 | 5.180 | **5.345** | **5.180** |
+| lost | 250 | 229 | **250** | **229** |
+| LVIS_AP | 0.2579 | 0.2566 | **0.2579** | **0.2566** |
+
+**`thresh만` = `base`와 10개 지표 전부 bit-identical**(`thresh_w`를 1.0→2.0으로 올려도
+동일), **`box만` = `both`와 완전히 동일**. 즉 `l_thresh`의 기여가 정확히 0이었다.
+
+**원인 — `semantic_calib.py:169` 인덱싱 버그**:
+```python
+fp_positive = prob_fp[torch.arange(len(aidx), device=device), local_argmax] > det_thres
+#                     ^^^ prob_fp는 전체 anchor 배열인데 앞에서부터 len(aidx)개 행을 본다
+```
+같은 함수의 다른 줄(`sub_fp[aidx]`, `sim_q[aidx, targets]`, `cv2_q[aidx]`)은 전부
+`aidx`를 제대로 쓴다. 올바른 인덱싱은 `prob_fp[aidx, local_argmax]`(= `maxp[aidx]`).
+
+**실측 (수정 전 → 후)**: reliable anchor 538개 중 `fp_positive` **0개 → 538개**,
+그중 hinge 실제 발동 **0개 → 27개**(quant prob 최솟값 0.0000). 보호 대상이 실재했는데
+항이 죽어 방치돼 있었다.
+
+**영향 범위**: 이 helper를 쓰는 `optimize_semantic_pcal`(scripts/30), 구
+`optimize_promptcal_scale_neighbor_utility`, 그리고 확정 경로의 `--combined-utility-frac`.
+**과거에 utility/threshold 항에 성과를 귀속시킨 결과가 있다면 무효다.** 19-a에서 본
+효과는 전부 `l_box` 단독이었다. 수정 커밋 `5bc00d6`.
+
+### 19-c. 버그 수정 후 `l_thresh` 단독 측정 (`runs/104`) — 순수 이득 없음
+
+`frac=0.3`, `box_w=0`으로 고정하고 `thresh_w` ∈ {1.0, 5.0, 20.0}:
+
+| 지표 | base | box만 | **thr w=1** | **thr w=5** | brecq |
+|---|---|---|---|---|---|
+| Heval_flip | 5.345 | 5.180 | **5.175** 개선2/2 | 5.280 개선2/2 | **3.765** |
+| lost | 250 | **229** | 240 개선2/2 | 240 (1/2) | **190** |
+| LVIS_lost | 672 | **646** | 649 (1/2) | 702 악화2/2 | 630 |
+| LVIS_AP | 0.2579 | 0.2566 | 0.2587 (1/2) | 0.2576 악화2/2 | 0.2551 |
+| **LVIS_APr** | **0.1788** | 0.1758 | **0.1745** 악화2/2 | 0.1745 악화2/2 | **0.1789** |
+
+`l_thresh`는 이제 작동한다(`Heval_flip` 2/2 개선). 그러나 **`LVIS_APr`이 2/2 악화로
+`l_box`보다도 나쁘다**. 가중치를 올려도 개선되지 않는다 — `w=5`는 `w=1`보다 나쁘고
+`LVIS_lost`는 base보다도 악화(702 vs 672).
+
+seed0 가중치 사다리에서 `LVIS_APr`이 `0.1779 → 0.1711(w1) → 0.1775(w5) → 0.1813(w20)`로
+**단조롭지 않게 요동**한다. Combined는 `--deterministic`에서 실행 분산이 0이므로 이건
+노이즈가 아니라 실재하는 값이고, **방향성 있게 이끄는 게 아니라 흔들어놓는 데 가깝다**는
+뜻이다.
+
+**결론: 어떤 설정도 "decision 개선 + LVIS 유지"를 만들지 못한다.** 셋 다 COCO decision을
+조금 얻고 `LVIS_APr`을 내주는 같은 모양이고, 최선(`box`, lost 229)조차 BRECQ의 190에
+한참 못 미친다. **`base`(utility 꺼짐)가 Combined의 차별점을 가장 잘 지키는 설정이며
+확정 설계는 불변이다.** 세 플래그 전부 기본 0.0 = 꺼짐 = bit-identical.
+
+### 19-d. 다섯 번의 시도 종합
+
+| | 무엇을 바꿨나 | 결과 |
+|---|---|---|
+| claim14 | 1단계 AdaRound(MSE로 alpha) | 보호 범위 밖 손상 |
+| claim16 | `aux_mse`(dense 신호 추가) | 6-seed 반박 |
+| claim18-a | margin_loss로 alpha | 10/10 지표 악화 |
+| claim18-b | activation 범위 확장 | 7/10 악화, 이득 0 |
+| **claim19** | **§4.3 utility 두 항** | **LVIS_APr 트레이드, BRECQ 근처 못 감** |
+
+**논문 §4.3이 명시한 마지막 축까지 닫혔다.** "BRECQ를 decision 지표에서 이긴다"는
+목표는 이 메커니즘 계열로는 도달 불가로 보인다 — 원인은 claim18-c의 진단(sparse
+calibration-vocabulary 감독 + 저자유도 조합의 한계)과 일관된다.
+
+데이터가 확실히 받쳐주는 대안 축은 **calibration 비용**이다(`runs/97` seed0 빌드 시간):
+AdaRound 4304s / QDrop 2988s / BRECQ 1742s / **Combined 109s**. **BRECQ의 1/16 비용으로
+cross-vocabulary AP 최상위권**(LVIS_AP 0.2576 vs BRECQ 0.2560, LVIS_APr 0.1788 vs 0.1789).
+논문 §Experiments의 Efficiency(Calibration cost) 절에 직접 대응한다.

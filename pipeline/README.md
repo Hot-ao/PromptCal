@@ -22,6 +22,10 @@
 > 원 논문과의 항목별 대조는 루트의
 > [`PROMPTCAL_BASELINE_FIDELITY_2026-09-23.md`](../PROMPTCAL_BASELINE_FIDELITY_2026-09-23.md)
 > (§7이 6-seed 확정판).
+>
+> **09-25 — 제안 방법(Combined)의 현재 상태**는
+> [`docs/PROMPTCAL_CURRENT_MODEL_V3.md`](../docs/PROMPTCAL_CURRENT_MODEL_V3.md)로
+> 옮겼다. `PROMPTCAL_CURRENT_MODEL_V2.md`의 설계 세부는 유효하나 **성능 표는 stale**이다.
 
 **09-16에 §8.1이 per-tensor `s_mult` + identity-aware `margin_loss`
 설계로 갱신됐다** — 둘 다 이제 `run_comparison.py`의 **기본 동작**이다
