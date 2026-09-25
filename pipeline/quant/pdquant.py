@@ -27,19 +27,38 @@ def _find_head(model):
 
 
 class _CV4Capture:
-    """head.cv4의 레벨별 출력을 grad 유지한 채 캡처."""
-    def __init__(self, head):
+    """head.cv4의 레벨별 출력을 grad 유지한 채 캡처.
+
+    capture_input=True(09-25)면 cv4의 **입력**(ContrastiveHead.forward(x, w)의 x =
+    region feature)도 같이 모은다. ContrastiveHead는 sim_j = x̂ · ŵ_j 이므로,
+    x̂(region embedding의 단위 방향)를 보존하면 프롬프트를 하나도 참조하지 않고
+    seen/unseen 모든 vocabulary의 유사도가 함께 보존된다 -- vocabulary-agnostic
+    정규화의 자연스러운 대상이다(V3 §6 방향 2)."""
+    def __init__(self, head, capture_input=False):
         self.head = head
         self.buf = {}
+        self.inbuf = {}
+        self.capture_input = capture_input
         self.handles = []
         for i, sub in enumerate(head.cv4):
             def make(idx):
                 def hook(_m, _inp, out):
                     self.buf[idx] = out          # grad 유지 (detach 안 함)
+                    if self.capture_input:
+                        self.inbuf[idx] = _inp[0]
                 return hook
             self.handles.append(sub.register_forward_hook(make(i)))
 
-    def clear(self): self.buf = {}
+    def assemble_input(self):
+        """레벨별 region feature를 [anchors, C]로 조립(정규화 전)."""
+        parts = []
+        for i in sorted(self.inbuf):
+            t = self.inbuf[i]
+            B, C, H, W = t.shape
+            parts.append(t.reshape(B, C, H * W))
+        return torch.cat(parts, dim=2)[0].transpose(0, 1)
+
+    def clear(self): self.buf = {}; self.inbuf = {}
     def close(self):
         for h in self.handles: h.remove()
         self.handles = []

@@ -11,6 +11,7 @@ V2(`PROMPTCAL_CURRENT_MODEL_V2.md`, 09-17)는 설계·하이퍼파라미터·결
 - baseline 확정 수치·재현 절차 → **`pipeline/BASELINE_STATUS.md`**
 - baseline이 원 논문과 어떻게 대응되는지 → **`PROMPTCAL_BASELINE_FIDELITY_2026-09-23.md`**
 - 각 시도의 상세 경위 → **`PROMPTCAL_CLAIMS_2026-09-15.md` claim14~19**
+- **논문 절별 증거 매핑·빠진 실험** → **[`PAPER_EVIDENCE_MAP.md`](PAPER_EVIDENCE_MAP.md)** (09-26)
 
 ---
 

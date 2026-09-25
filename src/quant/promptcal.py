@@ -381,7 +381,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       learn_alpha=False, alpha_lr=1e-2,
                                       alpha_reg_weight=1e-2, alpha_warmup=0.2,
                                       utility_stage2_frac=0.0, thresh_w=1.0, box_w=0.5,
-                                      det_thres=0.25, margin_thres=0.5):
+                                      det_thres=0.25, margin_thres=0.5,
+                                      region_dir_weight=0.0):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -484,10 +485,29 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     #   l_box    -- 같은 anchor에서 cv2(box regression) 출력을 FP와 MSE로 맞춤
     # 구현은 semantic_calib.utility_refinement_terms를 그대로 쓴다(30번/구
     # optimize_..._utility와 동일). 기본 0.0 = 꺼짐 = 기존 동작과 bit-identical.
+    # region_dir_weight > 0 (09-25): vocabulary-agnostic 정규화.
+    # ContrastiveHead는 sim_j = x_hat · w_hat_j 이므로, region embedding의 단위 방향
+    # x_hat이 보존되면 **프롬프트를 하나도 참조하지 않고** seen/unseen/in-span/out-of-span
+    # 모든 vocabulary의 유사도가 함께 보존된다.
+    #
+    # 왜 이 형태인가: 초록은 "calibration vocabulary 과적합을 억제해 새 vocabulary에서도
+    # 보존"을 약속하는데, 현재 목적함수의 모든 항(margin/neighbor/scale_reg)이
+    # calibration vocabulary 위에서 계산된다 -- neighbor_loss는 claim16이 보였듯
+    # COCO-80 폐쇄 구조에서 H_cal과 구조적으로 동일해 무력화됐다. 그렇다고 합성
+    # 프롬프트(calibration 임베딩의 볼록결합)를 쓰는 건 수학적으로 퇴화한다:
+    # sim_s = (a·s_raw)/sqrt(a^T G a)로 calibration 컬럼들의 결정적 함수라,
+    # 그 컬럼이 보존되면 자동 보존 = claim16 aux_mse와 같은 것이 된다.
+    # 프롬프트 쪽에서는 span 밖으로 못 나가므로, 한 단계 아래인 region 쪽을 잡는다.
+    #
+    # BRECQ의 feature reconstruction과 다른 점: BRECQ는 모든 블록의 원시 activation을
+    # MSE로 맞추고, 여기서는 head 입력의 **단위 방향**만 (decision-relevant anchor에서)
+    # 지킨다 -- 크기는 버린다. 순위를 정하는 건 방향이기 때문.
+    # 기본 0.0 = 꺼짐 = 기존 동작과 bit-identical.
+    use_region_dir = region_dir_weight > 0
     use_utility = utility_stage2_frac > 0
-    fp_head = _find_head(fp_model); fp_cap = _CV4Capture(fp_head)
+    fp_head = _find_head(fp_model); fp_cap = _CV4Capture(fp_head, capture_input=use_region_dir)
     fp_cv2_cap = _LevelCapture(fp_head.cv2) if use_utility else None
-    fp_sims, fp_cv2s = [], []
+    fp_sims, fp_cv2s, fp_regions = [], [], []
     with torch.no_grad():
         for t in calib_tensors:
             fp_cap.clear()
@@ -499,6 +519,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                 B, P, H, W = fp_cap.buf[i].shape
                 parts.append(fp_cap.buf[i].reshape(B, P, H*W))
             fp_sims.append(torch.cat(parts, dim=2)[0].transpose(0, 1).detach())
+            if use_region_dir:
+                fp_regions.append(F.normalize(fp_cap.assemble_input(), dim=1, p=2).detach())
             if fp_cv2_cap is not None:
                 fp_cv2s.append(fp_cv2_cap.assemble().detach())
     fp_cap.close()
@@ -541,7 +563,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             neighbor_set.update(picked)
     neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
 
-    q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head)
+    q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head, capture_input=use_region_dir)
     q_cv2_cap = _LevelCapture(q_head.cv2) if use_utility else None
     stage2_start = int((1 - utility_stage2_frac) * iters) if use_utility else iters
     smults = [ac.s_mult for ac in ada]
@@ -625,6 +647,12 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             if scale_reg_weight > 0:
                 sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
                 loss = loss + scale_reg_weight * sr
+        if use_region_dir:
+            # reliable anchor(aidx)에서만, region embedding 단위 방향의 cosine 보존.
+            # 1 - cos 이라 [0,2] 범위이고 프롬프트 컬럼을 전혀 참조하지 않는다.
+            rq = F.normalize(q_cap.assemble_input(), dim=1, p=2)
+            rd = (1.0 - (rq[aidx] * fp_regions[j][aidx]).sum(-1)).mean()
+            loss = loss + region_dir_weight * rd
         if use_utility and it >= stage2_start:
             l_thresh, l_box = utility_refinement_terms(
                 sim_q, sim_fp, q_cv2_cap.assemble(), fp_cv2s[j], pidx,

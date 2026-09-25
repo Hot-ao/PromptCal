@@ -469,7 +469,8 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           adaround_act_observer="minmax",
           combined_learn_alpha=False, combined_alpha_lr=1e-2,
           combined_alpha_reg_weight=1e-2, combined_range_blend=0.0,
-          combined_utility_frac=0.0, combined_thresh_w=1.0, combined_box_w=0.5):
+          combined_utility_frac=0.0, combined_thresh_w=1.0, combined_box_w=0.5,
+          combined_region_dir_weight=0.0):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -575,6 +576,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           control_mse=control_mse,
                                           neighbor_of_cal=neighbor_of_cal,
                                           aux_mse_weight=aux_mse_weight,
+                                          region_dir_weight=combined_region_dir_weight,
                                           utility_stage2_frac=combined_utility_frac,
                                           thresh_w=combined_thresh_w, box_w=combined_box_w,
                                           learn_alpha=combined_learn_alpha,
@@ -746,6 +748,15 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
+    ap.add_argument("--combined-region-dir-weight", type=float, default=0.0,
+                    help="09-25: vocabulary-agnostic 정규화. ContrastiveHead가 "
+                         "sim_j = x_hat . w_hat_j 이므로 region embedding의 단위 방향을 "
+                         "FP와 맞추면 프롬프트를 하나도 참조하지 않고 seen/unseen 모든 "
+                         "vocabulary의 유사도가 함께 보존된다. 초록이 약속한 'calibration "
+                         "vocabulary 과적합 억제'를 실제로 수행하는 유일한 항 -- 기존 "
+                         "margin/neighbor/scale_reg는 전부 calibration vocabulary 위에서 "
+                         "계산되고 neighbor_loss는 COCO-80 폐쇄 구조에서 무력화됐다(claim16). "
+                         "외부 vocabulary를 안 쓰므로 공정성/누설 문제가 없다. 0.0=꺼짐")
     ap.add_argument("--combined-utility-frac", type=float, default=0.0,
                     help="09-24: 논문 §4.3 Utility-Constrained Refinement. 마지막 이 비율만큼의 "
                          "iteration에서 threshold-crossing hinge(l_thresh)와 box consistency"
@@ -918,7 +929,8 @@ def main():
                              combined_range_blend=args.combined_range_blend,
                              combined_utility_frac=args.combined_utility_frac,
                              combined_thresh_w=args.combined_thresh_w,
-                             combined_box_w=args.combined_box_w)
+                             combined_box_w=args.combined_box_w,
+                             combined_region_dir_weight=args.combined_region_dir_weight)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
