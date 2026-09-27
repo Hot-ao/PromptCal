@@ -470,7 +470,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_learn_alpha=False, combined_alpha_lr=1e-2,
           combined_alpha_reg_weight=1e-2, combined_range_blend=0.0,
           combined_utility_frac=0.0, combined_thresh_w=1.0, combined_box_w=0.5,
-          combined_region_dir_weight=0.0):
+          combined_region_dir_weight=0.0, margin_one_sided=False):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -576,6 +576,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           control_mse=control_mse,
                                           neighbor_of_cal=neighbor_of_cal,
                                           aux_mse_weight=aux_mse_weight,
+                                          margin_one_sided=margin_one_sided,
                                           region_dir_weight=combined_region_dir_weight,
                                           utility_stage2_frac=combined_utility_frac,
                                           thresh_w=combined_thresh_w, box_w=combined_box_w,
@@ -748,6 +749,14 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
+    ap.add_argument("--margin-one-sided", action="store_true",
+                    help="09-27: margin_loss를 단측(one-sided) hinge로. 기본 꺼짐(대칭, 기존 동작). "
+                         "기존 (q_m-fp_m)^2는 margin이 FP보다 **넓어진** 경우도 똑같이 벌하는데, "
+                         "넓어지는 건 flip에서 멀어지는 것이라 바람직하다. 실측: margin 항의 "
+                         "48.1%%가 넓어진 쪽이고 전체 벌점의 30.4%%가 그걸 억제하는 데 쓰였다. "
+                         "즉 대칭 형태는 decision loss가 아니라 margin 공간의 reconstruction "
+                         "loss다 -- 이 프로젝트가 neighbor_loss에서 이미 확인한 단측 채택(41번)을 "
+                         "margin_loss 본체에도 적용하는 것. relu(fp_m - q_m)^2")
     ap.add_argument("--combined-region-dir-weight", type=float, default=0.0,
                     help="09-25: vocabulary-agnostic 정규화. ContrastiveHead가 "
                          "sim_j = x_hat . w_hat_j 이므로 region embedding의 단위 방향을 "
@@ -930,7 +939,8 @@ def main():
                              combined_utility_frac=args.combined_utility_frac,
                              combined_thresh_w=args.combined_thresh_w,
                              combined_box_w=args.combined_box_w,
-                             combined_region_dir_weight=args.combined_region_dir_weight)
+                             combined_region_dir_weight=args.combined_region_dir_weight,
+                             margin_one_sided=args.margin_one_sided)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반

@@ -33,7 +33,7 @@ def decision_loss(sim_q, sim_fp):
     return F.cross_entropy(sim_q, target)
 
 
-def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0, identity_aware=False):
+def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0, identity_aware=False, one_sided=False):
     """top-(k+1) 인접 pairwise margin을 FP와 맞춤. top-k 경계 margin에 가중.
     sim_*: [anchors, P] pre-sigmoid 유사도. confident anchor만 넣어 호출.
 
@@ -72,6 +72,22 @@ def margin_loss(sim_q, sim_fp, k=5, boundary_w=3.0, identity_aware=False):
     q_m = q_top[:, :-1] - q_top[:, 1:]
     w = torch.ones(kk - 1, device=sim_fp.device)
     w[-1] = boundary_w                            # k-1↔k 경계 강조
+    if one_sided:
+        # 09-27: margin이 FP보다 **좁아진 경우만** 벌점. 기존 대칭 형태
+        # (q_m - fp_m)^2는 margin이 넓어진 것도 똑같이 벌한다 -- 그런데 margin이
+        # 넓어지는 건 flip에서 멀어지는 것이므로 decision preservation 관점에서
+        # 바람직하다. 실측(naive W8A8, calib 64, confident anchor):
+        #   margin 항 5,325개 중 FP보다 넓어진 항 2,559개(48.1%),
+        #   실제 flip(q_m<0) 622개(11.7%),
+        #   **전체 벌점의 30.4%가 '넓어진 margin'을 억제하는 데 쓰였다.**
+        # 즉 대칭 형태는 "FP의 margin을 정확히 복원하라"(= margin 공간의
+        # reconstruction loss)이지 "뒤집지 마라"(= decision loss)가 아니다.
+        # 이 프로젝트는 같은 통찰을 이미 neighbor_loss에서 확인해 단측
+        # (asymmetric hinge)을 채택했는데(41번), margin_loss 본체에는 적용하지
+        # 않았다 -- claim15의 "BRECQ 기반 위에서 margin_loss가 BRECQ 자신의
+        # LSQ보다 못하다"도 이걸로 설명된다(둘 다 MSE인데 우리 쪽이 더 희박한
+        # 사영 위의 MSE).
+        return (F.relu(fp_m - q_m).pow(2) * w).mean()
     return ((q_m - fp_m).pow(2) * w).mean()
 
 def optimize_promptcal(quant_model, fp_model, calib_tensors, device,
@@ -382,7 +398,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       alpha_reg_weight=1e-2, alpha_warmup=0.2,
                                       utility_stage2_frac=0.0, thresh_w=1.0, box_w=0.5,
                                       det_thres=0.25, margin_thres=0.5,
-                                      region_dir_weight=0.0):
+                                      region_dir_weight=0.0, margin_one_sided=False):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -622,13 +638,14 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             loss = F.mse_loss(sim_q[aidx][:, train_cols], sim_fp[aidx][:, train_cols])
         else:
             ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w,
-                             identity_aware=identity_aware_margin)
+                             identity_aware=identity_aware_margin, one_sided=margin_one_sided)
             if cidx is not None and cal_weight > 0:
                 # 09-16: cal_weight=0이면 이 항의 기여가 0*ml_cal=0이라 결과는
                 # 원래도 같았지만(버그 아님), cal_idx가 이제 항상 전달되므로
                 # (claim5-a) cal_weight=0에서도 매 iter margin_loss를 불필요하게
                 # 계산하고 있었다. 게이트를 걸어서 그 계산 자체를 스킵한다.
                 ml_cal = margin_loss(sim_q[aidx][:, cidx], sim_fp[aidx][:, cidx], k=k, boundary_w=boundary_w,
+                                     one_sided=margin_one_sided,
                                      identity_aware=identity_aware_margin)
                 ml = ml + cal_weight * ml_cal
             if asymmetric:
