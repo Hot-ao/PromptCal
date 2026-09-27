@@ -13,6 +13,53 @@ V2(`PROMPTCAL_CURRENT_MODEL_V2.md`, 09-17)는 설계·하이퍼파라미터·결
 - 각 시도의 상세 경위 → **`PROMPTCAL_CLAIMS_2026-09-15.md` claim14~19**
 - **논문 절별 증거 매핑·빠진 실험** → **[`PAPER_EVIDENCE_MAP.md`](PAPER_EVIDENCE_MAP.md)** (09-26)
 
+
+> ## 🔴 09-28 — 이 문서의 §2~§6은 **뒤집혔다**
+>
+> **원인이 특정됐다: 여덟 번의 실패는 전부 잘못된 기반 위에 있었다.** 확정 설계가
+> `--combined-stage1 none`(재구성 없음)이라 "naive + ranking"을 테스트하고 있었고,
+> 논문이 주장하려던 **"reconstruction + ranking"** 이 아니었다. 논문 §4가 원래
+> *"strong reconstruction-based PTQ 또는 Naive"* 로 둘 다 열어뒀는데 claim14에서
+> 1단계를 제거한 뒤 모든 시도가 naive 기반에 묶여 있었다.
+>
+> `--combined-stage1 brecq`로 되돌리니 **6-seed에서 LVIS 세 지표가 6/6 개선**됐다
+> (`runs/112`): `LVIS_flip` −18.2%, `LVIS_lost` −25.9%, `LVIS_AP` +0.0020.
+> **포지셔닝 전환(§5)은 불필요하다 — 원래 주장이 성립한다.**
+>
+> 아래 §2(Pareto-dominated), §3(닫힌 방향), §5(대안 포지셔닝)는 **naive 기반 시절의
+> 기록**으로 읽을 것. 현재 상태는 **claim20**과 `pipeline/BASELINE_STATUS.md`를 보라.
+>
+> ### 확정 설계 (09-28)
+> ```
+> --conditions naive,brecq,combined
+> --combined-stage1 brecq --combined-recon-iters 2000   ← 1단계 BRECQ 재구성
+> --deterministic --calib 256 --iters 1500              ← 2단계 s_mult(52개) ranking 학습
+> (margin-one-sided / random-sample / per-group-anchors / local-recon / region-dir
+>  / range-blend / learn-alpha 전부 기본 꺼짐 = 측정으로 기각됨, claim19·20-c)
+> ```
+>
+> ### 확정 수치 (`runs/112`, W8A8, full probe, 6-seed)
+> | 지표 | naive | BRECQ | **ours** | seed별 |
+> |---|---|---|---|---|
+> | **LVIS_flip** | 4.467 | 2.723 | **2.227** | **6/6** |
+> | **LVIS_lost** | 985 | 622 | **461** | **6/6** |
+> | **LVIS_AP** | 0.2554 | 0.2560 | **0.2579** | **6/6** |
+> | COCO_AP | 36.617 | 36.753 | 36.753 | 중립 |
+> | lost | 291 | 182 | 180 | 중립 |
+> | **Heval_flip** | 5.945 | **3.802** | 4.278 | **악화 5/6** |
+>
+> 손상 복구율: `LVIS_AP` 17.5% → **72.6%**, `LVIS_lost` 38.5% → **53.2%**,
+> 대가로 `Heval_flip` 37.7% → 28.0%.
+>
+> **서술 주의**: `Heval_flip`은 이름에 held-out이 붙었지만 calibration 이미지 ×
+> COCO-80 안에서 측정된다. 진짜 vocabulary shift는 LVIS(1203 class)다.
+>
+> ### 다음
+> **W4A8**(손상이 큰 영역). COCO `lost`에서 우리 항의 부호가 손상 수준에 따라 뒤집힌다
+> — W8A8에서는 BRECQ 182 vs ours 180(중립), **W4A8에서는 203 vs 185(ours 우세, 1-seed)**.
+> **W4A4는 BRECQ조차 붕괴**(COCO_AP 0.73)하므로 activation 양자화 스킴 선행 개선 필요.
+> W8A7/W8A6(방법이 무너지는 지점)은 Limitations로 기록.
+
 ---
 
 ## 1. 확정 설계 (변경 없음)

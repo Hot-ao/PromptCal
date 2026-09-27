@@ -16,6 +16,14 @@
 
 ---
 
+> ## 🔴 09-28 갱신 — 초록 교체 논의가 무효가 됐다
+> claim20에서 **논문의 원래 주장이 실증됐다**(`runs/112`, 6-seed, LVIS 3개 지표 6/6 개선).
+> 아래 "교체할 주장"(비용 축 전환)은 **naive 기반 시절의 판단**이다. `--combined-stage1 brecq`
+> 로 기반을 되돌리니 *"제안 방법이 reconstruction 기반보다 region-prompt decision을 보존한다"*
+> 가 **held-out vocabulary(LVIS)에서 성립**한다. 단 calibration vocabulary(COCO `Heval_flip`)
+> 에서는 BRECQ가 우세하므로 **"vocabulary shift 하에서"** 라는 한정이 필요하다.
+> §5.4 Efficiency의 비용 우위는 사라졌다(stage1 BRECQ 포함으로 brecq보다 비쌈).
+
 ## Abstract — **문장 단위로 손봐야 한다**
 
 | 초록의 주장 | 상태 |

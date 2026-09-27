@@ -1540,3 +1540,133 @@ calibration-vocabulary 감독 + 저자유도 조합의 한계)과 일관된다.
 AdaRound 4304s / QDrop 2988s / BRECQ 1742s / **Combined 109s**. **BRECQ의 1/16 비용으로
 cross-vocabulary AP 최상위권**(LVIS_AP 0.2576 vs BRECQ 0.2560, LVIS_APr 0.1788 vs 0.1789).
 논문 §Experiments의 Efficiency(Calibration cost) 절에 직접 대응한다.
+
+---
+
+## Claim 20 — 논문의 핵심 주장이 실증됐다: 기반이 잘못돼 있었다 (09-27~28)
+
+**배경**: claim19까지 다섯 번(claim14/16/18-a/18-b/19), 이후 `region_dir`·단측 margin까지
+**여덟 번**의 시도가 모두 실패했다. 그런데 사용자가 *"논문 방향은 decision error를 직접
+복원하는 게 아니라 **reconstruction만으로는 부족하니 ranking 보존을 추가**하자는 것인데
+그게 잘 살려졌나"* 고 물었고, 확인해보니 **아니었다.**
+
+### 20-a. 여덟 번의 실패는 전부 잘못된 기반 위에 있었다
+
+확정 설계는 `--combined-recon-iters 0`, `--combined-stage1 none`이다. 즉
+**reconstruction이 아예 없는 "naive + ranking"** 이었다. 논문이 주장하려던
+"reconstruction + ranking"이 아니다.
+
+```
+논문의 주장   :  reconstruction          <  reconstruction + ranking
+실제 비교     :  reconstruction (BRECQ)  vs  naive + ranking      ← 다른 비교
+```
+
+BRECQ는 수백만 파라미터로 오차를 줄이는데 우리는 그걸 빼고 s_mult 52개만 썼다.
+**당연히 진다.** 논문 §4 Quantizer Initialization이 원래 *"strong reconstruction-based
+PTQ 또는 Naive"* 로 둘 다 열어뒀는데, claim14에서 1단계를 제거한 뒤 모든 시도가
+naive 기반에 묶여 있었다.
+
+그리고 논문의 주장을 실제로 테스트한 실험은 claim15의 BRECQ-stage1 진단 하나였는데,
+거기엔 두 결함이 있었다: **(1) 구 코드**(채널별 max-abs 대칭 weight, BRECQ 자체가
+훨씬 나빴음 -- `Heval_flip` 7.28% vs 현재 3.80%) **(2) 1-seed**.
+
+또한 노벨티 우려(*"BRECQ 위에 올리면 novelty가 약하지 않나"*)로 naive 기반을 고수한
+것도 근거가 약했다 -- **PTQ 문헌에서는 표준 패턴**이다: QDrop = BRECQ + activation drop
+(ICLR'22), PD-Quant = BRECQ + prediction difference (CVPR'23).
+
+### 20-b. 확정 결과 (`runs/112`, W8A8, full probe, 6-seed, `--deterministic`)
+
+`--conditions naive,brecq,combined --combined-stage1 brecq --combined-recon-iters 2000`.
+`brecq` 열은 공식 BRECQ(LSQ 포함), `combined` 열은 BRECQ 재구성 + 우리 ranking
+목적함수로 activation scale 학습. **같은 run 안 비교.**
+
+| 지표 | naive | brecq | **ours** | Δ | seed별 |
+|---|---|---|---|---|---|
+| **LVIS_flip** | 4.467 | 2.723 | **2.227** | **−18.2%** | **6/6** |
+| **LVIS_lost** | 985 | 622 | **461** | **−25.9%** | **6/6** |
+| **LVIS_AP** | 0.2554 | 0.2560 | **0.2579** | +0.0020 | **6/6** |
+| COCO_AP | 36.617 | 36.753 | 36.753 | ±0.000 | 3/5 (중립) |
+| lost | 291 | 182 | 180 | −2 | 3/5 (중립) |
+| LVIS_APr | 0.1777 | 0.1780 | 0.1774 | −0.0007 | 3/6 (노이즈) |
+| **Heval_flip** | 5.945 | **3.802** | 4.278 | **+12.5%** | **1/6 (악화)** |
+| Top1_flip | 0.667 | 0.367 | 0.378 | +0.012 | 2/6 (악화) |
+
+**LVIS 세 지표가 6/6 일관 개선.** 무결성: `naive`가 `runs/106`과 6 seed 전부
+bit-identical(비교 축 검증).
+
+**손상 복구율**(naive 손상 = 100%, FP32 바닥 기준):
+
+| 지표 | BRECQ | ours | |
+|---|---|---|---|
+| LVIS_AP | 17.5% | **72.6%** | +55.2pp |
+| LVIS_lost | 38.5% | **53.2%** | +14.7pp |
+| LVIS_flip | 41.7% | **50.1%** | +8.5pp |
+| COCO_AP | 75.5% | 74.5% | −0.9pp |
+| lost | 42.8% | 38.0% | −4.8pp |
+| Heval_flip | **37.7%** | 28.0% | −9.6pp |
+
+**전체 순위**(baseline은 `runs/106` 6-seed): LVIS 3개에서 **1/6**, `Top1_flip` 2/6,
+나머지 3/6. 구 Combined는 5~6위였다. `LVIS_lost` 461은 baseline 4개가 몰려 있던
+구간(606~985)을 확실히 벗어난다.
+
+**확정된 서사**: *재구성은 calibration vocabulary의 결정을 잘 지키지만(Heval_flip 37.7%
+복구) held-out vocabulary로 전이되지 않는다(LVIS_AP 17.5%). ranking 보존 항을 더하면
+held-out 복구가 크게 늘고(LVIS_AP 72.6%, LVIS_lost 53.2%), 대가로 calibration
+vocabulary의 flip을 일부 내준다(37.7% → 28.0%).*
+
+**서술 주의**: `Heval_flip`은 이름에 held-out이 붙었지만 **calibration 이미지 × COCO-80
+vocabulary 안에서** 측정된다. 진짜 vocabulary shift는 LVIS(1203 class)다. 논문에서 이
+구분을 명확히 해야 "held-out이 좋아진다/나빠진다"가 모순으로 읽히지 않는다.
+
+**비용**: `combined` 빌드가 stage1 BRECQ를 포함해 4929s(brecq 단독 2546s). 구 설계의
+"BRECQ의 1/26 비용" 포지셔닝은 못 쓴다. 대신 **"BRECQ를 개선한다"는 원래 주장**을
+되찾았고, QDrop·PD-Quant와 같은 표준 구성이라 방어가 쉽다.
+
+### 20-c. 같이 기각된 세 수정안 (전부 기본 꺼짐 유지)
+
+| 수정안 | 근거 | 결과 |
+|---|---|---|
+| `--margin-one-sided` | 대칭 `(q_m−fp_m)²`는 margin이 **넓어진** 것도 벌한다. 실측: 항의 48.1%가 넓어진 쪽, 전체 벌점의 30.4%가 그걸 억제 | **더 나쁨**(LVIS 3개 악화 2/2). 대칭 형태가 *"FP margin으로 되돌려라"* 라서 **암묵적 앵커** 역할을 하고, 단측은 그 앵커를 없애 s_mult가 표류한다(COCO lost는 개선, LVIS는 악화 = claim16/19의 calibration 과적합 패턴) |
+| `--combined-random-sample` + `--combined-per-group-anchors` | 전자: `it % n` 결정적 순환으로 이미지 0~219는 6번, 220~255는 5번 쓰임(AdaRound/BRECQ는 09-18에 이미 고쳤음). 후자: anchor를 train_cols(60)로 선정하고 margin은 S(40)/H_cal(20)에서 따로 계산 | **순이득 없음**(`lost` 개선2/2이나 `COCO_AP`·`Heval_flip`·`LVIS_flip` 악화2/2). `per-group`이 anchor 수를 줄여 표본이 감소한 영향으로 보임 |
+| `--combined-local-recon-weight` | 논문 §4 Semantic Objective의 *"Local reconstruction"* 절반이 구현에 없음. 대칭 margin이 암묵적 앵커라면 명시적 앵커는 더 나을 수 있다는 근거 | **무효**(8개 중 7개가 1/2 = 동전 던지기) |
+
+### 20-d. bit-width 스캔과 다음 방향 (`runs/107`, `runs/108`, `runs/109`)
+
+`--eval-cap 500`, 1-seed 스캔:
+
+| 설정 | naive | brecq | 해석 |
+|---|---|---|---|
+| W8A6 | COCO_AP 31.87 | 34.59 | 손상 큼, 복구됨 |
+| W8A5 | 23.41 | **14.36** | **BRECQ가 naive보다 나쁨** = 재구성 발산 |
+| W8A4 / W8A3 | 0.02 / 0.00 | 0.01 / 0.00 | 전부 붕괴 |
+| **W4A8** | **1.21** | **33.53** | naive 완전 붕괴, BRECQ 완전 복구 |
+| **W4A4** | 0.00 | **0.73** | **BRECQ조차 붕괴** |
+
+**activation 5bit 이하는 이 스킴(per-tensor asymmetric)으로 전부 죽는다.** W4A4로
+가려면 우리 방법이 아니라 **activation 양자화 스킴 자체**를 고쳐야 한다(per-channel 등,
+다만 claim4의 배포성 제약과 충돌).
+
+Combined(naive 기반)의 동작 한계: **W8A8 7/7 개선 → W8A7 4/7 → W8A6 0/7**. BRECQ
+기반을 깔아도 W8A6은 7/7 악화. **2비트 내려가는 사이에 부호가 뒤집힌다** -- s_mult는
+"거의 맞는 출발점에 작은 배율 보정"을 전제하기 때문. **W8A8에서의 성공은 저비트로
+전이되지 않는다.**
+
+**W4A8이 다음 목표**다. 결정적 관찰: COCO `lost`에서 우리 항의 부호가 손상 수준에
+따라 뒤집힌다 --
+
+| | BRECQ | ours | |
+|---|---|---|---|
+| W8A8 (손상 작음) | 182 | 180 | 중립 |
+| **W4A8** (손상 큼) | 203 | **185** | **ours 우세** (1-seed) |
+
+**손상이 커질수록 우리 항이 유리해진다**는 가설을 뒷받침한다. 논문 서사로도 강하다.
+W8A7/W8A6은 **Limitations**로 정직하게 기록할 것.
+
+### 20-e. 실행 환경 발견
+
+- **`OMP_NUM_THREADS`는 수치를 바꾼다** -- 30으로 줄이니 `naive`조차 달라졌다
+  (LVIS lost 904 vs 902). 학습 없는 추론 경로까지 영향받으므로 **스레드 수는 건드릴 수
+  없다.** 속도 레버는 `taskset` 범위뿐(이건 bit-identical 확인됨).
+- **처리량은 GPU 수가 아니라 코어 수로 정해진다.** 120코어에서 4-way든 5-way든 빌드
+  1개당 640~660s로 동일(192코어 2-way는 410s). **GPU 3장 + `taskset 0-159`가 GPU 5장
+  + 120코어와 총 시간이 같고 load average는 206 → 87로 떨어진다.**
