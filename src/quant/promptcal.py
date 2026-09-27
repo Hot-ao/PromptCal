@@ -398,7 +398,9 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       alpha_reg_weight=1e-2, alpha_warmup=0.2,
                                       utility_stage2_frac=0.0, thresh_w=1.0, box_w=0.5,
                                       det_thres=0.25, margin_thres=0.5,
-                                      region_dir_weight=0.0, margin_one_sided=False):
+                                      region_dir_weight=0.0, margin_one_sided=False,
+                                      random_sample=False, per_group_anchors=False,
+                                      local_recon_weight=0.0):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -519,9 +521,24 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     # MSE로 맞추고, 여기서는 head 입력의 **단위 방향**만 (decision-relevant anchor에서)
     # 지킨다 -- 크기는 버린다. 순위를 정하는 건 방향이기 때문.
     # 기본 0.0 = 꺼짐 = 기존 동작과 bit-identical.
+    # local_recon_weight > 0 (09-27): 논문 §4 Semantic Objective가 명시하는
+    # "Local reconstruction + region-prompt semantic consistency"의 앞쪽 절반.
+    # 현재 목적함수는 semantic consistency(margin/neighbor)만 있고 reconstruction
+    # 항이 없어서, 2단계가 1단계(BRECQ) 결과에서 자유롭게 멀어진다 -- claim14의
+    # "1단계 이득이 2단계 밖으로 샌다"가 그 증상이다.
+    #
+    # 근거가 하나 더 있다: 대칭 margin_loss가 단측보다 나았는데(runs/110), 대칭
+    # 형태는 "FP margin으로 되돌려라"라서 **암묵적 앵커** 역할을 한다. 암묵적
+    # 앵커가 도움이 되면 명시적 앵커는 더 나을 수 있다.
+    #
+    # 형태: cv4 입력(region feature)의 상대 제곱오차. 크기까지 포함한다는 점에서
+    # region_dir(방향만)과 다르고, ||x_fp||^2로 정규화해 스케일 무관하게 만들어
+    # margin_loss와 같은 수준(O(0.01~0.1))에서 비교되게 한다.
+    use_local_recon = local_recon_weight > 0
     use_region_dir = region_dir_weight > 0
     use_utility = utility_stage2_frac > 0
-    fp_head = _find_head(fp_model); fp_cap = _CV4Capture(fp_head, capture_input=use_region_dir)
+    _need_region = use_region_dir or use_local_recon
+    fp_head = _find_head(fp_model); fp_cap = _CV4Capture(fp_head, capture_input=_need_region)
     fp_cv2_cap = _LevelCapture(fp_head.cv2) if use_utility else None
     fp_sims, fp_cv2s, fp_regions = [], [], []
     with torch.no_grad():
@@ -535,8 +552,9 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                 B, P, H, W = fp_cap.buf[i].shape
                 parts.append(fp_cap.buf[i].reshape(B, P, H*W))
             fp_sims.append(torch.cat(parts, dim=2)[0].transpose(0, 1).detach())
-            if use_region_dir:
-                fp_regions.append(F.normalize(fp_cap.assemble_input(), dim=1, p=2).detach())
+            if _need_region:
+                # 정규화하지 않은 원본을 캐시한다(region_dir은 사용 시점에 정규화).
+                fp_regions.append(fp_cap.assemble_input().detach())
             if fp_cv2_cap is not None:
                 fp_cv2s.append(fp_cv2_cap.assemble().detach())
     fp_cap.close()
@@ -579,7 +597,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             neighbor_set.update(picked)
     neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
 
-    q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head, capture_input=use_region_dir)
+    q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head, capture_input=_need_region)
     q_cv2_cap = _LevelCapture(q_head.cv2) if use_utility else None
     stage2_start = int((1 - utility_stage2_frac) * iters) if use_utility else iters
     smults = [ac.s_mult for ac in ada]
@@ -619,12 +637,31 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
 
     n = len(calib_tensors)
     for it in range(iters):
-        j = it % n
+        # random_sample (09-27): it % n은 결정적 순환이라 (a) iters=1500 / n=256이면
+        # 이미지 0~219는 6번, 220~255는 5번 쓰여 calibration 이미지에 불균등 가중이
+        # 걸리고 (b) Adam 모멘텀이 주기 n과 상호작용한다. AdaRound/BRECQ는 09-18에
+        # 이미 무작위 추출로 고쳤는데(adaround.py "it % n은 결정적 순환이라 ... 편향이
+        # 생긴다") promptcal.py만 빠져 있었다. 기본 False = 기존 동작.
+        j = int(torch.randint(0, n, (1,)).item()) if random_sample else it % n
         t = calib_tensors[j].to(device); sim_fp = fp_sims[j]
         prob = sim_fp[:, train_cols].sigmoid(); mp, _ = prob.max(-1); conf = mp > conf_thres
         if conf.sum() == 0:
             continue
         aidx = conf.nonzero(as_tuple=True)[0]
+        # per_group_anchors (09-27): anchor는 train_cols(S∪H_cal, 60개)로 선정하는데
+        # margin은 S(40개)와 H_cal(20개)에서 따로 계산한다 -- 그래서 FP가 H_cal만
+        # 확신하는 anchor에서 S-margin을, S만 확신하는 anchor에서 H_cal-margin을
+        # 계산하게 된다(그 anchor의 해당 그룹 top-1은 저확신 class라 "margin을
+        # 보존하라"가 의미 없는 신호다). claim1에서 anchor 선정 리크를 고치며
+        # train_cols로 통일할 때 항별 대응이 깨진 것으로 보인다.
+        # True면 각 margin 항을 그 그룹에서 confident한 anchor에서만 계산한다.
+        # H_eval은 어느 쪽에도 안 들어가므로 held-out 불변식은 그대로다.
+        if per_group_anchors:
+            aidx_s = (sim_fp[:, pidx].sigmoid().max(-1).values > conf_thres).nonzero(as_tuple=True)[0]
+            aidx_c = ((sim_fp[:, cidx].sigmoid().max(-1).values > conf_thres).nonzero(as_tuple=True)[0]
+                      if cidx is not None else None)
+        else:
+            aidx_s, aidx_c = aidx, aidx
         q_cap.clear(); opt.zero_grad()
         if q_cv2_cap is not None:
             q_cv2_cap.clear()
@@ -637,24 +674,32 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
         if control_mse:
             loss = F.mse_loss(sim_q[aidx][:, train_cols], sim_fp[aidx][:, train_cols])
         else:
-            ml = margin_loss(sim_q[aidx][:, pidx], sim_fp[aidx][:, pidx], k=k, boundary_w=boundary_w,
-                             identity_aware=identity_aware_margin, one_sided=margin_one_sided)
-            if cidx is not None and cal_weight > 0:
+            if len(aidx_s) == 0:
+                ml = sim_q.sum() * 0.0
+            else:
+                ml = margin_loss(sim_q[aidx_s][:, pidx], sim_fp[aidx_s][:, pidx], k=k,
+                                 boundary_w=boundary_w,
+                                 identity_aware=identity_aware_margin, one_sided=margin_one_sided)
+            if cidx is not None and cal_weight > 0 and aidx_c is not None and len(aidx_c) > 0:
                 # 09-16: cal_weight=0이면 이 항의 기여가 0*ml_cal=0이라 결과는
                 # 원래도 같았지만(버그 아님), cal_idx가 이제 항상 전달되므로
                 # (claim5-a) cal_weight=0에서도 매 iter margin_loss를 불필요하게
                 # 계산하고 있었다. 게이트를 걸어서 그 계산 자체를 스킵한다.
-                ml_cal = margin_loss(sim_q[aidx][:, cidx], sim_fp[aidx][:, cidx], k=k, boundary_w=boundary_w,
-                                     one_sided=margin_one_sided,
+                ml_cal = margin_loss(sim_q[aidx_c][:, cidx], sim_fp[aidx_c][:, cidx], k=k,
+                                     boundary_w=boundary_w, one_sided=margin_one_sided,
                                      identity_aware=identity_aware_margin)
                 ml = ml + cal_weight * ml_cal
             if asymmetric:
                 # 경쟁자가 FP보다 강해지는 방향(sim_q > sim_fp)만 억제. 약해지는
                 # 방향은 벌점 없음 -- 우연히 유익한 흔들림(예: seed 0)을 보존.
-                diff = sim_q[aidx][:, neighbor_cols] - sim_fp[aidx][:, neighbor_cols]
+                # neighbor_cols는 S의 text-embedding 이웃이므로 S에서 confident한
+                # anchor가 대응된다(per_group_anchors=False면 aidx_s == aidx).
+                an = aidx_s if len(aidx_s) > 0 else aidx
+                diff = sim_q[an][:, neighbor_cols] - sim_fp[an][:, neighbor_cols]
                 nl = F.relu(diff).pow(2).mean()
             else:
-                nl = F.mse_loss(sim_q[aidx][:, neighbor_cols], sim_fp[aidx][:, neighbor_cols])
+                an = aidx_s if len(aidx_s) > 0 else aidx
+                nl = F.mse_loss(sim_q[an][:, neighbor_cols], sim_fp[an][:, neighbor_cols])
             loss = ml + neighbor_weight * nl
             if aux_mse_weight > 0:
                 # claim16 방향 3: margin_loss(sparse top-k)에 dense 보조 신호를
@@ -664,12 +709,19 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             if scale_reg_weight > 0:
                 sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
                 loss = loss + scale_reg_weight * sr
-        if use_region_dir:
-            # reliable anchor(aidx)에서만, region embedding 단위 방향의 cosine 보존.
-            # 1 - cos 이라 [0,2] 범위이고 프롬프트 컬럼을 전혀 참조하지 않는다.
-            rq = F.normalize(q_cap.assemble_input(), dim=1, p=2)
-            rd = (1.0 - (rq[aidx] * fp_regions[j][aidx]).sum(-1)).mean()
-            loss = loss + region_dir_weight * rd
+        if _need_region:
+            rq_raw = q_cap.assemble_input()
+            rf_raw = fp_regions[j]
+            if use_local_recon:
+                # 상대 제곱오차: ||x_q - x_fp||^2 / ||x_fp||^2 (anchor별) 평균.
+                num = (rq_raw[aidx] - rf_raw[aidx]).pow(2).sum(-1)
+                den = rf_raw[aidx].pow(2).sum(-1).clamp(min=1e-12)
+                loss = loss + local_recon_weight * (num / den).mean()
+            if use_region_dir:
+                # 단위 방향만 보존(크기 무시). 프롬프트 컬럼을 전혀 참조하지 않는다.
+                rq = F.normalize(rq_raw, dim=1, p=2); rf = F.normalize(rf_raw, dim=1, p=2)
+                rd = (1.0 - (rq[aidx] * rf[aidx]).sum(-1)).mean()
+                loss = loss + region_dir_weight * rd
         if use_utility and it >= stage2_start:
             l_thresh, l_box = utility_refinement_terms(
                 sim_q, sim_fp, q_cv2_cap.assemble(), fp_cv2s[j], pidx,

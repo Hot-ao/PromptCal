@@ -470,7 +470,9 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_learn_alpha=False, combined_alpha_lr=1e-2,
           combined_alpha_reg_weight=1e-2, combined_range_blend=0.0,
           combined_utility_frac=0.0, combined_thresh_w=1.0, combined_box_w=0.5,
-          combined_region_dir_weight=0.0, margin_one_sided=False):
+          combined_region_dir_weight=0.0, margin_one_sided=False,
+          combined_random_sample=False, combined_per_group_anchors=False,
+          combined_local_recon_weight=0.0):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -577,6 +579,9 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           neighbor_of_cal=neighbor_of_cal,
                                           aux_mse_weight=aux_mse_weight,
                                           margin_one_sided=margin_one_sided,
+                                          local_recon_weight=combined_local_recon_weight,
+                                          random_sample=combined_random_sample,
+                                          per_group_anchors=combined_per_group_anchors,
                                           region_dir_weight=combined_region_dir_weight,
                                           utility_stage2_frac=combined_utility_frac,
                                           thresh_w=combined_thresh_w, box_w=combined_box_w,
@@ -749,6 +754,26 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
+    ap.add_argument("--combined-local-recon-weight", type=float, default=0.0,
+                    help="09-27: 논문 4장 Semantic Objective의 'Local reconstruction' 항. "
+                         "cv4 입력(region feature)의 상대 제곱오차 ||x_q-x_fp||^2/||x_fp||^2. "
+                         "현재 목적함수는 semantic consistency만 있어 2단계가 1단계(BRECQ) "
+                         "결과에서 자유롭게 멀어진다(claim14). 대칭 margin_loss가 단측보다 "
+                         "나았던 것도 그것이 암묵적 앵커라서로 보이므로, 명시적 앵커를 준다. "
+                         "region_dir(방향만)과 달리 크기까지 포함. 0.0=꺼짐")
+    ap.add_argument("--combined-random-sample", action="store_true",
+                    help="09-27 결함 수정: Combined 2단계의 표본 추출을 it %% n(결정적 순환)에서 "
+                         "무작위로. iters=1500/n=256이면 이미지 0~219는 6번, 220~255는 5번 쓰여 "
+                         "calibration 이미지에 불균등 가중이 걸리고 Adam 모멘텀이 주기 n과 "
+                         "상호작용한다. AdaRound/BRECQ는 09-18에 이미 고쳤는데 promptcal만 "
+                         "빠져 있었다. 기본 꺼짐(기존 동작) -- 켜는 것을 권장")
+    ap.add_argument("--combined-per-group-anchors", action="store_true",
+                    help="09-27 결함 수정: margin 항을 각 컬럼 그룹에서 confident한 anchor에서만 "
+                         "계산. 현재는 anchor를 train_cols(S∪H_cal 60개)로 선정하는데 margin은 "
+                         "S(40)/H_cal(20)에서 따로 계산해서, FP가 H_cal만 확신하는 anchor에서 "
+                         "S-margin을(그 반대도) 계산한다 -- 해당 그룹 top-1이 저확신 class라 "
+                         "의미 없는 신호다. H_eval은 어느 쪽에도 안 들어가 held-out 불변식은 "
+                         "그대로. 기본 꺼짐(기존 동작) -- 켜는 것을 권장")
     ap.add_argument("--margin-one-sided", action="store_true",
                     help="09-27: margin_loss를 단측(one-sided) hinge로. 기본 꺼짐(대칭, 기존 동작). "
                          "기존 (q_m-fp_m)^2는 margin이 FP보다 **넓어진** 경우도 똑같이 벌하는데, "
@@ -940,7 +965,10 @@ def main():
                              combined_thresh_w=args.combined_thresh_w,
                              combined_box_w=args.combined_box_w,
                              combined_region_dir_weight=args.combined_region_dir_weight,
-                             margin_one_sided=args.margin_one_sided)
+                             margin_one_sided=args.margin_one_sided,
+                             combined_random_sample=args.combined_random_sample,
+                             combined_per_group_anchors=args.combined_per_group_anchors,
+                             combined_local_recon_weight=args.combined_local_recon_weight)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
