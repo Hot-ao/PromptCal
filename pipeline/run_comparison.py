@@ -479,6 +479,8 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           adaround_act_observer="minmax",
           combined_learn_alpha=False, combined_alpha_lr=1e-2,
           combined_alpha_reg_weight=1e-2, combined_range_blend=0.0,
+          combined_learn_alpha_bias=False, combined_alpha_bias_lr=1e-2,
+          combined_alpha_bias_reg_weight=1e-3, combined_alpha_bias_limit=0.5,
           combined_utility_frac=0.0, combined_thresh_w=1.0, combined_box_w=0.5,
           combined_region_dir_weight=0.0, margin_one_sided=False,
           combined_random_sample=False, combined_per_group_anchors=False,
@@ -599,6 +601,10 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           learn_alpha=combined_learn_alpha,
                                           alpha_lr=combined_alpha_lr,
                                           alpha_reg_weight=combined_alpha_reg_weight,
+                                          learn_alpha_bias=combined_learn_alpha_bias,
+                                          alpha_bias_lr=combined_alpha_bias_lr,
+                                          alpha_bias_reg_weight=combined_alpha_bias_reg_weight,
+                                          alpha_bias_limit=combined_alpha_bias_limit,
                                           verbose=False)
     return m
 
@@ -843,6 +849,30 @@ def main():
     ap.add_argument("--combined-alpha-reg-weight", type=float, default=1e-2,
                     help="--combined-learn-alpha의 rounding 정규화 가중치. margin_loss가 mean "
                          "스케일이라 reg도 reduction='mean'으로 맞춰져 있다")
+    ap.add_argument("--combined-learn-alpha-bias", action="store_true",
+                    help="09-28 (claim21 대응): --combined-learn-alpha의 저자유도 대안. "
+                         "alpha 원소별(conv당 최대 수백만 개)이 아니라 conv당 스칼라 1개(alpha_bias, "
+                         "s_mult와 같은 granularity)로 반올림을 균일하게 보정한다. 동기: W4A8 "
+                         "공동최적화(--combined-learn-alpha)가 붕괴한 원인이 손상 크기가 아니라 "
+                         "자유도였다(claim21) -- decision_loss의 reliable anchor는 538개뿐인데 "
+                         "alpha는 수백만 개라 calib에 과적합했다. alpha_bias는 전체 모델 기준 "
+                         "52~70개로 s_mult와 자릿수가 같다(538개 앵커가 이미 그 자릿수를 유의미하게 "
+                         "제약한다는 게 W8A8 확정 결과). 대신 conv 전체를 균일하게만 미니 표현력은 "
+                         "원소별 alpha보다 약하다(가설, 검증 필요). --combined-learn-alpha와 동시에 "
+                         "켤 수도 있지만 보통 대안으로 단독 사용")
+    ap.add_argument("--combined-alpha-bias-lr", type=float, default=1e-2,
+                    help="--combined-learn-alpha-bias의 Adam lr")
+    ap.add_argument("--combined-alpha-bias-reg-weight", type=float, default=1e-3,
+                    help="--combined-learn-alpha-bias의 L2 정규화(alpha_bias를 0=BRECQ 원래 "
+                         "반올림 근처로 붙잡아둠). alpha_reg_weight(rectified-sigmoid, 0/1로 "
+                         "밀어냄)와 목적이 다르다")
+    ap.add_argument("--combined-alpha-bias-limit", type=float, default=0.5,
+                    help="--combined-learn-alpha-bias의 |alpha_bias| 상한(forward clamp). "
+                         "alpha_bias는 conv 전체 반올림을 균일하게 미는 스칼라라 커지면 "
+                         "불확실한 weight를 전부 같은 방향으로 반올림하는 파국이 된다 -- Adam은 "
+                         "gradient 크기와 무관하게 스텝당 ~lr씩 움직이므로 1500 iter면 이론상 "
+                         "|bias|가 15까지 간다. 기본 0.5 (실측: bias 0.067에서 nearest 대비 "
+                         "flip 1.8%%)")
     ap.add_argument("--deterministic", action="store_true",
                     help="torch.use_deterministic_algorithms(warn_only=True) 활성화. 같은 seed "
                          "재실행에서 baseline 4개는 bit-identical이지만 Combined만 재현이 안 "
@@ -866,6 +896,14 @@ def main():
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
     print(f"[args] {vars(args)}")
+    # 09-28: --device N이 실제로 어느 물리 GPU에 올라갔는지 로그에 남긴다.
+    # CUDA_DEVICE_ORDER를 PCI_BUS_ID로 고정했으므로 여기 찍히는 인덱스는
+    # nvidia-smi 인덱스와 같아야 한다 -- 다르면 환경이 바뀐 것이니 멈추고 확인할 것.
+    if device != "cpu":
+        _p = torch.cuda.get_device_properties(int(args.device))
+        print(f"[gpu] --device {args.device} -> nvidia-smi GPU {args.device} "
+              f"({_p.name}, {_p.total_memory // 2**20}MiB, uuid={_p.uuid}) "
+              f"CUDA_DEVICE_ORDER={os.environ.get('CUDA_DEVICE_ORDER')}")
 
     if args.torch_seed is None:
         args.torch_seed = args.seed          # 09-23: 기본으로 --seed를 그대로 따라가게(버그 수정)
@@ -896,14 +934,6 @@ def main():
 
     # calib: train2017 (평가 데이터와 완전 분리)
     calib_paths = sorted(glob.glob(os.path.join(args.coco_root, "train2017", "*.jpg")))[:args.calib]
-    # 09-28: --device N이 실제로 어느 물리 GPU에 올라갔는지 로그에 남긴다.
-    # CUDA_DEVICE_ORDER를 PCI_BUS_ID로 고정했으므로 여기 찍히는 인덱스는
-    # nvidia-smi 인덱스와 같아야 한다 -- 다르면 환경이 바뀐 것이니 멈추고 확인할 것.
-    if device != "cpu":
-        _p = torch.cuda.get_device_properties(int(args.device))
-        print(f"[gpu] --device {args.device} -> nvidia-smi GPU {args.device} "
-              f"({_p.name}, {_p.total_memory // 2**20}MiB, uuid={_p.uuid}) "
-              f"CUDA_DEVICE_ORDER={os.environ.get('CUDA_DEVICE_ORDER')}")
     print(f"[data] calib {len(calib_paths)}장 (train2017)")
 
     # probe: val2017 전체 -- COCO-80은 5000장 다 쓰고, LVIS는 그중 minival(공식 4809장)과
@@ -987,6 +1017,10 @@ def main():
                              combined_learn_alpha=args.combined_learn_alpha,
                              combined_alpha_lr=args.combined_alpha_lr,
                              combined_alpha_reg_weight=args.combined_alpha_reg_weight,
+                             combined_learn_alpha_bias=args.combined_learn_alpha_bias,
+                             combined_alpha_bias_lr=args.combined_alpha_bias_lr,
+                             combined_alpha_bias_reg_weight=args.combined_alpha_bias_reg_weight,
+                             combined_alpha_bias_limit=args.combined_alpha_bias_limit,
                              combined_range_blend=args.combined_range_blend,
                              combined_utility_frac=args.combined_utility_frac,
                              combined_thresh_w=args.combined_thresh_w,

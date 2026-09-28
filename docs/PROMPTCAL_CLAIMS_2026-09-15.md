@@ -1670,3 +1670,122 @@ W8A7/W8A6은 **Limitations**로 정직하게 기록할 것.
 - **처리량은 GPU 수가 아니라 코어 수로 정해진다.** 120코어에서 4-way든 5-way든 빌드
   1개당 640~660s로 동일(192코어 2-way는 410s). **GPU 3장 + `taskset 0-159`가 GPU 5장
   + 120코어와 총 시간이 같고 load average는 206 → 87로 떨어진다.**
+
+---
+
+## claim21 — 공동 최적화(joint) 기각: W4A8에서 붕괴 (2026-09-28)
+
+**설정** (commit `e4324f2`, `runs/114_joint`, seed 0·1, full probe, `--deterministic`)
+
+```
+--w-bits 4 --a-bits 8 --calib 256 --conditions naive,brecq,combined
+--combined-stage1 brecq --combined-recon-iters 2000
+--combined-block-recon-weight 1.0 --combined-learn-alpha
+```
+
+`naive`/`brecq` 열이 `runs/113_w4a8`과 **비트 동일** → 비교 가능.
+
+**결과 (seed 0·1 평균, 같은 run 안에서 brecq와 비교)**
+
+| 지표 | naive | brecq | 순차 ours | 공동 ours | 순차 | 공동 |
+|---|---|---|---|---|---|---|
+| COCO_AP | 1.140 | 33.510 | 32.930 | **18.485** | 악화 2/2 | 악화 2/2 |
+| Heval_flip | 84.860 | 27.980 | 28.970 | **53.760** | 악화 2/2 | 악화 2/2 |
+| Top1_flip | 59.640 | 5.150 | 5.445 | **22.925** | 악화 2/2 | 악화 2/2 |
+| lost | 19644 | 2087 | 2066 | **8100** | 1/2 | 악화 2/2 |
+| LVIS_flip | 88.440 | 20.745 | 24.610 | **50.345** | 악화 2/2 | 악화 2/2 |
+| LVIS_lost | 18812 | 4704 | 5097 | **10588** | 악화 2/2 | 악화 2/2 |
+| LVIS_AP | 0.0097 | 0.2296 | 0.2209 | **0.1285** | 악화 2/2 | 악화 2/2 |
+| LVIS_APr | 0.0016 | 0.1614 | 0.1619 | **0.0942** | 1/2 | 악화 2/2 |
+
+손상 복구율(naive=0%, FP=100%): LVIS_AP brecq 88.2% / 순차 84.8% / **공동 47.6%**.
+COCO_AP brecq 90.8% / 순차 89.1% / **공동 48.6%**. 즉 공동 최적화는 BRECQ 재구성을
+**절반 되돌려버렸다**.
+
+**원인 (진단)**
+
+로그: `nearest 대비 평균 flip 6.227% (max 26.697%), h->0/1 수렴 95%`.
+claim18-a(W8A8)에서 alpha가 **거의 안 움직여** 무효였던 것과 정반대로, W4에서는
+alpha가 크게 움직였다. 그런데 그 움직임을 이끈 목적함수는 **256장 calib에서 뽑은
+reliable anchor 538개짜리 decision loss**다. BRECQ가 alpha를 맞출 때 쓰는
+제약(전 calib 셋에 대한 블록 MSE)보다 자유도 대비 제약이 압도적으로 부족해서,
+수백만 개 alpha가 calib 538 앵커에 과적합하며 일반화를 파괴한다.
+`block_recon_weight=1.0`(정규화 MSE 17블록 평균)은 이 과적합을 막지 못했다.
+`alpha_warmup=0.2` → 2000 iters 중 1600 iters를 `alpha_lr=1e-2`로 학습한 것도 과도.
+
+**교란 요인 (미해소)**: `block_recon`과 `learn_alpha`를 동시에 켰다. 다만
+`learn_alpha` 없이 블록 재구성만 켜면 학습 파라미터가 **s_mult 52개뿐**이므로
+블록 MSE 항은 s_mult를 "재구성 최적점(=아무것도 안 하기)"으로 당기는 정규화로만
+작동한다 — 순차와 거의 같아질 것이 예측되며, 붕괴의 원인은 `learn_alpha`로
+사실상 특정된다.
+
+**결론**: 사전에 정한 판정 기준("W4A8에서 brecq를 넘으면 저비트가 열린다 /
+둘 다 안 되면 순차·공동 구분이 원인이 아니다")에 따라 **공동 최적화 기각**.
+논문은 **W8A8 순차 결과(runs/112, 6-seed, LVIS 3지표 6/6)** 로 쓴다.
+저비트(W4A8/W4A4) 확장은 decision loss의 **제약 부족**이 본질 문제이므로,
+앵커 수를 늘리거나(calib 확대) weight를 건드리지 않는 설계를 유지하는 쪽이
+남은 경로다.
+
+---
+
+## claim22 — alpha_bias(저자유도 rounding 보정) 기각, 그리고 **claim21의 진단이 틀렸다** (2026-09-28)
+
+**동기**: claim21은 W4A8 공동최적화 붕괴의 원인을 **자유도 폭발**로 진단했다 —
+"alpha는 수백만 개인데 decision_loss의 reliable anchor는 538개뿐이라 calib에
+과적합한다". 이 진단이 맞다면 **자유도만 줄이면 된다**. 그래서 `alpha_bias`를
+만들었다: conv당 스칼라 **1개**(전체 52개, `s_mult`와 정확히 같은 자릿수)로
+`h_alpha(alpha + alpha_bias)`처럼 반올림을 conv 전체에 균일하게 민다.
+BRECQ가 원소별로 맞춰둔 alpha는 건드리지 않는다.
+
+**구현 (commit 대기, `runs/120_alphabias_ste`)**
+- `round_ste`: forward는 hard 반올림(=bias 0이면 BRECQ 모델과 **bit-identical**),
+  backward만 `h_alpha`로 흘리는 STE. 첫 시도(`runs/119`, 폐기)는 `soft=True`를 썼는데
+  그러면 "최적화 대상 모델"이 바뀌어 s_mult-only 실험(runs/113)과의 비교에 교란이
+  섞인다(실측: soft vs hard weight 3.77% 차이). STE로 이 교란을 제거했다.
+- `eff_alpha_bias()`: forward clamp(±limit, 기본 0.5). Adam은 gradient 크기와
+  무관하게 스텝당 ~lr씩 움직여서 1500 iter면 |bias|가 이론상 15까지 간다.
+- `use_alpha_bias` 플래그: 꺼져 있으면 덧셈 노드조차 안 만든다(기존 경로 완전 동일).
+
+**검증**: `naive`가 3/3 seed 모두 `runs/113`과 **bit-identical**(1.21/1.07/1.06) —
+기능 추가가 기존 조건을 안 건드림이 실증됨.
+
+**결과 (3-seed, W4A8, head 제외, full probe)**
+
+| | COCO_AP | Heval_flip | Top1_flip | lost | LVIS_flip | LVIS_lost | LVIS_AP | LVIS_APr |
+|---|---|---|---|---|---|---|---|---|
+| brecq | 33.48 | 27.77 | 5.09 | 2042 | 20.50 | 4654 | 0.2303 | 0.1649 |
+| s_mult만 ours (runs/113) | 32.96 | 28.68 | 5.34 | 2065 | 24.20 | 5045 | 0.2227 | 0.1634 |
+| **alpha_bias ours (runs/120)** | **27.77** | **40.30** | **9.37** | **3599** | **34.47** | **6798** | **0.1713** | **0.1161** |
+
+brecq 대비 8개 지표 **전부 0/3**(전 seed 악화): COCO_AP -5.71, LVIS_AP -0.0590,
+LVIS_APr -0.0488, Heval_flip +12.53, LVIS_flip +13.97, lost +1557, LVIS_lost +2144.
+
+brecq 대비 COCO_AP 델타: s_mult만 `-0.37/-0.79/-0.52`(평균 **-0.56**) vs
+alpha_bias `-7.33/-5.36/-4.44`(평균 **-5.71**). **10배 더 나쁘다. 3/3 붕괴.**
+
+**진단 (claim21 정정)**
+
+| | 학습 파라미터 | nearest 대비 flip | W4A8 결과 |
+|---|---|---|---|
+| BRECQ 자신 | alpha 수백만 | 0.50% | 33.48 |
+| claim21 `learn_alpha` | **수백만** | 6.23% (max 26.7%) | 붕괴 18.49 |
+| claim22 `alpha_bias` | **52개** | 6.60% (max 25.4%) | 붕괴 27.77 |
+
+자유도를 **수만 배** 줄였는데 붕괴가 그대로 재현됐다. 공통 변수는 파라미터 수가
+아니라 **"BRECQ 반올림에서 얼마나 멀어졌는가"(flip 6%대)**다. 즉 claim21의
+"자유도 폭발" 진단은 **틀렸다** — 진짜 원인은 **W4에서 decision_loss가 weight
+rounding을 건드리는 행위 자체**이고, 손잡이 개수와 무관하다.
+
+부수 관측: `|bias|` 평균이 0.26~0.30이고 52개 중 **15~23개가 상한 0.5에 걸렸다**
+(3/3 seed). L2 reg 1e-3은 전혀 저항하지 못했다 — 최적화기가 일관되게 상한까지
+밀어붙인다. 가설: `ContrastiveHead`가 region embedding을 L2 정규화하므로 weight
+전역 스케일은 similarity에 거의 영향이 없고, `alpha_bias`(반올림 일괄 이동)와
+`s_mult`(activation scale)가 서로 상쇄 가능한 **평평한 방향**을 만들어 그 축을
+따라 표류하다 clamp에 부딪히는 것으로 보인다(미검증).
+
+**결론**: W4A8에서 rounding에 접근하는 경로는 자유도를 어떻게 조절하든 닫혀 있다.
+`s_mult`(activation scale만, rounding 불가침)가 W4A8에서 brecq에 0.56 지는 것이
+이 설계의 바닥이며, 그보다 잘하려면 **rounding이 아닌 다른 축**을 찾아야 한다.
+저비트 확장은 두 번 연속 실패했고(claim21, claim22), 논문은 **W8A8**로 쓴다.
+상한 sweep(0.05~0.1)이 형식상 남아 있으나, bias 0.26에서 -5.71, bias 0에서
+-0.56이라 단조 악화 곡선으로 보여 중간에 brecq를 넘는 지점이 있을 근거가 없다.

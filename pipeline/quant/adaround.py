@@ -38,6 +38,15 @@ def free_cpu_mem():
 
 GAMMA, ZETA = -0.1, 1.1   # rectified sigmoid 범위
 
+# alpha_bias의 기본 상한(절대값). 09-28: alpha_bias는 conv 전체 반올림을 균일하게
+# 미는 스칼라라 커지면 "불확실한 weight를 전부 같은 방향으로 반올림"하는 파국이 된다.
+# weight는 |alpha| < |bias|일 때 뒤집히므로(h의 결정 경계가 alpha=0), BRECQ 직후
+# alpha 분포에서 어느 정도가 뒤집히는지가 bias 크기로 결정된다 -- 실측(W4A8 스모크)
+# 으로 bias 0.067에서 flip 1.8%였다. Adam은 gradient 크기와 무관하게 스텝당 ~lr씩
+# 움직이므로 1500 iter면 이론상 |bias|가 15까지 갈 수 있어(=거의 전부 반올림 up),
+# forward에서 clamp로 막는다(s_mult의 clamp(0.1, 10.0)과 같은 방식).
+ALPHA_BIAS_LIMIT = 0.5
+
 # AdaRound/BRECQ 공식 구현 기본값 (Nagel et al. ICML'20 / Li et al. ICLR'21)
 DEFAULT_LR = 1e-3          # alpha용 Adam lr (BRECQ layer/block_recon: Adam(opt_params) 기본값)
 DEFAULT_REG_WEIGHT = 0.01  # BRECQ main_imagenet.py --weight 기본값
@@ -208,6 +217,42 @@ class AdaRoundQuantConv2d(nn.Module):
         rest = (w / self.w_scale) - self.w_floor
         p = ((rest - GAMMA) / (ZETA - GAMMA)).clamp(1e-4, 1 - 1e-4)
         self.alpha = nn.Parameter(-torch.log((1 - p) / p))
+        # alpha_bias (09-28): conv당 스칼라 하나(0-dim, s_mult per-tensor와 같은
+        # granularity)로 alpha 전체를 균일하게 밀어주는 보정항. h_alpha(alpha)가
+        # 아니라 h_alpha(alpha+alpha_bias)로 반올림을 결정한다.
+        #
+        # 배경(claim21): W4A8 공동최적화가 붕괴한 원인은 손상 크기가 아니라
+        # 자유도였다 -- alpha는 conv당 원소 수만큼(전체 수백만 개) 독립 파라미터인데,
+        # decision_loss가 쓰는 reliable anchor는 538개뿐이라 제약이 압도적으로
+        # 부족해 calib에 과적합했다(nearest 대비 flip 최대 26.7%, 그런데도 W4A8
+        # COCO_AP 붕괴). alpha_bias는 conv마다 원소 수와 무관하게 스칼라 1개만
+        # 쓴다 -- 전체 모델 기준 52~70개로 s_mult와 정확히 같은 자릿수다. 538개
+        # 앵커가 이미 s_mult 52~70개를 유의미하게 제약한다는 게 W8A8 확정 결과로
+        # 증명돼 있으므로, 같은 자릿수의 alpha_bias도 같은 수준의 제약을 받을 것으로
+        # 기대한다 -- 다만 "BRECQ가 이미 원소별로 최적화해둔 반올림을 conv 전체
+        # 균일하게 밀어서" 고치는 것이라 표현력은 원소별 alpha보다 훨씬 약하다(가설,
+        # 검증 필요). 초기값 0.0 = BRECQ의 원래 반올림과 완전히 동일(no-op).
+        self.alpha_bias = nn.Parameter(torch.tensor(0.0, device=self.conv.weight.device))
+        self.alpha_bias_limit = ALPHA_BIAS_LIMIT
+        # use_alpha_bias (09-28): False면 quant_weight()가 alpha_bias를 **아예 안 더한다**.
+        # 값이 0이라 수학적으로는 더해도 같지만, alpha_bias가 requires_grad=True인
+        # Parameter라 `alpha + alpha_bias`가 autograd 그래프에 노드를 하나 더 만든다.
+        # BRECQ는 ImagePoolingAttn의 AdaptiveMaxPool2d backward를 통과하는데 그건
+        # --deterministic에서도 결정적 구현이 없어(claim18-d) 이미 두 값 사이를 오간다
+        # -- 그래프가 바뀌면 backward 연산 순서가 달라져 어느 쪽에 떨어질지가 바뀔 수
+        # 있다. 기존 use_smult/use_lsq와 같은 방식으로 경로를 분리해서, 이 기능을
+        # 안 쓰는 조건(naive/adaround/qdrop/brecq/기본 combined)은 코드 경로가
+        # 변경 전과 **완전히 동일**하게 만든다.
+        self.use_alpha_bias = False
+        # round_ste (09-28): alpha_bias 학습 전용 경로. soft=True로 열면 forward가
+        # 연속 h_alpha 값을 쓰게 되는데, 그러면 "최적화하는 모델(soft)"과 "배포하는
+        # 모델(hard)"이 달라진다 -- 게다가 비교 대상인 s_mult-only 실험(runs/113)은
+        # soft=False(hard)에서 s_mult를 최적화했으므로, soft를 켜면 alpha_bias와
+        # 무관한 변화가 하나 더 섞여서 원인 분리가 안 된다. round_ste는 forward를
+        # hard로 유지한 채(=bias 0이면 BRECQ 모델과 bit-identical) gradient만
+        # h_alpha를 통해 흘린다. 코드베이스의 기존 STE 관행(_quantize_smult의 round,
+        # ActObserver.quantize_ste)과 같은 방식.
+        self.round_ste = False
         self._hard_weight_cache = None       # soft=False일 때 quant_weight() 캐시(아래 참고)
 
     def _apply(self, fn):
@@ -229,14 +274,36 @@ class AdaRoundQuantConv2d(nn.Module):
         임계값 판정은 상수다 -- 그런데도 매 forward마다 weight 크기 그대로
         재계산되고 있었다(probe 5000장 + LVIS 4809장 전부). soft가 다시 True가 되면
         캐시를 무효화해서 정확성은 그대로 유지한다."""
+        a = self.biased_alpha()
+        if self.round_ste:
+            # forward는 hard(배포 모델과 동일), backward는 h_alpha를 통해 alpha_bias로.
+            self._hard_weight_cache = None
+            h_soft = h_alpha(a)
+            h_hard = (h_soft >= 0.5).float()
+            w_int = self.w_floor + (h_soft + (h_hard - h_soft).detach())
+            return self._dequant(w_int)
         if self.soft:
             self._hard_weight_cache = None
-            w_int = self.w_floor + h_alpha(self.alpha)
+            w_int = self.w_floor + h_alpha(a)
             return self._dequant(w_int)
         if self._hard_weight_cache is None:
-            w_int = self.w_floor + (h_alpha(self.alpha) >= 0.5).float()
+            w_int = self.w_floor + (h_alpha(a) >= 0.5).float()
             self._hard_weight_cache = self._dequant(w_int)
         return self._hard_weight_cache
+
+    def biased_alpha(self):
+        """반올림 결정에 실제로 쓰이는 alpha. use_alpha_bias가 꺼져 있으면 alpha를
+        **그대로** 반환한다 -- 덧셈 노드조차 만들지 않아 기존 경로와 완전히 동일하다
+        (위 use_alpha_bias 주석 참고)."""
+        if not self.use_alpha_bias:
+            return self.alpha
+        return self.alpha + self.eff_alpha_bias()
+
+    def eff_alpha_bias(self):
+        """실제로 반올림에 적용되는 alpha_bias. 상한 밖으로 나가면 clamp되어
+        gradient가 0이 되므로 폭주하지 않는다(s_mult의 clamp와 같은 방식)."""
+        lim = self.alpha_bias_limit
+        return self.alpha_bias.clamp(-lim, lim)
 
     def _dequant(self, w_int):
         """w_int(=floor+반올림결정, zero_point 미적용)를 clamp+역양자화. 대칭/비대칭 분기."""
@@ -292,6 +359,14 @@ class AdaRoundQuantConv2d(nn.Module):
         r = 1 - (2 * h_alpha(self.alpha) - 1).abs() ** beta
         return r.mean() if reduction == "mean" else r.sum()
 
+    def bias_reg_loss(self):
+        """alpha_bias용 L2 정규화. reg_loss(위)와 목적이 다르다 -- reg_loss는
+        h(alpha)를 0/1로 "밀어내서" 반올림을 확정짓는 용도(alpha 자체가 대상)고,
+        이건 alpha_bias가 0(=BRECQ 원래 반올림, no-op)에서 너무 멀어지지 않게
+        붙잡아두는 용도다. alpha_bias는 conv 전체에 균일하게 작용하므로 커지면
+        BRECQ가 원소별로 맞춰둔 재구성을 그대로 깨뜨린다."""
+        return self.alpha_bias ** 2
+
     def flip_rate(self):
         """round-to-nearest 대비 반올림 결정이 바뀐 비율(%). AdaRound가 실제로
         뭔가 학습했는지 보는 진단 -- h→0/1 수렴률은 정규화만으로도 100%가 되므로
@@ -299,7 +374,7 @@ class AdaRoundQuantConv2d(nn.Module):
         with torch.no_grad():
             rest = (self.conv.weight.detach() / self.w_scale) - self.w_floor
             nearest = (rest >= 0.5)
-            learned = (h_alpha(self.alpha) >= 0.5)
+            learned = (h_alpha(self.biased_alpha()) >= 0.5)
             return float((learned != nearest).float().mean()) * 100
 
 

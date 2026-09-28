@@ -419,6 +419,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       neighbor_of_cal=False, aux_mse_weight=0.0,
                                       learn_alpha=False, alpha_lr=1e-2,
                                       alpha_reg_weight=1e-2, alpha_warmup=0.2,
+                                      learn_alpha_bias=False, alpha_bias_lr=1e-2,
+                                      alpha_bias_reg_weight=1e-3, alpha_bias_limit=0.5,
                                       utility_stage2_frac=0.0, thresh_w=1.0, box_w=0.5,
                                       det_thres=0.25, margin_thres=0.5,
                                       region_dir_weight=0.0, margin_one_sided=False,
@@ -509,13 +511,21 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     통째로 대체하는 것과 다르다. 기본 0.0(기존 동작 유지, opt-in).
     """
     ada = list_adaround_convs(quant_model)
+    # alpha_bias만 학습할 때는 soft를 켜지 않고 round_ste(hard forward + STE backward)를
+    # 쓴다 -- soft를 켜면 alpha_bias와 무관하게 "최적화 대상 모델"이 바뀌어서
+    # s_mult-only 실험과의 비교에 교란이 섞인다(adaround.py round_ste 주석 참고).
+    # learn_alpha(원소별)는 기존 그대로 soft 경로를 쓴다. 둘 다 켜면 soft 우선.
+    _use_ste = bool(learn_alpha_bias and not learn_alpha)
     for ac in ada:
-        # learn_alpha면 반올림을 연속(soft)으로 열어 alpha에 grad가 흐르게 한다.
-        # 기본(False)은 기존 동작 -- round-to-nearest 고정 + s_mult만 학습.
         ac.soft = bool(learn_alpha)
+        ac.round_ste = _use_ste
+        ac.use_alpha_bias = bool(learn_alpha_bias)
+        if learn_alpha_bias:
+            ac.alpha_bias_limit = alpha_bias_limit
         ac.ste = False
         ac.use_smult = True
         ac.alpha.requires_grad_(bool(learn_alpha))
+        ac.alpha_bias.requires_grad_(bool(learn_alpha_bias))
 
     # utility_stage2_frac > 0 (09-24): 논문 §4.3 Utility-Constrained Refinement.
     # margin/neighbor(=ranking 보존)만으로는 최종 탐지 성능이 보장되지 않는다는
@@ -656,6 +666,12 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     # lr은 s_mult(1e-2)와 분리 -- 공식 AdaRound/BRECQ와 같은 1e-3.
     alphas = [ac.alpha for ac in ada] if learn_alpha else []
     opt_a = torch.optim.Adam(alphas, lr=alpha_lr) if learn_alpha else None
+    # alpha_bias (09-28, claim21 대응): learn_alpha와 상호배타는 아니지만 용도가
+    # 다르다 -- alpha는 원소별 자유도(자유도 폭발로 W4A8에서 붕괴, claim21),
+    # alpha_bias는 conv당 스칼라 하나(s_mult와 같은 자릿수)로 자유도를 억제한
+    # 대안. 위 adaround.py의 alpha_bias 주석 참고.
+    alpha_biases = [ac.alpha_bias for ac in ada] if learn_alpha_bias else []
+    opt_ab = torch.optim.Adam(alpha_biases, lr=alpha_bias_lr) if learn_alpha_bias else None
     pidx = torch.tensor(prompt_idx, device=device)
     cal_idx_list = list(cal_idx) if cal_idx else []
     cidx = torch.tensor(cal_idx_list, device=device, dtype=torch.long) if cal_idx_list else None
@@ -798,13 +814,25 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             beta = temp_decay(it, iters, alpha_warmup)
             rl = sum(ac.reg_loss(beta, reduction="sum") for ac in ada)
             loss = loss + alpha_reg_weight * rl
+        if learn_alpha_bias:
+            # L2로 alpha_bias를 0(=BRECQ 원래 반올림) 근처에 붙잡아둔다. 위
+            # reg_loss(rectified-sigmoid, 0/1로 밀어냄)와는 목적이 다르다 --
+            # bias_reg_loss는 "많이 안 움직이게" 억제하는 정규화다.
+            rbl = sum(ac.bias_reg_loss() for ac in ada)
+            loss = loss + alpha_bias_reg_weight * rbl
         if opt_a is not None:
             opt_a.zero_grad()
+        if opt_ab is not None:
+            opt_ab.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(smults, max_norm=1.0)
+        if alpha_biases:
+            torch.nn.utils.clip_grad_norm_(alpha_biases, max_norm=1.0)
         opt.step()
         if opt_a is not None:
             opt_a.step()
+        if opt_ab is not None:
+            opt_ab.step()
 
         if verbose and (it + 1) % max(1, iters // 10) == 0:
             sd = sum(float((s.detach()-s0i).abs().mean()) for s, s0i in zip(smults, s0)) / len(smults)
@@ -822,15 +850,27 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
         q_bcap.close(); fp_bcap.close()
     if q_cv2_cap is not None:
         q_cv2_cap.close()
-    if learn_alpha:
+    if learn_alpha or learn_alpha_bias:
         for ac in ada:
             ac.soft = False                      # hard 확정(round 결정 고정)
+            ac.round_ste = False                 # STE 해제 -- forward는 이미 hard였다
+            ac._hard_weight_cache = None         # bias가 바뀌었으니 캐시 무효화
         fl = [ac.flip_rate() for ac in ada]
+        print(f"[promptcal][{'learn_alpha' if learn_alpha else 'alpha_bias'}] hard 확정. "
+              f"nearest 대비 평균 flip {sum(fl)/len(fl):.3f}% (max {max(fl):.3f}%) "
+              f"-- flip이 0에 가까우면 안 움직인 것")
+    if learn_alpha:
         hc = [float(((h_alpha(ac.alpha.detach()) < 0.05) |
                      (h_alpha(ac.alpha.detach()) > 0.95)).float().mean()) * 100 for ac in ada]
-        print(f"[promptcal][learn_alpha] hard 확정. nearest 대비 평균 flip "
-              f"{sum(fl)/len(fl):.3f}% (max {max(fl):.3f}%), h->0/1 수렴 "
-              f"{sum(hc)/len(hc):.0f}% -- flip이 0에 가까우면 alpha가 안 움직인 것")
+        print(f"[promptcal][learn_alpha] h->0/1 수렴 {sum(hc)/len(hc):.0f}%")
+    if learn_alpha_bias:
+        ab = [float(ac.eff_alpha_bias().detach().abs()) for ac in ada]
+        raw = [float(ac.alpha_bias.detach().abs()) for ac in ada]
+        n_clamp = sum(1 for r in raw if r > alpha_bias_limit + 1e-9)
+        print(f"[promptcal][alpha_bias] |bias| 평균={sum(ab)/len(ab):.4f} "
+              f"max={max(ab):.4f} (0=BRECQ 원래 반올림과 동일, 상한={alpha_bias_limit}), "
+              f"상한에 걸린 conv {n_clamp}/{len(ada)}개 "
+              f"-- 많이 걸리면 상한을 올리거나 reg를 키울 것")
     if verbose:
         tot = sum(float((s.detach()-s0i).abs().sum()) for s, s0i in zip(smults, s0))
         print(f"[promptcal-C+neighbor] 완료 (s_mult 총 변화={tot:.3f})")
