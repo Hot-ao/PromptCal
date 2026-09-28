@@ -1,0 +1,175 @@
+PromptCal 저비트 설계 논의 정리 (2026-09-28)
+================================================================================
+
+[0] 요청 배경
+--------------------------------------------------------------------------------
+- 현재 결과(W8A8)에서 AP가 가장 잘 나오지만, 절대 크기가 작아(LVIS_AP +0.4 AP점,
+  COCO_AP +0.3 AP점) 유의미한 성능 복원이라 보기 어렵다.
+- 그래서 W4A4 / W4A8 / W8A4처럼 더 강한 양자화로 가고 싶고, 구조가 바뀌어도 괜찮다.
+
+
+[1] 현재 모델 파악 (pipeline/ + PROMPTCAL_PAPER_DESIGN_2026-09-28.md)
+--------------------------------------------------------------------------------
+- 대상: YOLOv8s-World.
+- 양자화기: weight 채널별 비대칭 MSE(L_2.4 탐색), activation은 conv 입력 기준 per-tensor
+  비대칭(MSE observer). CLIP과 DFL은 항상 제외.
+- Stage 1: BRECQ가 rounding alpha를 블록 재구성으로 학습(2000 iter).
+- Stage 2: conv당 스칼라 s_mult(52개, head 포함 시 70개)만 top-k margin + neighbor hinge
+  + scale reg로 학습(1500 iter). activation scale에 흡수되어 추론 오버헤드 0.
+- 결정 지점: cv4(ContrastiveHead) = tau * cos(x_hat, w_hat_j) + bias. conv가 없으므로
+  순위를 흔드는 것은 cv3와 그 앞단이 만든 region 임베딩의 "방향 오차"다.
+
+
+[2] 지금 구조가 저비트에서 막히는 이유 (기존 기록에서 뽑은 진단)
+--------------------------------------------------------------------------------
+1) 손잡이가 손상 위치와 어긋남
+   W4A8에서는 손상이 weight rounding에 있는데 s_mult는 activation scale만 건드린다.
+   BRECQ보다 COCO_AP 0.56 낮은 것이 이 설계의 바닥(claim22).
+
+2) rounding을 건드리면 붕괴 — 원인은 자유도가 아니라 감독의 형태
+   파라미터 수백만 개(claim21, COCO_AP 18.5)든 52개(claim22, 27.8)든 BRECQ 대비
+   rounding flip ~6%로 똑같이 붕괴. 256장에서 뽑은 앵커 538개의 top-k 경계만 보는
+   sparse하고 FP에 고정되지 않은 손실이 weight를 움직이는 것 자체가 문제.
+   반대로 BRECQ(dense 재구성, FP에 고정)는 W4A8을 33.5까지 복구한다.
+
+3) A4 붕괴의 일부는 실험 설정 탓일 가능성
+   wrap_convs에 첫/마지막 레이어 예외가 없어 W4A4에서 stem이 이미지 픽셀을 4bit로
+   받는다. BRECQ·QDrop·Reg-PTQ의 W4A4 표는 모두 첫/마지막 레이어를 8bit로 둔다.
+   여기에 C2f·SPPF concat 입력(범위가 다른 분기)을 per-tensor 하나로 자르는 문제가 겹친다.
+   QDrop은 원래 W4A4용인데 여기서 BRECQ가 0.73으로 죽는다면 설정부터 의심해야 한다.
+
+=> W4A8이 논문에 가장 좋은 무대. BRECQ 기준으로도 LVIS_flip 20.5%, Heval_flip 27.8%,
+   LVIS_AP 0.230(FP 0.259)이라 vocabulary 손상이 크게 드러나고 복구 여지도 넓다.
+
+
+[3] 제안: vocabulary 기준 재구성 (Stage 1 손실을 교체)
+--------------------------------------------------------------------------------
+핵심 식:
+    Delta_j ~= tau_l * <Delta x_hat, w_hat_j>
+    E_{w~V}[Delta_j^2] = tau_l^2 * Delta x_hat^T C_V Delta x_hat,   C_V = E[w w^T]
+    Delta x_hat ~= P_x Delta x / ||x||,   P_x = I - x_hat x_hat^T
+
+=> "임의 vocabulary에서의 기대 유사도 오차"가 닫힌 형태의 2차형식이 된다.
+
+성질:
+- dense: 모든 region·방향에 대한 재구성 손실이라 FP 근처에 고정 (claim21/22 경로 회피).
+- 특정 닫힌 집합에 안 맞춤: C_V는 평가셋과 겹치지 않는 대형 명사 집합으로 만든다.
+  CLIP 텍스트 임베딩은 좁은 원뿔(저차원)에 몰려 있어 그 밖의 오차는 순위에 거의 무관.
+- 순위/AP 분리: C = Sigma(centered) + lambda * mu mu^T.
+  Sigma는 prompt 간 순위, mu 방향은 절대 점수(threshold·AP) 담당.
+- 앞단으로 끌어올리기: BRECQ FIM 가중 재구성과 같은 방식.
+  u ~ N(0, C)를 샘플해 s = <x_hat, u>를 블록 출력으로 역전파, E[g^2]를 가중치로 캐시.
+  옵티마이저·자유도·비용은 BRECQ와 같고 metric만 다름 -> "감독만 다르다"가 실제로 성립.
+- 기존 top-k margin은 주 목적함수에서 빼거나 마지막에 작게 얹는 선택지로만 남김.
+
+A4를 위한 양자화기 쪽 변경:
+- 첫/마지막 레이어 8bit (표준 프로토콜, baseline에도 동일 적용).
+- per-channel activation scale 재파라미터화: 채널 scale을 소비 conv weight에 W*diag(s)로
+  흡수, 생산 쪽 requant는 conv+SiLU epilogue에서 원래 채널별. 채널별 zero-point도
+  상수 W*zp를 bias로 접으면 해결. claim4의 "배포 불가" 판단은 재검토 여지.
+  대가: 흡수된 diag(s)가 W4 weight 범위를 넓힘 -> migration 강도로 조절.
+- cv3 경로만 A8 유지(mixed precision): PROMPTCAL_V3_MIXED_PRECISION.md 근거.
+
+타깃 우선순위: W4A8 본 표 > W4A4(첫/마지막 8bit, QDrop baseline) > W8A4 부록.
+
+
+[4] 양자화 범위 확인 (질문: backbone~neck~head 전체 맞나?)
+--------------------------------------------------------------------------------
+답: 기본값에서는 head가 빠져 있다. 전체 양자화는 --no-skip-head일 때뿐.
+
+  부분                                   | 기본(--skip-head)    | --no-skip-head
+  ---------------------------------------+----------------------+---------------
+  backbone (stem ~ SPPF)                 | 양자화               | 양자화
+  neck (FPN/PAN, C2fAttn·ImagePoolingAttn)| 양자화               | 양자화
+  head WorldDetect cv2(9) + cv3(9)       | FP32                 | 양자화
+  head cv4 (ContrastiveHead)             | conv 없음            | conv 없음
+  DFL, CLIP                              | 항상 제외            | 항상 제외
+
+근거: run_comparison.py의 --skip-head 기본값 True, skip_modules=[m.model.model[-1]].
+
+양자화 범위 안에서도 FP로 남는 것 (wrap_convs는 nn.Conv2d만 교체):
+- neck 어텐션의 nn.Linear (C2fAttn guide linear, ImagePoolingAttn q/k/v/proj)
+- matmul/einsum, LayerNorm
+- conv 출력 activation (residual add·concat 결과는 다음 conv 입력에서 양자화)
+
+저비트 설계 시 유의:
+- claim21/22의 W4A8 결과는 head 제외 조건 (cv3가 FP -> 임베딩 오차는 전부 neck에서 옴).
+- "fully quantized W4A4"라면 neck Linear까지 양자화할지 정의하고 논문에 명시.
+- "마지막 레이어 8bit"는 head 포함 조건에만 해당 (cv2/cv3 마지막 1x1 conv).
+
+
+[5] 구현 (head 포함 기준) — 커밋 5ce7871, 브랜치 baseline-confounds-6seed
+--------------------------------------------------------------------------------
+1) --first-last-bits 8  (quant_model.py::set_first_last_bits)
+   stem 첫 conv + head cv2[l][-1], cv3[l][-1]을 8bit로 고정. 모든 조건에 동일 적용,
+   calibrate 전에 적용되어 observer/weight scale도 8bit 기준. 기본 0 = 꺼짐.
+
+2) 새 조건 brecq_vm / qdrop_vm  (quant/vocab_metric.py, brecq.py::optimize_brecq(vocab_metric=...))
+   | 대상                              | 손실                                          |
+   | head cv3 마지막 conv(임베딩 출력) | exact 2차형식 tau^2 v^T C v,                   |
+   |                                   | v = normalize(q) - normalize(f)               |
+   | backbone·neck 블록, cv3 앞단 conv | (1-mix)*재구성 + mix*Fisher 가중 재구성        |
+   | head cv2 (박스)                   | 기존 재구성 (유사도 경로 밖, 자동 판별)        |
+   - anchor 가중치: max_j sigmoid(sim_fp) + floor(0.05).
+   - 대응 baseline과 인자를 전부 같게 넘기고 metric만 추가 -> 짝비교 단일 변수.
+   - Fisher 샘플링은 전용 RNG -> 전역 RNG 스트림 불변.
+   - vocab_metric=None이면 기존 코드 경로 그대로.
+   - 플래그: --vm-vocab (기본 configs/vocab_generic.txt | coco | lvis(oracle) | identity),
+             --vm-lam-mean(1.0), --vm-mix(0.5), --vm-samples(4),
+             --vm-anchor-weight(conf|uniform), --vm-conf-floor(0.05)
+
+3) configs/vocab_generic.txt  (pipeline/build_generic_vocab.py)
+   WordNet 구체 명사 4000개, COCO/LVIS 이름과 겹치는 synset 제외(겹침 0).
+   서버에서 --lvis-ann을 주면 LVIS synonyms·synset까지 뺀 엄격판 생성 가능.
+
+4) pipeline/diag_vocab_subspace.py  (E1 진단)
+   임베딩 방향 오차가 텍스트 부분공간에 얼마나 실렸는지: err_iso, err_metric, rho,
+   frac@k, C 유효 차원.
+
+5) 문서: docs/PROMPTCAL_VOCAB_METRIC_2026-09-28.md, pipeline/README.md 파일 지도 갱신.
+   src/quant 사본도 동기화.
+
+
+[6] 검증한 것 / 못 한 것
+--------------------------------------------------------------------------------
+검증함 (CPU, 이 환경):
+- vocab_metric=None 경로가 수정 전 코드와 alpha·LSQ delta bit-identical.
+- 무작위 초기화 YOLO-World(yolov8s-world.yaml)에서 동작: 70 conv 양자화,
+  8bit 예외 7개(stem 1 + cv2/cv3 마지막 6), 분류 exact 3 / Fisher 23 / 재구성 9.
+- Fisher 추정량: 해석해 대비 상대오차 1.8% (20k 샘플).
+- 새 조건이 전역 RNG를 건드리지 않음.
+
+못 함:
+- 학습된 가중치·실데이터·GPU 실측. 성능 수치는 전부 미측정.
+- 빌드 시간 증가(BRECQ 대비 +1~1.5배 예상)도 미측정. --vm-samples 2로 줄일 수 있음.
+
+
+[7] 서버에서 돌릴 순서와 판정 기준
+--------------------------------------------------------------------------------
+E0  W4A4·W8A4 baseline (--first-last-bits 8, naive/qdrop/brecq, 1-seed --eval-cap 500)
+    -> QDrop W4A4가 수십 AP로 살아나면 A4 축이 열림.
+E1  diag_vocab_subspace.py, W4A8 head 포함, naive·brecq
+    -> C 유효 차원 << 512이고 BRECQ rho <= 1이면 E2 진행. rho가 이미 크면 이득 작을 것.
+E2  W4A8 --conditions brecq,brecq_vm, 2-seed full probe
+    -> LVIS_AP·LVIS_flip 2/2 개선이면 6-seed로.
+E3  --vm-vocab ablation: identity / coco / generic / lvis(oracle)
+    -> "generic ~= lvis > coco > identity"면 논문 핵심 표.
+       identity만으로 같은 이득이면 기여는 "방향 보존 재구성"으로 축소.
+E4  --vm-mix {0.25, 0.5, 1.0}, --vm-lam-mean {0, 1}
+E5  (E0이 열리면) W4A4 qdrop,qdrop_vm
+
+명령 예:
+  .venv/bin/python pipeline/diag_vocab_subspace.py --w-bits 4 --a-bits 8 --no-skip-head \
+    --first-last-bits 8 --modes naive,brecq --n-eval 200 --device <gpu> --deterministic
+
+  .venv/bin/python pipeline/run_comparison.py --seed <0|1> --deterministic --w-bits 4 --a-bits 8 \
+    --no-skip-head --first-last-bits 8 --conditions brecq,brecq_vm --device <gpu>
+
+
+[8] 리스크
+--------------------------------------------------------------------------------
+- E1이 부정적(오차가 이미 텍스트 방향에 몰림)이면 재가중 이득은 작다.
+- head 제외 프로토콜에서는 exact target이 없고 Fisher 경로만 작동.
+- neck의 C2fAttn·ImagePoolingAttn은 calibration 중 COCO-80 텍스트로 guide됨.
+  모든 조건이 같아 비교는 공정하지만 "vocabulary-agnostic" 주장엔 각주 필요.
+- vocab_generic.txt는 이름 기준 제외만 적용 -> 엄격판과 결과 일치 확인 권장.
