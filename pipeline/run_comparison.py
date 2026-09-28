@@ -506,7 +506,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
     # 09-24: combined만 activation 초기 범위를 MSE 최적(0.0)과 클리핑 없는
     # min-max(1.0) 사이에서 보간할 수 있게 한다. 다른 조건은 0.0 고정이라 영향 없음.
     calibrate(m.model, calib, device=device, act_observer=act_observer,
-              range_blend=(combined_range_blend if mode == "combined" else 0.0))
+              range_blend=(combined_range_blend if mode in ("combined", "combined_m") else 0.0))
     if mode == "naive":
         pass
     elif mode == "adaround":
@@ -561,7 +561,16 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                            two_stage=brecq_two_stage, act_iters=brecq_act_iters,
                            batch=brecq_batch, neck_layerwise=neck_layerwise,
                            vocab_metric=vocab_metric)
-    elif mode == "combined":
+    elif mode in ("combined", "combined_m"):
+        # 09-28 combined_m: "combined"와 완전히 같되 **Stage 1(BRECQ 재구성)을 기준선 BRECQ 호출과
+        # 같은 neck_layerwise/batch로 맞춘다.** "combined"의 Stage 1은 optimize_brecq에 이 인자를
+        # 안 넘겨 함수 기본값 neck_layerwise=True(neck을 conv 단위로 재구성)를 받는데, 기준선
+        # BRECQ는 CLI 기본값(block 단위)이다 -- 의도한 차이가 아니라 호출부에서 빠진 인자다.
+        # 그래서 Combined-vs-BRECQ 짝비교에 "neck 재구성 단위"가 미격리 교란으로 섞여 있었다.
+        # 같은 run에서 brecq / combined / combined_m을 나란히 재면
+        #   combined - combined_m = neck 재구성 단위의 효과,
+        #   combined_m - brecq    = Stage 2(감독의 종류)만의 효과(LSQ 유무 포함)
+        # 로 분리된다. 기존 "combined"는 건드리지 않으므로 기존 결과는 그대로 보존된다.
         # 09-18 claim14로 확정: claim13으로 1단계(optimize_adaround)가 alpha를
         # 훨씬 많이 움직이게 됐는데, 그 목적함수(순수 MSE reconstruction)는
         # margin_loss/s_mult(2단계)가 보호하는 영역(train_cols=S∪H_cal+neighbor_cols)과
@@ -591,6 +600,8 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         # 같이 바뀌면 단일 변수 비교가 깨진다. 이제 둘 다 combined_recon_iters
         # 하나로 통일(기존에 recon_iters_strong 기본값 2000으로 돌렸던 brecq
         # 진단을 재현하려면 --combined-recon-iters 2000을 명시할 것).
+        assert mode != "combined_m" or combined_stage1 == "brecq", (
+            "combined_m은 Stage 1을 기준선 BRECQ와 맞추는 조건이라 --combined-stage1 brecq에서만 의미가 있다")
         if combined_stage1 != "none":
             assert combined_recon_iters > 0, (
                 f"--combined-stage1={combined_stage1}인데 --combined-recon-iters="
@@ -601,8 +612,10 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
             optimize_adaround(m.model, fp.model, calib, device, iters=combined_recon_iters,
                               verbose=False)
         elif combined_stage1 == "brecq":
+            _s1_kw = (dict(neck_layerwise=neck_layerwise, batch=brecq_batch)
+                      if mode == "combined_m" else {})
             optimize_brecq(m.model, fp.model, calib, device, iters=combined_recon_iters,
-                           verbose=False)
+                           verbose=False, **_s1_kw)
         optimize_promptcal_scale_neighbor(m.model, fp.model, calib, device, pidx, iters=iters,
                                           lr=lr, k=k, neighbor_k=neighbor_k,
                                           neighbor_weight=neighbor_weight,
@@ -1005,7 +1018,9 @@ def main():
     fp = build(YOLOWorld, args.model, coco, device, calib, "fp")
 
     conditions = [c.strip() for c in args.conditions.split(",")]
-    _valid = {"naive", "adaround", "qdrop", "brecq", "combined", "brecq_vm", "qdrop_vm"}
+
+    _valid = {"naive", "adaround", "qdrop", "brecq", "combined", "combined_m", "brecq_vm", "qdrop_vm"}
+
     assert all(c in _valid for c in conditions), f"--conditions에 알 수 없는 값: {set(conditions) - _valid}"
     vocab_metric = None
     if {"brecq_vm", "qdrop_vm"} & set(conditions):
@@ -1193,6 +1208,8 @@ def main():
         lsq_bits.append("neck도 block-wise(공식 layer-wise와 다름, ablation)")
     if not args.qdrop_brecq_learn_act_scale:
         lsq_bits.append("QDrop/BRECQ LSQ 꺼짐(claim12 이전 축소구현, ablation)")
+    if "combined_m" in conditions:
+        lsq_bits.append("combined_m=Stage 1을 기준선 BRECQ와 같은 neck_layerwise/batch로 맞춘 대조(09-28)")
     if args.combined_stage1 != "none":
         lsq_bits.append(f"Combined 1단계={args.combined_stage1}(진단 실험, 헤드라인 아님)")
     if args.neighbor_of_cal:

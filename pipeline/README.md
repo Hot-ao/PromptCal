@@ -1,14 +1,39 @@
 # pipeline/ — 우리 모델(Combined PTQ)을 돌리는 데 필요한 전체 코드
 
+> ## 🔴 09-28 현재 상태 — 아래 본문의 "헤드라인 설계 = stage1 none"은 **틀렸다**
+>
+> 이 README는 날짜순 누적 로그라 09-16~09-19의 서술이 그대로 남아 있다. **현재 상태는 다음 세 문서가 단일 진실 공급원이다.**
+>
+> | 알고 싶은 것 | 문서 |
+> |---|---|
+> | **제안 방법의 현재 설계·손실·결과·한계·논문 대응** | 루트 [`PROMPTCAL_PAPER_DESIGN_2026-09-28.md`](../PROMPTCAL_PAPER_DESIGN_2026-09-28.md) |
+> | baseline 확정 수치·환경·재현 절차·측정 신뢰성·run 인덱스 | [`BASELINE_STATUS.md`](BASELINE_STATUS.md) |
+> | 각 시도의 판정 경위 | [`docs/PROMPTCAL_CLAIMS_2026-09-15.md`](../docs/PROMPTCAL_CLAIMS_2026-09-15.md) (claim14~23) |
+>
+> **본문과 달라진 핵심 세 가지**
+> 1. **확정 설계는 `--combined-stage1 brecq --combined-recon-iters 2000`이다**(claim20). 코드 기본값은 여전히 `none`이라
+>    **반드시 명시해야 한다** — 안 하면 naive 기반 Combined가 나온다. naive 기반은 "재구성 + ranking"이라는 주장을 시험하지
+>    못하는 잘못된 기반이었고, 이후의 실패 8건이 전부 여기서 나왔다. 본문의 `PROMPTCAL_CURRENT_MODEL_V2.md`는 성능 표가 stale.
+> 2. **Combined를 측정하는 모든 실행에 `--deterministic`을 켠다**(없으면 같은 seed에서도 결과가 달라진다).
+> 3. **GPU는 RTX 4000 Ada(0,4,5,6,7)에만 몰아서 쓰고 `CUDA_DEVICE_ORDER=PCI_BUS_ID`를 지킨다.** 이 서버는 기본 정렬에서
+>    `--device N`이 nvidia-smi 인덱스와 어긋나고(`run_comparison.py`가 이제 자동 고정하고 `[gpu]` 로그를 남김),
+>    GPU 종류가 섞이면 bit-identical이 깨진다.
+>
+> **프로토콜이 둘이다**: head 제외(QDrop 원 논문 방식, 기본)와 `--no-skip-head`(detection head 포함, 이때 AdaRound는
+> `--adaround-act-observer mse`). 결과는 `BASELINE_STATUS.md` §1·§1.1. 어느 쪽을 헤드라인으로 할지는 미결정이다.
+>
+> **`src/quant/*` ↔ `pipeline/quant/*` 사본은 09-28 기준 7개 파일 전부 diff 없이 동일함을 확인했다**(`diff -q`).
+> `run_comparison.py`는 `scripts/58_*`의 사본으로 계속 분기해 있다(아래 "유지 관리 메모").
+
 `promptcal-ptq` 저장소에는 진단/탐색용 스크립트가 60개 넘게 있다(`scripts/00_*`
 ~ `scripts/61_*`). 이 디렉토리는 그중 **논문에 실제로 쓰이는 결과(baseline
 비교 + 제안 방법 Combined + 확장 평가지표, 공식 데이터 설정)를 처음부터
 재현하는 데 필요한 코드만** 한곳에 모은 것이다.
 
 작동 원리를 개념적으로 설명한 문서는 저장소 루트의
-[`PROMPTCAL_HOW_IT_WORKS.md`](../PROMPTCAL_HOW_IT_WORKS.md), **현재 확정된
+[`PROMPTCAL_HOW_IT_WORKS.md`](../docs/PROMPTCAL_HOW_IT_WORKS.md), **현재 확정된
 최종 설계·하이퍼파라미터·성능 결과의 단일 진실 공급원**은 **09-17부터**
-[`PROMPTCAL_CURRENT_MODEL_V2.md`](../PROMPTCAL_CURRENT_MODEL_V2.md)다(v1인
+[`PROMPTCAL_CURRENT_MODEL_V2.md`](../docs/PROMPTCAL_CURRENT_MODEL_V2.md)다(v1인
 `PROMPTCAL_CURRENT_MODEL.md`는 per-channel 시절 전체 서사와 하이퍼파라미터
 스윕 10개 절의 역사적 기록으로 보존됨 — v2가 그 결론만 깔끔하게 반영).
 이 README는 "어느 파일이 무슨 역할을 하는가"에 집중한다 — 수치를 인용할 땐
@@ -33,7 +58,7 @@
 이전 설계로 되돌릴 수 있음). H_eval anchor-선정 리크 수정(claim1)은 opt-in도
 아니고 항상 적용되는 버그 수정이다. 이 변경들의 전체 검증 경위·claim
 2/3/6~10 등 아직 미확정인 부분은
-[`PROMPTCAL_CLAIMS_2026-09-15.md`](../PROMPTCAL_CLAIMS_2026-09-15.md)에
+[`PROMPTCAL_CLAIMS_2026-09-15.md`](../docs/PROMPTCAL_CLAIMS_2026-09-15.md)에
 정리돼 있다.
 
 **09-18**: `adaround.py`/`brecq.py`의 재구성 loss 정규화가 공식 BRECQ 대비
@@ -270,8 +295,9 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle GPU> python pipeline/run
   커맨드는 플래그 추가 없이 지금 §8(claim15까지 반영된 최신 버전)을 그대로
   재현**한다 — claim13 직후 한동안 재현 안 됐다가 claim14로 원복, claim15
   (LSQ 기본 적용 + scale_reg_weight=1.0)도 전부 기본값이라 여전히 재현됨.
-- **`--combined-stage1`(none/adaround/brecq, 기본 `none` — 09-19 claim15,
-  진단 전용, 제안 방법 아님)**: Combined의 1단계로 뭘 쓸지. `brecq`는 BRECQ의
+- **`--combined-stage1`(none/adaround/brecq, 코드 기본값 `none` — 09-19 claim15 당시엔 진단 전용이었다)**:
+  **⚠️ 09-28 정정: 확정 설계는 `brecq`이고 더는 진단 전용이 아니다(claim20). 아래 "헤드라인 설계는 계속 `none`"은 폐기된 서술.**
+  Combined의 1단계로 뭘 쓸지. `brecq`는 BRECQ의
   block-wise 재구성(alpha만, LSQ는 안 켬)을 1단계로 써서, "BRECQ+LSQ가
   margin_loss 없이도 decision-preservation을 이기는 게 block-wise 상관
   반영 때문인지 margin_loss가 그 위에 추가 기여를 하는지" 분리하는 통제
