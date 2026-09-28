@@ -22,6 +22,29 @@ from .adaround import AdaRoundQuantConv2d, list_adaround_convs, h_alpha, temp_de
 from .pdquant import _find_head, _CV4Capture
 from .semantic_calib import get_txt_feats, text_neighbor_order, _LevelCapture, utility_refinement_terms
 
+
+class _BlockCapture:
+    """DetectionModel.model(Sequential)의 top-level 블록 출력을 캡처.
+    09-28 공동 최적화용 -- BRECQ가 재구성하는 것과 같은 층위(블록 출력)의 dense 신호를
+    stage-2 목적함수에 직접 넣기 위함. 양자화 모델 쪽은 grad를 유지하고(detach 안 함),
+    FP 쪽은 no_grad로 부른다. idxs: 양자화 conv가 있는 블록만(나머지는 grad 경로 없음)."""
+    def __init__(self, detection_model, idxs):
+        self.buf = {}
+        self.handles = []
+        blocks = list(detection_model.model)
+        for i in idxs:
+            def make(k):
+                def hook(_m, _inp, out):
+                    if torch.is_tensor(out):
+                        self.buf[k] = out
+                return hook
+            self.handles.append(blocks[i].register_forward_hook(make(i)))
+
+    def clear(self): self.buf = {}
+    def close(self):
+        for h in self.handles: h.remove()
+        self.handles = []
+
 def decision_loss(sim_q, sim_fp):
     """
     FP의 top-1 prompt를 pseudo-label로 사용하여
@@ -400,7 +423,7 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
                                       det_thres=0.25, margin_thres=0.5,
                                       region_dir_weight=0.0, margin_one_sided=False,
                                       random_sample=False, per_group_anchors=False,
-                                      local_recon_weight=0.0):
+                                      local_recon_weight=0.0, block_recon_weight=0.0):
     """
     방향 C(연속 s_mult) + neighbor preservation (09-05 §40 진단 이후).
 
@@ -534,6 +557,22 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     # 형태: cv4 입력(region feature)의 상대 제곱오차. 크기까지 포함한다는 점에서
     # region_dir(방향만)과 다르고, ||x_fp||^2로 정규화해 스케일 무관하게 만들어
     # margin_loss와 같은 수준(O(0.01~0.1))에서 비교되게 한다.
+    # block_recon_weight > 0 (09-28): 진짜 공동 최적화.
+    # 기존 구조는 순차다 -- BRECQ가 블록 재구성으로 alpha를 맞춘 뒤 hard 고정하고 stage 2가
+    # s_mult만 ranking 목적함수로 움직인다. 그래서 stage 2가 stage 1의 결과를 **사후에
+    # 교란**한다(W8A8에서도 Heval_flip 3.802→4.278 악화, 저비트에서 전면화 -- W4A8 0/3,
+    # W8A6 0/7). 손상이 클수록 그 지점이 민감해 역효과가 커진다.
+    #
+    # 이 항은 BRECQ가 재구성하는 것과 **같은 층위(블록 출력)** 의 재구성 손실을 stage 2
+    # 목적함수에 직접 넣어 교란이 아니라 협상이 되게 한다. 매 iteration FP 모델을 한 번 더
+    # forward해 블록 출력을 얻는다(no_grad, 캐시 불필요).
+    #
+    # learn_alpha와 함께 쓰면 alpha도 (재구성 + ranking) 아래에서 같이 풀린다 = 논문 §4
+    # Semantic Objective("Local reconstruction + region-prompt semantic consistency")의 형태.
+    # claim18-a가 실패한 이유("자유도 수백만인데 감독이 sparse")를 이 dense 항이 메운다.
+    # 형태는 블록별 상대 MSE의 평균 -- 스케일 무관해서 weight 1.0이 margin_loss와 같은
+    # 수준(O(0.01~0.1))에서 경쟁한다.
+    use_block_recon = block_recon_weight > 0
     use_local_recon = local_recon_weight > 0
     use_region_dir = region_dir_weight > 0
     use_utility = utility_stage2_frac > 0
@@ -598,6 +637,12 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
     neighbor_cols = torch.tensor(sorted(neighbor_set), device=device, dtype=torch.long)
 
     q_head = _find_head(quant_model); q_cap = _CV4Capture(q_head, capture_input=_need_region)
+    if use_block_recon:
+        _bidx = [bi for bi, b in enumerate(list(quant_model.model)) if list_adaround_convs(b)]
+        q_bcap = _BlockCapture(quant_model, _bidx); fp_bcap = _BlockCapture(fp_model, _bidx)
+        print(f"[promptcal][joint] 블록 재구성 대상 {len(_bidx)}개, weight={block_recon_weight}")
+    else:
+        _bidx = []; q_bcap = fp_bcap = None
     q_cv2_cap = _LevelCapture(q_head.cv2) if use_utility else None
     stage2_start = int((1 - utility_stage2_frac) * iters) if use_utility else iters
     smults = [ac.s_mult for ac in ada]
@@ -665,6 +710,10 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
         q_cap.clear(); opt.zero_grad()
         if q_cv2_cap is not None:
             q_cv2_cap.clear()
+        if q_bcap is not None:
+            q_bcap.clear(); fp_bcap.clear()
+            with torch.no_grad():
+                fp_model(t)                       # FP 블록 출력 (매 iteration, no_grad)
         quant_model(t)
         parts = []
         for i in sorted(q_cap.buf):
@@ -709,6 +758,15 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             if scale_reg_weight > 0:
                 sr = sum((s - 1.0).pow(2).mean() for s in smults) / len(smults)
                 loss = loss + scale_reg_weight * sr
+        if use_block_recon:
+            terms = []
+            for bi in _bidx:
+                if bi in q_bcap.buf and bi in fp_bcap.buf:
+                    qb, fb = q_bcap.buf[bi], fp_bcap.buf[bi]
+                    if qb.shape == fb.shape:
+                        terms.append((qb - fb).pow(2).mean() / fb.pow(2).mean().clamp(min=1e-12))
+            if terms:
+                loss = loss + block_recon_weight * (sum(terms) / len(terms))
         if _need_region:
             rq_raw = q_cap.assemble_input()
             rf_raw = fp_regions[j]
@@ -760,6 +818,8 @@ def optimize_promptcal_scale_neighbor(quant_model, fp_model, calib_tensors, devi
             eval_hook(it + 1, quant_model)
 
     q_cap.close()
+    if q_bcap is not None:
+        q_bcap.close(); fp_bcap.close()
     if q_cv2_cap is not None:
         q_cv2_cap.close()
     if learn_alpha:

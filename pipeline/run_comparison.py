@@ -472,7 +472,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_utility_frac=0.0, combined_thresh_w=1.0, combined_box_w=0.5,
           combined_region_dir_weight=0.0, margin_one_sided=False,
           combined_random_sample=False, combined_per_group_anchors=False,
-          combined_local_recon_weight=0.0):
+          combined_local_recon_weight=0.0, combined_block_recon_weight=0.0):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -580,6 +580,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                                           aux_mse_weight=aux_mse_weight,
                                           margin_one_sided=margin_one_sided,
                                           local_recon_weight=combined_local_recon_weight,
+                                          block_recon_weight=combined_block_recon_weight,
                                           random_sample=combined_random_sample,
                                           per_group_anchors=combined_per_group_anchors,
                                           region_dir_weight=combined_region_dir_weight,
@@ -754,6 +755,14 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0")
+    ap.add_argument("--combined-block-recon-weight", type=float, default=0.0,
+                    help="09-28 공동 최적화: stage 2 목적함수에 블록 출력 재구성 손실을 추가. "
+                         "기존 구조는 순차라서 stage 2(s_mult)가 stage 1(BRECQ)의 결과를 사후에 "
+                         "교란한다 -- W8A8에서도 Heval_flip 악화, W4A8 0/3 · W8A6 0/7로 저비트에서 "
+                         "전면화. 이 항은 BRECQ와 같은 층위(블록 출력)의 dense 신호를 직접 넣어 "
+                         "교란이 아니라 협상이 되게 한다. --combined-learn-alpha와 함께 쓰면 alpha도 "
+                         "(재구성+ranking) 아래에서 같이 풀린다 = 논문 4장 Semantic Objective의 형태. "
+                         "블록별 상대 MSE 평균이라 스케일 무관. 0.0=꺼짐")
     ap.add_argument("--combined-local-recon-weight", type=float, default=0.0,
                     help="09-27: 논문 4장 Semantic Objective의 'Local reconstruction' 항. "
                          "cv4 입력(region feature)의 상대 제곱오차 ||x_q-x_fp||^2/||x_fp||^2. "
@@ -968,7 +977,8 @@ def main():
                              margin_one_sided=args.margin_one_sided,
                              combined_random_sample=args.combined_random_sample,
                              combined_per_group_anchors=args.combined_per_group_anchors,
-                             combined_local_recon_weight=args.combined_local_recon_weight)
+                             combined_local_recon_weight=args.combined_local_recon_weight,
+                             combined_block_recon_weight=args.combined_block_recon_weight)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
