@@ -41,6 +41,25 @@ ultralytics 8.4.121 | torch 2.10.0+cu128 | torchvision 0.25.0+cu128
 numpy 1.26.4 | opencv 4.13.0 | lvis 0.5.3 | pycocotools 2.0.11 | faster_coco_eval 1.8.0
 ```
 
+**GPU 인덱스 주의 (2026-09-28 추가).** 이 서버는 L40S 3장(nvidia-smi 1,2,3)과
+RTX 4000 Ada 5장(0,4,5,6,7)이 섞여 있는데, torch 기본값
+`CUDA_DEVICE_ORDER=FASTEST_FIRST`가 L40S를 먼저 정렬해서 `--device N`이
+nvidia-smi 인덱스와 어긋난다(`0→1, 1→2, 2→3, 3→0`, 4~7만 일치). 실제로
+`runs/116` seed0이 `--device 0`으로 GPU 1에 올라갔다. **공용 서버라 남이 쓰는
+GPU를 덮칠 수 있는 사고**이므로 두 곳에서 막아뒀다:
+
+- `.venv/lib/python3.12/site-packages/sitecustomize.py` — 이 venv로 실행되는
+  모든 프로세스에 `CUDA_DEVICE_ORDER=PCI_BUS_ID`를 강제(`scripts/` 아래
+  entry point가 59개라 파일마다 고치지 않고 한 곳에서 막음). venv를 새로
+  만들면 **이 파일도 다시 만들어야 한다.**
+- `pipeline/run_comparison.py` 상단에 같은 `setdefault` + 시작 시
+  `[gpu] --device N -> ... uuid=...` 로그. 로그의 인덱스가 nvidia-smi와
+  다르면 환경이 바뀐 것이니 멈추고 확인할 것.
+
+부수 효과: GPU **종류가 섞이면 같은 seed도 bit-identical하지 않을 수 있다**
+(L40S와 RTX 4000 Ada는 커널 선택이 다르다). seed 간 비교를 하는 run은
+**같은 모델의 GPU에 몰아서** 돌릴 것.
+
 venv를 새로 만들어야 한다면:
 
 ```bash

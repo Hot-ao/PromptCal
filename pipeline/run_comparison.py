@@ -44,6 +44,16 @@ RAM이 터지므로(fp_sims 하나만 이론상 ~194GB) `compute_lvis_flip_gt_st
     ... --calib 8 --eval-cap 16 --iters 30 --recon-iters-ada 20 --seed 0 --device 0
 """
 import argparse, glob, os, sys, time
+
+# 09-28: CUDA 장치 인덱스를 nvidia-smi 인덱스와 일치시킨다. torch 기본값
+# CUDA_DEVICE_ORDER=FASTEST_FIRST는 이 서버(L40S 3장 + RTX 4000 Ada 5장)에서
+# L40S를 먼저 정렬해버려서 --device 0이 실제로는 nvidia-smi GPU 1을,
+# --device 1이 GPU 2를 잡는다(실측: 09-28 14:30, runs/116 seed0이 의도한 GPU 0
+# 대신 GPU 1에 올라갔다). 공용 서버에서 남의 GPU를 덮칠 수 있는 사고라
+# torch를 import하기 전에 PCI_BUS_ID로 고정한다. setdefault라 바깥에서
+# 명시적으로 지정한 값은 그대로 존중한다.
+os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+
 import cv2, numpy as np, torch
 
 if not hasattr(np, "float"):
@@ -886,6 +896,14 @@ def main():
 
     # calib: train2017 (평가 데이터와 완전 분리)
     calib_paths = sorted(glob.glob(os.path.join(args.coco_root, "train2017", "*.jpg")))[:args.calib]
+    # 09-28: --device N이 실제로 어느 물리 GPU에 올라갔는지 로그에 남긴다.
+    # CUDA_DEVICE_ORDER를 PCI_BUS_ID로 고정했으므로 여기 찍히는 인덱스는
+    # nvidia-smi 인덱스와 같아야 한다 -- 다르면 환경이 바뀐 것이니 멈추고 확인할 것.
+    if device != "cpu":
+        _p = torch.cuda.get_device_properties(int(args.device))
+        print(f"[gpu] --device {args.device} -> nvidia-smi GPU {args.device} "
+              f"({_p.name}, {_p.total_memory // 2**20}MiB, uuid={_p.uuid}) "
+              f"CUDA_DEVICE_ORDER={os.environ.get('CUDA_DEVICE_ORDER')}")
     print(f"[data] calib {len(calib_paths)}장 (train2017)")
 
     # probe: val2017 전체 -- COCO-80은 5000장 다 쓰고, LVIS는 그중 minival(공식 4809장)과
