@@ -152,12 +152,78 @@ def _brecq_act_stage(targets, quant_module, fp_module, calib_list, device,
         free_cpu_mem()
 
 
+def _vm_capture(vm, kind, cap, exact_level, fp_module, fm, calib_list, device, keep_fp_in):
+    """vocab metric용 FP pass. 기존 fp_hook pass와 같은 out_buf/fp_in_buf를 만들고, 추가로
+      kind="exact" : 이미지별 anchor 가중치 [HW] (이 conv 출력 = 해당 레벨 cv4 입력)
+      kind="fisher": 이미지별 끌어올린 metric 대각 E[(ds/dz)^2] (z와 같은 shape, bf16)
+    을 모은다. fisher인데 z가 유사도 경로 밖이면(gradient None) fis_buf=None을 돌려준다.
+    bf16 저장: g^2가 fp16 범위 아래로 떨어질 수 있어서(지수부 범위가 fp32와 같은 bf16)."""
+    out_buf = []
+    fp_in_buf = [] if keep_fp_in else None
+    fis_buf, wts_buf = [], []
+    holder = {}
+
+    def hook(m, inp, out):
+        if torch.is_tensor(out):
+            holder["z"] = out
+            out_buf.append(out.detach().half().cpu())
+            if fp_in_buf is not None:
+                fp_in_buf.append(_to_cpu(inp))
+    hh = fm.register_forward_hook(hook)
+    gen = vm.generator(device)
+    semantic = True
+    for t in calib_list:
+        holder.clear()
+        cap.clear()
+        if kind == "exact" or not semantic:
+            with torch.no_grad():
+                fp_module(t.to(device))
+            if kind == "exact":
+                lvl = exact_level[id(fm)]
+                wts_buf.append(vm.anchor_weights(cap.inbuf[lvl].detach(), lvl).cpu())
+            continue
+        with torch.enable_grad():
+            x = t.to(device).requires_grad_(True)
+            fp_module(x)
+            z = holder.get("z")
+            levels = [cap.inbuf[i] for i in sorted(cap.inbuf)]
+            w = [vm.anchor_weights(xl.detach(), i) for i, xl in enumerate(levels)]
+            g2 = None
+            if z is not None and z.requires_grad:
+                for k in range(vm.n_samples):
+                    s = vm.sample_objective(levels, w, gen)
+                    (g,) = torch.autograd.grad(s, z, retain_graph=k < vm.n_samples - 1,
+                                               allow_unused=True)
+                    if g is None:
+                        break
+                    g2 = g.pow(2) if g2 is None else g2 + g.pow(2)
+            if g2 is None:
+                semantic = False               # 이후 이미지는 grad 없이 target만 캡처
+            else:
+                fis_buf.append((g2 / vm.n_samples).detach().to(torch.bfloat16).cpu())
+            del x, z, levels, w, g2
+        holder.clear()
+        cap.clear()
+    hh.remove()
+    fis_mean = None
+    if kind == "fisher":
+        if not semantic or not fis_buf:
+            fis_buf = None
+        else:
+            tot = sum(float(f.float().sum()) for f in fis_buf)
+            cnt = sum(f.numel() for f in fis_buf)
+            fis_mean = tot / max(cnt, 1)
+            if fis_mean <= 0:
+                fis_buf, fis_mean = None, None
+    return out_buf, fp_in_buf, fis_buf, (wts_buf or None), fis_mean
+
+
 def optimize_brecq(quant_module, fp_module, calib_tensors, device,
                    iters=2000, lr=DEFAULT_LR, reg_weight=DEFAULT_REG_WEIGHT, verbose=True,
                    learn_act_scale=False, act_lr=None, warmup=DEFAULT_WARMUP,
                    qdrop_prob=0.0, grad_clip=None,
                    two_stage=False, act_iters=5000, act_p=2.4, batch=1,
-                   neck_layerwise=True):
+                   neck_layerwise=True, vocab_metric=None):
     """
     09-06 수정: 순차/누적 오차 반영. 이전 버전은 block의 입력과 출력(target)을
     둘 다 fp_module에서만 캡처해서, 앞선 block들의 실제 양자화 오차가 뒤쪽 block
@@ -209,6 +275,18 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
     activation 양자화를 켠 뒤 activation step(LSQ)만 iters_a=5000, cosine, L_p(p=2.4)
     손실로 별도 학습. True면 이 절차를 따른다(learn_act_scale은 2단계를 켜는 스위치로
     쓰이며 alpha 루프에서는 꺼진다). QDrop(qdrop_prob>0)은 공식이 공동 최적화라 해당 없음.
+
+    vocab_metric (09-28): vocab_metric.VocabMetric을 넘기면 재구성 손실의 metric을
+    "임의 vocabulary에서의 기대 유사도 오차"로 바꾼다(유도는 vocab_metric.py docstring).
+      - head cv3 마지막 1x1 conv(출력 = cv4 입력 임베딩): exact 2차형식. 이 conv 출력은
+        정규화 후 유사도에만 쓰이므로 재구성 항 없이 순수 vocab 손실(첫 iteration의
+        재구성/vocab 비율로 척도만 맞춤 -- round 정규화와의 균형을 BRECQ 기본값대로 유지).
+      - 나머지 target: FP 모델을 한 번 더(grad 켜고) 흘려 끌어올린 metric의 대각(Fisher)을
+        per-sample로 캐시하고 (1-mix)*재구성 + mix*Fisher-가중 재구성. 유사도 경로와 무관한
+        target(head cv2)은 gradient가 None이라 순수 재구성을 유지한다.
+    파라미터·옵티마이저·iters·배치 샘플링(전역 RNG)은 그대로다 -- Fisher 샘플링은
+    VocabMetric 전용 generator를 쓴다. None(기본)이면 기존 코드 경로와 완전히 동일.
+    two_stage의 2단계(activation stage)에는 적용하지 않는다(순수 재구성 유지).
     """
     if act_lr is None:
         # 09-21: baseline LSQ가 이제 절대 delta 파라미터(LSQActQuant)라 공식 lr을 그대로
@@ -254,22 +332,46 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
     n_skipped = 0
     flips = []
 
+    vm = vocab_metric
+    vm_cap = None
+    exact_level = {}
+    vm_kinds = {"exact": 0, "fisher": 0, "recon": 0}
+    if vm is not None:
+        from .pdquant import _find_head, _CV4Capture
+        fp_head = _find_head(fp_module)
+        vm.bind_head(fp_head)
+        vm_cap = _CV4Capture(fp_head, capture_input=True)
+        # cv3[l]의 마지막 원소 = 임베딩을 내는 1x1 nn.Conv2d(fp 쪽은 래핑 안 됨)
+        exact_level = {id(lvl[-1]): li for li, lvl in enumerate(fp_head.cv3)}
+        if two_stage:
+            print("[brecq][vm] two_stage의 activation 단계에는 vocab metric을 적용하지 않음(순수 재구성)")
+
     for ti, (label, qm, fm, convs, is_block) in enumerate(targets):
         # (1) target(FP 출력) 캐시 -- 이상적 목표, 순수 FP forward에서만 캡처.
         #     QDrop의 input_prob을 쓸 땐 같은 pass에서 FP 입력도 같이 캐시(추가 forward 불필요).
         out_buf = []
         fp_in_buf = [] if qdrop_prob > 0 else None
+        vm_kind, fis_buf, wts_buf, fis_mean, exact_scale = None, None, None, None, None
 
-        def fp_hook(m, inp, out):
-            if torch.is_tensor(out):
-                out_buf.append(out.detach().half().cpu())
-                if fp_in_buf is not None:
-                    fp_in_buf.append(_to_cpu(inp))
-        hh_fp = fm.register_forward_hook(fp_hook)
-        with torch.no_grad():
-            for t in calib_list:
-                fp_module(t.to(device))
-        hh_fp.remove()
+        if vm is None:
+            def fp_hook(m, inp, out):
+                if torch.is_tensor(out):
+                    out_buf.append(out.detach().half().cpu())
+                    if fp_in_buf is not None:
+                        fp_in_buf.append(_to_cpu(inp))
+            hh_fp = fm.register_forward_hook(fp_hook)
+            with torch.no_grad():
+                for t in calib_list:
+                    fp_module(t.to(device))
+            hh_fp.remove()
+        else:
+            vm_kind = "exact" if (not is_block and id(fm) in exact_level) else "fisher"
+            out_buf, fp_in_buf, fis_buf, wts_buf, fis_mean = _vm_capture(
+                vm, vm_kind, vm_cap, exact_level, fp_module, fm, calib_list, device,
+                keep_fp_in=qdrop_prob > 0)
+            if vm_kind == "fisher" and fis_buf is None:
+                vm_kind = "recon"                       # 유사도 경로 밖(head cv2 등)
+            vm_kinds[vm_kind] += 1
 
         # (2) 이 block/conv로 실제 흘러들어오는 입력 -- quant_module 현재 상태로
         #     forward해서 캡처(누적 오차 반영). C2fAttn 등 입력이 여러 개인
@@ -318,7 +420,18 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
             if opt_a is not None:
                 opt_a.zero_grad()
             out = qm(*args)                    # block/conv를 quant weight로 통과 (다중 입력 지원)
-            loss = lp_rec_loss(out, tgt)
+            if vm_kind == "exact":
+                w = torch.stack([wts_buf[j] for j in js]).to(device).float()
+                sem = vm.exact_loss(out, tgt, w, exact_level[id(fm)])
+                if exact_scale is None:        # 척도만 재구성 손실에 맞춤(첫 iteration 1회 고정)
+                    exact_scale = float(lp_rec_loss(out, tgt).detach()) / max(float(sem.detach()), 1e-12)
+                loss = sem * exact_scale
+            elif vm_kind == "fisher":
+                fw = torch.cat([fis_buf[j] for j in js], dim=0).to(device).float() / fis_mean
+                sem = ((out - tgt).pow(2) * fw).sum(1).mean()   # lp_rec_loss(p=2)와 같은 정규화
+                loss = (1.0 - vm.mix) * lp_rec_loss(out, tgt) + vm.mix * sem
+            else:
+                loss = lp_rec_loss(out, tgt)
             if it >= warmup * iters:           # 공식 warmup: 앞 구간은 round_loss=0
                 beta = temp_decay(it, iters, warmup)
                 loss = loss + reg_weight * sum(c.reg_loss(beta) for c in convs)
@@ -342,8 +455,13 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
                         for c in convs) / len(convs) * 100
             print(f"  [{ti+1}/{len(targets)}] {label} ({len(convs)} conv) "
                   f"done, h→0/1 {hconv:.0f}%, nearest 대비 flip {fl:.3f}%")
-        del in_buf, out_buf, fp_in_buf
+        del in_buf, out_buf, fp_in_buf, fis_buf, wts_buf
         free_cpu_mem()
+
+    if vm_cap is not None:
+        vm_cap.close()
+        print(f"[brecq][vm] vocab metric 적용: exact {vm_kinds['exact']}개, fisher {vm_kinds['fisher']}개, "
+              f"재구성 유지 {vm_kinds['recon']}개 (C 유효 차원 {vm.effective_rank():.1f}/{vm.C.shape[0]})")
 
     if two_stage:
         for c in list_adaround_convs(quant_module):

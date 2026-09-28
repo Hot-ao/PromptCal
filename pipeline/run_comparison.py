@@ -61,10 +61,11 @@ if not hasattr(np, "float"):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import SimilarityHarness
-from quant.quant_model import wrap_convs, calibrate
+from quant.quant_model import wrap_convs, calibrate, set_first_last_bits
 from quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d, free_cpu_mem
 from quant.fake_quant import QuantConv2d
 from quant.brecq import optimize_brecq
+from quant.vocab_metric import VocabMetric, load_vocab, encode_text_bank
 from quant.promptcal import optimize_promptcal_scale_neighbor
 
 
@@ -484,7 +485,8 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_utility_frac=0.0, combined_thresh_w=1.0, combined_box_w=0.5,
           combined_region_dir_weight=0.0, margin_one_sided=False,
           combined_random_sample=False, combined_per_group_anchors=False,
-          combined_local_recon_weight=0.0, combined_block_recon_weight=0.0):
+          combined_local_recon_weight=0.0, combined_block_recon_weight=0.0,
+          first_last_bits=0, vocab_metric=None):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -496,6 +498,10 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
     # 섞여 모델 크기를 22.8% 과대계상하던 버그(경위는 wrap_convs 주석 참고).
     wrap_convs(m.model, w_bits, a_bits,
                skip_modules=[m.model.model[-1]] if skip_head else None)
+    if first_last_bits > 0:
+        # 09-28: 저비트 표준 프로토콜 -- stem과 (head 양자화 시) cv2/cv3 마지막 conv를 고정 비트로.
+        # 모든 조건에 똑같이 적용된다(calibrate 전이어야 observer/weight scale이 이 비트로 잡힘).
+        set_first_last_bits(m.model, first_last_bits)
     m.model.to(device).eval()
     # 09-24: combined만 activation 초기 범위를 MSE 최적(0.0)과 클리핑 없는
     # min-max(1.0) 사이에서 보간할 수 있게 한다. 다른 조건은 0.0 고정이라 영향 없음.
@@ -538,6 +544,23 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
                        verbose=False, learn_act_scale=qdrop_brecq_learn_act_scale,
                        two_stage=brecq_two_stage, act_iters=brecq_act_iters,
                        batch=brecq_batch, neck_layerwise=neck_layerwise)
+    elif mode in ("brecq_vm", "qdrop_vm"):
+        # 09-28: vocabulary-metric 재구성. 대응 baseline(brecq/qdrop)과 인자를 **전부** 같게 넘기고
+        # vocab_metric만 추가한다 -- 짝비교가 metric 단일 변수가 되도록(combined의 Stage 1이
+        # neck_layerwise/batch를 안 넘겨 생겼던 교란(설계 문서 §2)을 반복하지 않는다).
+        assert vocab_metric is not None, f"{mode}에는 vocab_metric이 필요합니다(--vm-vocab)"
+        convert_to_adaround(m.model, channelwise_smult=not qdrop_brecq_learn_act_scale)
+        if mode == "qdrop_vm":
+            optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong,
+                           qdrop_prob=qdrop_prob, verbose=False,
+                           learn_act_scale=qdrop_brecq_learn_act_scale, batch=brecq_batch,
+                           neck_layerwise=neck_layerwise, vocab_metric=vocab_metric)
+        else:
+            optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong,
+                           verbose=False, learn_act_scale=qdrop_brecq_learn_act_scale,
+                           two_stage=brecq_two_stage, act_iters=brecq_act_iters,
+                           batch=brecq_batch, neck_layerwise=neck_layerwise,
+                           vocab_metric=vocab_metric)
     elif mode == "combined":
         # 09-18 claim14로 확정: claim13으로 1단계(optimize_adaround)가 alpha를
         # 훨씬 많이 움직이게 됐는데, 그 목적함수(순수 MSE reconstruction)는
@@ -888,6 +911,19 @@ def main():
                          "(S_AP/H_eval_AP/Heval_flip)만 seed 효과를 받고 있었다. 이제 명시하지 "
                          "않으면 --seed를 그대로 따라간다(아래 args.torch_seed 처리) -- 명시하면 "
                          "분할과 학습 무작위성을 분리하는 ablation도 가능")
+    ap.add_argument("--first-last-bits", type=int, default=0,
+                    help="09-28: >0이면 stem 첫 conv와 (head 양자화 시) cv2/cv3 마지막 1x1 conv를 이 "
+                         "비트로 고정(W4A4 표준 프로토콜은 8). 모든 조건에 동일 적용. 기본 0=꺼짐(기존 동작)")
+    ap.add_argument("--vm-vocab", default="configs/vocab_generic.txt",
+                    help="09-28: brecq_vm/qdrop_vm의 metric을 정의하는 vocabulary. 'coco' | 'lvis'(oracle, "
+                         "평가 vocabulary 누수 -- ablation 전용) | 'identity'(C=I, 방향 보존 재구성) | 이름 파일 경로")
+    ap.add_argument("--vm-lam-mean", type=float, default=1.0,
+                    help="C = Sigma + lam*mu mu^T. 1.0=비중심 2차 모멘트(순위+절대점수), 0.0=순위만")
+    ap.add_argument("--vm-mix", type=float, default=0.5,
+                    help="fisher 경로 손실 = (1-mix)*재구성 + mix*vocab-가중 재구성")
+    ap.add_argument("--vm-samples", type=int, default=4, help="Fisher 추정용 u~N(0,C) 샘플 수(이미지당)")
+    ap.add_argument("--vm-anchor-weight", choices=["conf", "uniform"], default="conf")
+    ap.add_argument("--vm-conf-floor", type=float, default=0.05)
     ap.add_argument("--conditions", default="naive,adaround,qdrop,brecq,combined",
                     help="쉼표로 구분된 조건 목록(콤마 뒤 공백 없이). 09-16 추가 -- Combined 변형 "
                          "하나만 볼 때도 항상 5개 조건(특히 QDrop/BRECQ, 900~1400s대)을 다 "
@@ -969,8 +1005,22 @@ def main():
     fp = build(YOLOWorld, args.model, coco, device, calib, "fp")
 
     conditions = [c.strip() for c in args.conditions.split(",")]
-    _valid = {"naive", "adaround", "qdrop", "brecq", "combined"}
+    _valid = {"naive", "adaround", "qdrop", "brecq", "combined", "brecq_vm", "qdrop_vm"}
     assert all(c in _valid for c in conditions), f"--conditions에 알 수 없는 값: {set(conditions) - _valid}"
+    vocab_metric = None
+    if {"brecq_vm", "qdrop_vm"} & set(conditions):
+        vm_names, vm_identity = load_vocab(args.vm_vocab, coco, lvis_names)
+        if not vm_identity and args.vm_vocab not in ("coco", "lvis"):
+            _overlap = {n.lower() for n in vm_names} & {n.lower() for n in list(coco) + list(lvis_names)}
+            if _overlap:
+                print(f"[warn][vm] vocab 파일에 COCO/LVIS 이름 {len(_overlap)}개가 섞여 있음 "
+                      f"(예: {sorted(_overlap)[:5]}) -- disjoint 주장을 하려면 빼야 함")
+        print(f"[vm] text bank 인코딩: {args.vm_vocab} ({len(vm_names)}개, identity={vm_identity})")
+        bank = encode_text_bank(YOLOWorld, args.model, vm_names, device)
+        vocab_metric = VocabMetric(bank, lam_mean=args.vm_lam_mean, identity=vm_identity,
+                                   anchor_weight=args.vm_anchor_weight, conf_floor=args.vm_conf_floor,
+                                   n_samples=args.vm_samples, mix=args.vm_mix, seed=args.torch_seed)
+        print(f"[vm] C 유효 차원(participation ratio) {vocab_metric.effective_rank():.1f}/{bank.shape[1]}")
     # 09-18: reconstruction 계열 조건 간 iteration 예산이 다르면 "방법 차이"와
     # "최적화 예산 차이"가 섞여서 A vs B 비교가 단일 변수가 아니게 된다. 기본값
     # (ada=1000, strong=2000)이 그 상태라 명시적으로 경고만 띄운다 -- 예산을 맞추려면
@@ -1030,13 +1080,15 @@ def main():
                              combined_random_sample=args.combined_random_sample,
                              combined_per_group_anchors=args.combined_per_group_anchors,
                              combined_local_recon_weight=args.combined_local_recon_weight,
-                             combined_block_recon_weight=args.combined_block_recon_weight)
+                             combined_block_recon_weight=args.combined_block_recon_weight,
+                             first_last_bits=args.first_last_bits, vocab_metric=vocab_metric)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
     # 모드(adaround/qdrop/brecq/combined)는 전부 같은 conv/양자화 구조라 이론적
     # 모델 크기가 동일하므로, 돌아간 것 중 아무거나 골라도 된다(naive만 돈 경우는 naive로).
-    _mib_mode = next((m for m in ["adaround", "qdrop", "brecq", "combined"] if m in models), conditions[0])
+    _mib_mode = next((m for m in ["adaround", "qdrop", "brecq", "combined", "brecq_vm", "qdrop_vm"]
+                      if m in models), conditions[0])
     model_mib = quantized_weight_mib(models[_mib_mode].model)
 
     # ---------------- COCO-80: FP sim 1회 계산 + GT 매칭 ----------------
@@ -1147,6 +1199,11 @@ def main():
         lsq_bits.append("neighbor_of_cal(claim16 방향2, 진단 실험)")
     if args.aux_mse_weight > 0:
         lsq_bits.append(f"aux_mse_weight={args.aux_mse_weight}(claim16 방향3, 진단 실험)")
+    if args.first_last_bits > 0:
+        lsq_bits.append(f"첫/마지막 레이어 {args.first_last_bits}bit")
+    if vocab_metric is not None:
+        lsq_bits.append(f"vm: vocab={args.vm_vocab} lam={args.vm_lam_mean} mix={args.vm_mix} "
+                        f"K={args.vm_samples} w={args.vm_anchor_weight}")
     lsq_tag = f" [{', '.join(lsq_bits)}]" if lsq_bits else ""
     print(f" 공식 데이터 설정(calib=train2017 {len(calib_paths)}장, LVIS=공식 minival) -- seed {args.seed}{control_tag}{lsq_tag}")
     if args.eval_cap > 0:

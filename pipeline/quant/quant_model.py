@@ -48,6 +48,34 @@ def wrap_convs(module: nn.Module, w_bits: int = 8, a_bits: int = 8,
     return count
 
 
+def set_first_last_bits(det_model: nn.Module, bits: int = 8):
+    """09-28: 저비트 표준 프로토콜(BRECQ/QDrop/Reg-PTQ의 W4A4 표)처럼 첫 레이어와 마지막
+    레이어를 `bits`로 되돌린다. calibrate() **전에** 불러야 한다(ActObserver.bits가 범위
+    탐색과 freeze에 쓰이고, weight scale도 freeze_weight_quant()에서 w_bits로 계산된다).
+
+      - 첫 레이어: stem(DetectionModel.model[0]) 안의 첫 QuantConv2d -- 입력이 이미지 픽셀.
+      - 마지막 레이어: head(WorldDetect)가 양자화돼 있을 때만, cv2[l][-1](box 분포 출력)과
+        cv3[l][-1](region 임베딩 출력) 1x1 conv. head를 skip하면 해당 없음.
+    반환: 바뀐 conv 이름 목록."""
+    seq = det_model.model
+    changed = []
+    for name, mod in seq[0].named_modules():
+        if isinstance(mod, QuantConv2d):
+            mod.w_bits = bits
+            mod.a_obs.bits = bits
+            changed.append(f"model.0.{name}")
+            break
+    head = seq[-1]
+    for branch in ("cv2", "cv3"):
+        for li, lvl in enumerate(getattr(head, branch, [])):
+            last = lvl[-1]
+            if isinstance(last, QuantConv2d):
+                last.w_bits = bits
+                last.a_obs.bits = bits
+                changed.append(f"head.{branch}.{li}.-1")
+    return changed
+
+
 def set_mode(module: nn.Module, calibrating: bool = False, quantized: bool = False):
     for m in module.modules():
         if isinstance(m, QuantConv2d):

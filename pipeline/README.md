@@ -114,7 +114,12 @@ pipeline/
 │   │                            사용) + utility_refinement_terms(§4.3 utility
 │   │                            constraint, 현재 기본 비교에서는 미사용이지만
 │   │                            promptcal.py의 utility 변형 함수가 참조).
-│   └── promptcal.py         -- 제안 방법. 핵심은 optimize_promptcal_scale_neighbor:
+│   ├── vocab_metric.py      -- 09-28: vocabulary-metric 재구성(brecq_vm/qdrop_vm 조건).
+│   │                            재구성 손실의 metric을 "임의 vocabulary에서의 기대 유사도
+│   │                            오차" tau^2 v^T C v 로 바꾼다. head cv3 마지막 conv는 exact,
+│   │                            그 앞은 Fisher 대각으로 끌어올림. 설계·실험 계획은
+│   │                            docs/PROMPTCAL_VOCAB_METRIC_2026-09-28.md.
+│   └── promptcal.py         -- 제안 방법(W8A8 Combined). 핵심은 optimize_promptcal_scale_neighbor:
 │                               weight(09-18 claim14부터 round-to-nearest --
 │                               AdaRound 1단계 생략, 아래 run_comparison.py 참고)
 │                               위에, 각 conv의 per-channel
@@ -137,6 +142,10 @@ pipeline/
 │                               탐지(claim5-b). 이 수정 전에 돌린
 │                               identity-aware 6-seed 결과(아래 실행 이력 참고)는
 │                               재현하려면 재실행 필요.
+├── diag_vocab_subspace.py   -- 09-28 E1 진단: 양자화 임베딩 오차가 텍스트 부분공간에 얼마나
+│                               실려 있는지(rho, frac@k). brecq_vm을 돌리기 전 싼 사전 확인.
+├── build_generic_vocab.py   -- 09-28: configs/vocab_generic.txt 생성(WordNet 구체 명사,
+│                               COCO/LVIS 이름과 겹치는 synset 제외, 결정적).
 └── run_comparison.py        -- 실행 진입점(`scripts/58_full_baseline_official_data.py`
                                 포팅, 09-15). naive/AdaRound/QDrop/BRECQ/Combined
                                 다섯 조건을 공식 데이터 설정(calib=train2017,
