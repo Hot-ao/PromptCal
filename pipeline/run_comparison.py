@@ -61,7 +61,7 @@ if not hasattr(np, "float"):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import SimilarityHarness
-from quant.quant_model import wrap_convs, calibrate, set_first_last_bits, set_block_wbits, set_conv_wbits
+from quant.quant_model import wrap_convs, calibrate, set_first_last_bits, set_block_wbits, set_conv_wbits, set_conv_abits
 from quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d, free_cpu_mem
 from quant.fake_quant import QuantConv2d
 from quant.brecq import optimize_brecq
@@ -491,7 +491,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_region_dir_weight=0.0, margin_one_sided=False,
           combined_random_sample=False, combined_per_group_anchors=False,
           combined_local_recon_weight=0.0, combined_block_recon_weight=0.0,
-          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False, hi_wbit_convs=()):
+          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False, hi_wbit_convs=(), hi_abit_convs=()):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -513,12 +513,18 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
     if hi_wbit_convs:
         # 09-29: conv 단위 혼합 정밀도(채널 단위 W8과 같은 크기 비교용). 모든 조건 동일, calibrate 전.
         set_conv_wbits(m.model, hi_wbit_convs, 8)
+    if hi_abit_convs:
+        # 09-29: conv 단위로 입력 activation만 8bit(W4A4 상한 확인용). 모든 조건 동일, calibrate 전.
+        set_conv_abits(m.model, hi_abit_convs, 8)
     m.model.to(device).eval()
     if mig_alphas:
         # 09-29: 입력 채널별 scale 이전(quant/migrate.py). 양자화기 변경이라 모든 조건에 동일 적용,
         # calibrate 전(observer/weight scale이 이전된 값 기준으로 잡혀야 함). layer-wise AdaRound
         # (optimize_adaround)는 conv.weight를 FP 입력과 직접 곱해 target을 만들어서 이전과 호환 안 됨.
-        assert mode in ("naive", "brecq", "qdrop", "brecq_vm", "qdrop_vm"), f"migration 미지원 조건: {mode}"
+        # 09-29: combined/combined_m은 Stage 1이 brecq일 때만 허용(Stage 2의 s_mult는 conv당 스칼라라 이전과
+        # 독립; layer-wise AdaRound Stage 1은 conv.weight를 FP 입력과 직접 곱해 호환 안 됨).
+        assert mode in ("naive", "brecq", "qdrop", "brecq_vm", "qdrop_vm") or \
+            (mode in ("combined", "combined_m") and combined_stage1 == "brecq"), f"migration 미지원 조건: {mode}"
         if mig_tied:
             # 09-29: 배포 제약(같은 생산 채널을 받는 소비 conv는 같은 s, residual add로 합쳐지는 생산 채널도
             # 같은 s)을 지키는 버전(quant/channel_graph.py). 아래 독립 버전은 제약 없는 상한.
@@ -967,6 +973,17 @@ def main():
     ap.add_argument("--hi-wbit-convs", default="",
                     help="09-29: weight를 8bit로 유지할 conv(model.model 기준 경로, 쉼표 구분, 예: 12.cv2,4.cv1). "
                          "모든 조건에 동일 적용. 기본 빈 값=꺼짐")
+    ap.add_argument("--hi-abit-convs", default="",
+                    help="09-29: 입력 activation을 8bit로 유지할 conv(model.model 기준 경로, 쉼표 구분). 기본 빈 값=꺼짐")
+    ap.add_argument("--protect-budget", type=float, default=0.0,
+                    help="09-29 (P0): >0이면 누수 없는 conv 단위 진단(train2017 calibration 이미지, COCO 어휘만)으로 "
+                         "양자화 weight 파라미터의 이 비율 안에서 민감 conv를 골라 weight를 8bit로 보호(--hi-wbit-convs와 "
+                         "합쳐짐). w-bits>=8이면 규칙상 비용 0이라 아무것도 하지 않는다. 진단 결과는 --protect-cache에 캐시")
+    ap.add_argument("--protect-criterion", choices=("coco", "emb", "cls", "box"), default="coco",
+                    help="보호 선택 기준(09-29 결정: coco = calibration 어휘 top-1 flip 증가량)")
+    ap.add_argument("--protect-images", type=int, default=200, help="보호 진단 이미지 수(train2017 앞쪽)")
+    ap.add_argument("--protect-cache", default="configs/protect_cache",
+                    help="진단 결과 캐시 디렉터리(모델·이미지 수별). seed·조건과 무관하게 한 번만 계산")
     ap.add_argument("--hi-col-frac", type=float, default=0.0,
                     help="09-29: 채널 단위 혼합 정밀도 -- W4 conv마다 입력 채널 점수 max|W_:j|*max|x_j| 상위 "
                          "이 비율(최소 1개)의 weight 열을 8bit로. 모든 조건에 동일 적용. 기본 0=꺼짐(기존 동작)")
@@ -992,6 +1009,29 @@ def main():
     hi_wbit_blocks = tuple(int(x) for x in args.hi_wbit_blocks.split(",") if x.strip())
     mig_alphas = tuple(float(x) for x in args.mig_alphas.split(",") if x.strip())
     hi_wbit_convs = tuple(x.strip() for x in args.hi_wbit_convs.split(",") if x.strip())
+    hi_abit_convs = tuple(x.strip() for x in args.hi_abit_convs.split(",") if x.strip())
+    protected = ()
+    if args.protect_budget > 0 and args.w_bits < 8:
+        import json as _json
+        from diag_w4_sensitivity import rank_convs_leakfree, select_protected
+        os.makedirs(args.protect_cache, exist_ok=True)
+        cache = os.path.join(args.protect_cache, f"{os.path.splitext(os.path.basename(args.model))[0]}"
+                                                 f"_n{args.protect_images}_c{args.calib}_img{args.imgsz}.json")
+        if os.path.exists(cache):
+            rows = _json.load(open(cache))
+            print(f"[protect] 진단 캐시 사용: {cache}")
+        else:
+            print(f"[protect] 누수 없는 conv 단위 진단 실행(train2017 {args.protect_images}장, COCO 어휘) -> {cache}")
+            rows = rank_convs_leakfree(args.model, args.coco_root, f"cuda:{args.device}" if args.device != "cpu" else "cpu",
+                                       n_eval=args.protect_images, n_calib=args.calib, imgsz=args.imgsz,
+                                       first_last_bits=args.first_last_bits or 8)
+            _json.dump(rows, open(cache, "w"), indent=1)
+        protected, used, total = select_protected(rows, args.protect_budget, args.protect_criterion)
+        print(f"[protect] 기준={args.protect_criterion} 예산={args.protect_budget:.1%} -> {used:.4f}/{total:.3f}M param: "
+              f"{protected}")
+        hi_wbit_convs = tuple(dict.fromkeys(hi_wbit_convs + tuple(protected)))
+    elif args.protect_budget > 0:
+        print(f"[protect] w-bits={args.w_bits} >= 8 -> 보호 단계는 규칙상 비용 0(아무것도 바꾸지 않음)")
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
     print(f"[args] {vars(args)}")
@@ -1149,7 +1189,8 @@ def main():
                              first_last_bits=args.first_last_bits, vocab_metric=vocab_metric,
                              hi_wbit_blocks=hi_wbit_blocks, mig_alphas=mig_alphas,
                              mig_images=args.mig_images, hi_col_frac=args.hi_col_frac,
-                             mig_tied=args.mig_tied, hi_wbit_convs=hi_wbit_convs)
+                             mig_tied=args.mig_tied, hi_wbit_convs=hi_wbit_convs,
+                             hi_abit_convs=hi_abit_convs)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
@@ -1273,8 +1314,12 @@ def main():
         lsq_bits.append(f"첫/마지막 레이어 {args.first_last_bits}bit")
     if hi_wbit_blocks:
         lsq_bits.append(f"W8 유지 블록 {list(hi_wbit_blocks)}")
+    if protected:
+        lsq_bits.append(f"보호(자동, {args.protect_criterion}, 예산 {args.protect_budget:.1%})")
     if hi_wbit_convs:
         lsq_bits.append(f"W8 유지 conv {list(hi_wbit_convs)}")
+    if hi_abit_convs:
+        lsq_bits.append(f"A8 유지 conv {list(hi_abit_convs)}")
     if args.hi_col_frac > 0:
         lsq_bits.append(f"W8 입력 채널 상위 {args.hi_col_frac:.1%}")
     if mig_alphas:

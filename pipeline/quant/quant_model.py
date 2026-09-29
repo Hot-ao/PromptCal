@@ -108,6 +108,22 @@ def set_conv_wbits(det_model: nn.Module, conv_names, bits: int = 8):
     return changed
 
 
+def set_conv_abits(det_model: nn.Module, conv_names, bits: int = 8):
+    """09-29: conv 단위로 **입력 activation** 비트만 바꾼다(weight는 그대로). calibrate() 전 호출.
+    W4A4에서 텍스트 융합 conv 입력만 A8로 둘 때의 상한 확인용."""
+    seq = det_model.model
+    changed = []
+    for name in conv_names:
+        idx, _, rest = name.partition(".")
+        mod = seq[int(idx)].get_submodule(rest) if rest else seq[int(idx)]
+        if not isinstance(mod, QuantConv2d):
+            mod = mod.conv
+        assert isinstance(mod, QuantConv2d), f"{name}은 QuantConv2d가 아님"
+        mod.a_obs.bits = bits
+        changed.append(name)
+    return changed
+
+
 def set_mode(module: nn.Module, calibrating: bool = False, quantized: bool = False):
     for m in module.modules():
         if isinstance(m, QuantConv2d):
