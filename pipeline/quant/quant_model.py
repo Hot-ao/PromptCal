@@ -76,6 +76,21 @@ def set_first_last_bits(det_model: nn.Module, bits: int = 8):
     return changed
 
 
+def set_block_wbits(det_model: nn.Module, block_ids, bits: int = 8):
+    """09-29: 혼합 정밀도 -- DetectionModel.model[i] (i in block_ids) 안의 모든 QuantConv2d의
+    **weight** 비트만 `bits`로 바꾼다(activation 비트는 그대로). set_first_last_bits와 같이
+    calibrate() 전에 불러야 weight scale이 이 비트로 잡힌다. 근거: runs/128 W4 민감도 진단에서
+    블록 12(C2fAttn)가 W4 손상의 절반 이상을 혼자 만든다. 반환: 바뀐 conv 이름 목록."""
+    seq = det_model.model
+    changed = []
+    for i in block_ids:
+        for name, mod in seq[i].named_modules():
+            if isinstance(mod, QuantConv2d):
+                mod.w_bits = bits
+                changed.append(f"model.{i}.{name}")
+    return changed
+
+
 def set_mode(module: nn.Module, calibrating: bool = False, quantized: bool = False):
     for m in module.modules():
         if isinstance(m, QuantConv2d):

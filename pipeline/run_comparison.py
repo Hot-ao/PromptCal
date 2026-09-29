@@ -61,7 +61,7 @@ if not hasattr(np, "float"):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import SimilarityHarness
-from quant.quant_model import wrap_convs, calibrate, set_first_last_bits
+from quant.quant_model import wrap_convs, calibrate, set_first_last_bits, set_block_wbits
 from quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d, free_cpu_mem
 from quant.fake_quant import QuantConv2d
 from quant.brecq import optimize_brecq
@@ -464,7 +464,12 @@ def quantized_weight_mib(model_module):
     total_bits = 0
     for m in model_module.modules():
         if isinstance(m, (AdaRoundQuantConv2d, QuantConv2d)):
-            total_bits += m.conv.weight.numel() * m.w_bits
+            if getattr(m, "hi_cols", None) is not None:      # 09-29: 채널 단위 혼합 정밀도
+                per_col = m.conv.weight.numel() // m.conv.weight.shape[1]
+                n_hi = int(m.hi_cols.sum())
+                total_bits += per_col * (n_hi * m.hi_bits + (m.conv.weight.shape[1] - n_hi) * m.w_bits)
+            else:
+                total_bits += m.conv.weight.numel() * m.w_bits
     return total_bits / 8 / (1024 * 1024)
 
 
@@ -486,7 +491,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_region_dir_weight=0.0, margin_one_sided=False,
           combined_random_sample=False, combined_per_group_anchors=False,
           combined_local_recon_weight=0.0, combined_block_recon_weight=0.0,
-          first_last_bits=0, vocab_metric=None):
+          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -502,7 +507,29 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         # 09-28: 저비트 표준 프로토콜 -- stem과 (head 양자화 시) cv2/cv3 마지막 conv를 고정 비트로.
         # 모든 조건에 똑같이 적용된다(calibrate 전이어야 observer/weight scale이 이 비트로 잡힘).
         set_first_last_bits(m.model, first_last_bits)
+    if hi_wbit_blocks:
+        # 09-29: 혼합 정밀도(weight만 8bit로 되돌릴 블록). 모든 조건에 동일 적용, calibrate 전.
+        set_block_wbits(m.model, hi_wbit_blocks, 8)
     m.model.to(device).eval()
+    if mig_alphas:
+        # 09-29: 입력 채널별 scale 이전(quant/migrate.py). 양자화기 변경이라 모든 조건에 동일 적용,
+        # calibrate 전(observer/weight scale이 이전된 값 기준으로 잡혀야 함). layer-wise AdaRound
+        # (optimize_adaround)는 conv.weight를 FP 입력과 직접 곱해 target을 만들어서 이전과 호환 안 됨.
+        assert mode in ("naive", "brecq", "qdrop", "brecq_vm", "qdrop_vm"), f"migration 미지원 조건: {mode}"
+        if mig_tied:
+            # 09-29: 배포 제약(같은 생산 채널을 받는 소비 conv는 같은 s, residual add로 합쳐지는 생산 채널도
+            # 같은 s)을 지키는 버전(quant/channel_graph.py). 아래 독립 버전은 제약 없는 상한.
+            from quant.channel_graph import search_and_apply_tied
+            search_and_apply_tied(m.model, calib[:mig_images], device, mig_alphas)
+        else:
+            from quant.migrate import search_and_apply
+            search_and_apply(m.model, calib[:mig_images], device, mig_alphas)
+    if hi_col_frac > 0:
+        # 09-29: 채널 단위 혼합 정밀도(quant/migrate.py::select_hi_cols). 모든 조건 동일, calibrate 전,
+        # migration 뒤(이전된 값 기준으로 점수). layer-wise AdaRound 대칭 모드와는 호환 안 됨.
+        assert mode in ("naive", "brecq", "qdrop", "brecq_vm", "qdrop_vm"), f"hi-col 미지원 조건: {mode}"
+        from quant.migrate import select_hi_cols
+        select_hi_cols(m.model, calib[:mig_images], device, hi_col_frac)
     # 09-24: combined만 activation 초기 범위를 MSE 최적(0.0)과 클리핑 없는
     # min-max(1.0) 사이에서 보간할 수 있게 한다. 다른 조건은 0.0 고정이라 영향 없음.
     calibrate(m.model, calib, device=device, act_observer=act_observer,
@@ -927,6 +954,20 @@ def main():
     ap.add_argument("--first-last-bits", type=int, default=0,
                     help="09-28: >0이면 stem 첫 conv와 (head 양자화 시) cv2/cv3 마지막 1x1 conv를 이 "
                          "비트로 고정(W4A4 표준 프로토콜은 8). 모든 조건에 동일 적용. 기본 0=꺼짐(기존 동작)")
+    ap.add_argument("--hi-wbit-blocks", default="",
+                    help="09-29: weight를 8bit로 유지할 model.model 인덱스(쉼표 구분, 예: 12 또는 1,2,4,12). "
+                         "activation 비트는 그대로. 모든 조건에 동일 적용. 기본 빈 값=꺼짐(기존 동작)")
+    ap.add_argument("--mig-alphas", default="",
+                    help="09-29: 입력 채널별 scale 이전(quant/migrate.py)의 a 후보(쉼표 구분, 예: "
+                         "0,0.25,0.5,0.75,1). conv마다 출력 재구성 오차로 a를 고르고 '이전 없음'도 항상 후보. "
+                         "모든 조건에 동일 적용. 기본 빈 값=꺼짐(기존 동작)")
+    ap.add_argument("--hi-col-frac", type=float, default=0.0,
+                    help="09-29: 채널 단위 혼합 정밀도 -- W4 conv마다 입력 채널 점수 max|W_:j|*max|x_j| 상위 "
+                         "이 비율(최소 1개)의 weight 열을 8bit로. 모든 조건에 동일 적용. 기본 0=꺼짐(기존 동작)")
+    ap.add_argument("--mig-tied", action="store_true",
+                    help="09-29: --mig-alphas를 배포 제약(생산 채널 공유/residual add)을 지키는 버전으로 "
+                         "(quant/channel_graph.py). 없으면 conv별 독립 s(상한)")
+    ap.add_argument("--mig-images", type=int, default=8, help="migration 탐색에 쓸 calibration 이미지 수")
     ap.add_argument("--vm-vocab", default="configs/vocab_generic.txt",
                     help="09-28: brecq_vm/qdrop_vm의 metric을 정의하는 vocabulary. 'coco' | 'lvis'(oracle, "
                          "평가 vocabulary 누수 -- ablation 전용) | 'identity'(C=I, 방향 보존 재구성) | 이름 파일 경로")
@@ -942,6 +983,8 @@ def main():
                          "하나만 볼 때도 항상 5개 조건(특히 QDrop/BRECQ, 900~1400s대)을 다 "
                          "빌드하던 낭비를 줄이기 위함. 예: --conditions naive,combined")
     args = ap.parse_args()
+    hi_wbit_blocks = tuple(int(x) for x in args.hi_wbit_blocks.split(",") if x.strip())
+    mig_alphas = tuple(float(x) for x in args.mig_alphas.split(",") if x.strip())
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
     print(f"[args] {vars(args)}")
@@ -1096,7 +1139,10 @@ def main():
                              combined_per_group_anchors=args.combined_per_group_anchors,
                              combined_local_recon_weight=args.combined_local_recon_weight,
                              combined_block_recon_weight=args.combined_block_recon_weight,
-                             first_last_bits=args.first_last_bits, vocab_metric=vocab_metric)
+                             first_last_bits=args.first_last_bits, vocab_metric=vocab_metric,
+                             hi_wbit_blocks=hi_wbit_blocks, mig_alphas=mig_alphas,
+                             mig_images=args.mig_images, hi_col_frac=args.hi_col_frac,
+                             mig_tied=args.mig_tied)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
@@ -1218,6 +1264,13 @@ def main():
         lsq_bits.append(f"aux_mse_weight={args.aux_mse_weight}(claim16 방향3, 진단 실험)")
     if args.first_last_bits > 0:
         lsq_bits.append(f"첫/마지막 레이어 {args.first_last_bits}bit")
+    if hi_wbit_blocks:
+        lsq_bits.append(f"W8 유지 블록 {list(hi_wbit_blocks)}")
+    if args.hi_col_frac > 0:
+        lsq_bits.append(f"W8 입력 채널 상위 {args.hi_col_frac:.1%}")
+    if mig_alphas:
+        lsq_bits.append(f"scale 이전{'(공유 제약)' if args.mig_tied else '(독립, 상한)'} "
+                        f"a∈{list(mig_alphas)} ({args.mig_images}장)")
     if vocab_metric is not None:
         lsq_bits.append(f"vm: vocab={args.vm_vocab} lam={args.vm_lam_mean} mix={args.vm_mix} "
                         f"K={args.vm_samples} w={args.vm_anchor_weight}")

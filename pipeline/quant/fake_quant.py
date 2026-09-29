@@ -228,17 +228,69 @@ class QuantConv2d(nn.Module):
         self.register_buffer("w_scale", torch.tensor(1.0))
         self.register_buffer("w_zero_point", torch.tensor(0.0))
         self._w_quant_ready = False
+        # 09-29: 입력 채널별 scale 이전(migration). None이면 기존 경로 그대로. 설정되면
+        # conv.weight에는 이미 W*diag(mig)가 들어 있고(apply_migration), forward는 입력을 x/mig로
+        # 나눈 뒤 양자화한다 -- FP로는 conv(x/s, W*s) = conv(x, W)라 정확히 같은 함수이고,
+        # 양자화만 "x/s를 per-tensor로, W*s를 출력 채널별로" 하게 된다(배포 시 x/s는 생산 쪽
+        # requant 계수에, s는 weight에 흡수 -- 소비 conv 커널은 표준 per-tensor/per-channel 그대로).
+        self.register_buffer("mig", None)
+        # 09-29: 채널 단위 혼합 정밀도. hi_cols([Cin] bool)가 True인 입력 채널(weight 열)만
+        # hi_bits로 양자화한다(나머지는 w_bits). 두 열 집합은 출력 채널별 scale/zero-point를 따로
+        # 가지므로 w_scale/w_zero_point가 [Cout, Cin, 1, 1]로 확장되고 w_qmax가 열별 최대 정수값을
+        # 들고 있다. 배포: W4 conv(나머지 열) + W8 conv(소수 열)의 합 -- 둘 다 표준 커널.
+        # None이면 기존 경로 그대로.
+        self.register_buffer("hi_cols", None)
+        self.register_buffer("w_qmax", None)
+        self.hi_bits = 8
 
     @torch.no_grad()
     def freeze_weight_quant(self):
         """09-21: naive/Combined도 BRECQ/QDrop 공식과 같은 채널별 비대칭 MSE 출발점을
         쓰도록(claim17 이후 weight-scale 정합성 수정) 1회만 탐색해 캐싱한다 -- 80-후보
         탐색을 매 forward(probe 5000장+LVIS 4809장)마다 반복하면 감당 못 할 만큼 느려진다."""
-        self.w_scale, self.w_zero_point = mse_weight_scale_asym_channelwise(
-            self.conv.weight.detach(), self.w_bits)
+        if self.hi_cols is None:
+            self.w_scale, self.w_zero_point = mse_weight_scale_asym_channelwise(
+                self.conv.weight.detach(), self.w_bits)
+        else:
+            w = self.conv.weight.detach()
+            m = self.hi_cols
+            Co, Ci = w.shape[:2]
+            sc = torch.empty(Co, Ci, 1, 1, device=w.device, dtype=w.dtype)
+            zp = torch.empty_like(sc)
+            qmax = torch.empty(1, Ci, 1, 1, device=w.device, dtype=w.dtype)
+            for sel, bits in ((~m, self.w_bits), (m, self.hi_bits)):
+                if sel.any():
+                    d, z = mse_weight_scale_asym_channelwise(w[:, sel].contiguous(), bits)
+                    sc[:, sel], zp[:, sel] = d, z
+                    qmax[:, sel] = 2 ** bits - 1
+            self.w_scale, self.w_zero_point, self.w_qmax = sc, zp, qmax
         self._w_quant_ready = True
 
+    def set_hi_cols(self, mask: torch.Tensor):
+        """calibrate() 전에 호출(weight scale이 이 분할 기준으로 잡혀야 함)."""
+        assert not self._w_quant_ready, "calibrate() 전에 적용해야 함"
+        self.hi_cols = mask.to(self.conv.weight.device).bool().clone()
+
+    def weight_bits_total(self) -> int:
+        """이 conv weight의 총 비트 수(hi_cols 반영). 모델 크기 계산용."""
+        w = self.conv.weight
+        if self.hi_cols is None:
+            return w.numel() * self.w_bits
+        per_col = w.numel() // w.shape[1]
+        n_hi = int(self.hi_cols.sum())
+        return per_col * (n_hi * self.hi_bits + (w.shape[1] - n_hi) * self.w_bits)
+
+    @torch.no_grad()
+    def apply_migration(self, s: torch.Tensor):
+        """weight에 diag(s)를 흡수하고 입력 나눗셈용 s를 저장. calibrate() 전에 1회만."""
+        assert self.mig is None, "migration은 conv당 한 번만"
+        assert not self._w_quant_ready and not self.a_obs.ready, "calibrate() 전에 적용해야 함"
+        self.conv.weight.mul_(s.view(1, -1, 1, 1).to(self.conv.weight))
+        self.mig = s.view(1, -1, 1, 1).to(self.conv.weight).clone()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.mig is not None:
+            x = x / self.mig
         if self.calibrating:
             self.a_obs.observe(x)
             xq = x                                   # 관측만, 통과
@@ -250,8 +302,12 @@ class QuantConv2d(nn.Module):
         if self.quantized:
             if not self._w_quant_ready:
                 self.freeze_weight_quant()
-            n_levels = 2 ** self.w_bits - 1
-            w_int = torch.clamp(torch.round(w / self.w_scale) + self.w_zero_point, 0, n_levels)
+            if self.w_qmax is None:
+                n_levels = 2 ** self.w_bits - 1
+                w_int = torch.clamp(torch.round(w / self.w_scale) + self.w_zero_point, 0, n_levels)
+            else:
+                w_int = torch.minimum(torch.clamp(torch.round(w / self.w_scale) + self.w_zero_point, min=0),
+                                      self.w_qmax)
             wq = (w_int - self.w_zero_point) * self.w_scale
         else:
             wq = w

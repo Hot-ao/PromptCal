@@ -201,6 +201,10 @@ class AdaRoundQuantConv2d(nn.Module):
         self.lsq_act = LSQActQuant(self.a_obs.scale, bits=self.a_obs.bits)
         self.use_lsq = False                 # True일 때만 lsq_act 적용(baseline LSQ 모드)
 
+        # 09-29: 입력 채널별 scale 이전(QuantConv2d.mig 참고). conv.weight에는 이미 W*diag(s)가
+        # 들어 있으므로 입력만 x/s로 나누면 된다. None이면 기존 경로와 동일.
+        mig = getattr(qconv, "mig", None)
+        self.register_buffer("mig", None if mig is None else mig.clone())
         w = self.conv.weight.detach()
         self.w_asym = (w_quant_mode == "brecq")
         if self.w_asym:
@@ -208,7 +212,16 @@ class AdaRoundQuantConv2d(nn.Module):
             assert qconv._w_quant_ready, "qconv가 calibrate()를 거치지 않음 -- w_scale 미계산"
             self.register_buffer("w_scale", qconv.w_scale.clone())
             self.register_buffer("w_zero_point", qconv.w_zero_point.clone())
+            # 09-29: 채널 단위 혼합 정밀도(QuantConv2d.hi_cols) -- 열별 최대 정수값. None이면 기존.
+            qm = getattr(qconv, "w_qmax", None)
+            self.register_buffer("w_qmax", None if qm is None else qm.clone())
+            hc = getattr(qconv, "hi_cols", None)
+            self.register_buffer("hi_cols", None if hc is None else hc.clone())
+            self.hi_bits = getattr(qconv, "hi_bits", 8)
         else:
+            assert getattr(qconv, "hi_cols", None) is None, "채널 단위 혼합 정밀도는 brecq 모드 전용"
+            self.register_buffer("w_qmax", None)
+            self.register_buffer("hi_cols", None)
             scale = mse_weight_scale_symmetric_channelwise(w, self.w_bits)
             self.register_buffer("w_scale", scale)
             self.register_buffer("w_zero_point", torch.zeros((), device=w.device))  # 미사용(대칭)
@@ -308,8 +321,11 @@ class AdaRoundQuantConv2d(nn.Module):
     def _dequant(self, w_int):
         """w_int(=floor+반올림결정, zero_point 미적용)를 clamp+역양자화. 대칭/비대칭 분기."""
         if self.w_asym:
-            n_levels = 2 ** self.w_bits - 1
-            w_q = torch.clamp(w_int + self.w_zero_point, 0, n_levels)
+            if self.w_qmax is None:
+                n_levels = 2 ** self.w_bits - 1
+                w_q = torch.clamp(w_int + self.w_zero_point, 0, n_levels)
+            else:
+                w_q = torch.minimum(torch.clamp(w_int + self.w_zero_point, min=0), self.w_qmax)
             return (w_q - self.w_zero_point) * self.w_scale
         qmax = 2 ** (self.w_bits - 1) - 1
         w_int = torch.clamp(w_int, -(qmax + 1), qmax)
@@ -335,6 +351,8 @@ class AdaRoundQuantConv2d(nn.Module):
         return xq
 
     def forward(self, x):
+        if self.mig is not None:
+            x = x / self.mig
         if self.quantized and self.a_obs.ready and self.act_quant_enabled:
             x = self.quant_act(x)
         wq = self.quant_weight()
