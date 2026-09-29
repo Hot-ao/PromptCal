@@ -1110,8 +1110,58 @@ def main():
     conditions = [c.strip() for c in args.conditions.split(",")]
 
     _valid = {"naive", "adaround", "qdrop", "brecq", "combined", "combined_m", "brecq_vm", "qdrop_vm"}
+    # 09-29: 조건 접미사 -- "brecq+PM"처럼 기반 조건 뒤에 양자화기 옵션을 조건별로 붙인다(한 run에서 짝비교).
+    #   P = 보호(누수 없는 진단, --protect-criterion, 예산 --protect-budget 또는 기본 1.5%)
+    #   R = 같은 예산 무작위 보호(random.Random(1000), runs/134 rand0과 같은 목록)
+    #   H = 같은 예산 HAWQ식 보호(출력 MSE = 'cls' 기준)
+    #   M = 공유 제약 scale 이전(--mig-alphas가 없으면 0,0.25,0.5,0.75,1)
+    # 전역 옵션(--protect-budget, --mig-alphas 등)은 기존대로 모든 조건에 적용된다.
+    _flag_ok = set("PRHM")
 
-    assert all(c in _valid for c in conditions), f"--conditions에 알 수 없는 값: {set(conditions) - _valid}"
+    def _split_cond(c):
+        base, _, suf = c.partition("+")
+        return base, set(suf)
+
+    assert all(_split_cond(c)[0] in _valid and _split_cond(c)[1] <= _flag_ok for c in conditions), \
+        f"--conditions에 알 수 없는 값: {[c for c in conditions if _split_cond(c)[0] not in _valid or not _split_cond(c)[1] <= _flag_ok]}"
+    assert len(set(conditions)) == len(conditions), "--conditions에 중복이 있음"
+    _all_flags = set().union(*(_split_cond(c)[1] for c in conditions))
+    cond_lists = {"P": (), "R": (), "H": ()}
+    if (_all_flags & {"P", "R", "H"}) and args.w_bits < 8:
+        import json as _json, random as _random
+        from diag_w4_sensitivity import rank_convs_leakfree, select_protected
+        _budget = args.protect_budget if args.protect_budget > 0 else 0.015
+        os.makedirs(args.protect_cache, exist_ok=True)
+        _cache = os.path.join(args.protect_cache, f"{os.path.splitext(os.path.basename(args.model))[0]}"
+                                                  f"_n{args.protect_images}_c{args.calib}_img{args.imgsz}.json")
+        if os.path.exists(_cache):
+            _rows = _json.load(open(_cache))
+        else:
+            print(f"[protect] 누수 없는 conv 단위 진단 실행 -> {_cache}")
+            _rows = rank_convs_leakfree(args.model, args.coco_root, device, n_eval=args.protect_images,
+                                        n_calib=args.calib, imgsz=args.imgsz, first_last_bits=args.first_last_bits or 8)
+            _json.dump(_rows, open(_cache, "w"), indent=1)
+        cond_lists["P"] = tuple(select_protected(_rows, _budget, args.protect_criterion)[0])
+        cond_lists["H"] = tuple(select_protected(_rows, _budget, "cls")[0])
+        # R: runs/134 random_sets.json(rand0)과 같은 절차 -- 진단 행 순서(groups_of 순서)로 섞고 예산 ±10%.
+        _convs = [(r["name"], r["mparam"]) for r in _rows]
+        _target = _budget * sum(p for _, p in _convs)
+        _rng = _random.Random(1000)
+        while True:
+            _order = _convs[:]; _rng.shuffle(_order); _sel = []; _tot = 0.0
+            for n_, p_ in _order:
+                if _tot + p_ <= _target * 1.1:
+                    _sel.append(n_); _tot += p_
+                if _tot >= _target * 0.9:
+                    break
+            if _target * 0.9 <= _tot <= _target * 1.1:
+                break
+        cond_lists["R"] = tuple(_sel)
+        for k_, v_ in cond_lists.items():
+            if k_ in _all_flags:
+                print(f"[cond+{k_}] 예산 {_budget:.1%} -> {list(v_)}")
+    elif _all_flags & {"P", "R", "H"}:
+        print(f"[cond] w-bits={args.w_bits} >= 8 -> +P/+R/+H는 규칙상 no-op")
     vocab_metric = None
     if {"brecq_vm", "qdrop_vm"} & set(conditions):
         vm_names, vm_identity = load_vocab(args.vm_vocab, coco, lvis_names)
@@ -1137,10 +1187,28 @@ def main():
               f"'최적화 예산'이 교란변수로 섞인다(맞추려면 --recon-iters-ada "
               f"{args.recon_iters_strong}).")
     models, calib_time = {}, {}
-    for mode in conditions:
-        print(f"[build] {mode}")
+    # 09-29: 조건마다 빌드 직전에 RNG 상태를 루프 진입 시점으로 되돌린다. 이전에는 앞 조건이 소비한 난수
+    # (MSE observer 표본 추출, BRECQ 배치 샘플링, QDrop 마스크)만큼 뒤 조건의 RNG 위치가 밀려서 조건 순서가
+    # 결과를 바꿨다(§5.2). 복원하면 모든 조건이 "첫 번째 조건"과 같은 상태에서 시작한다 -- 첫 조건은 이전과 동일.
+    import random as _py_random
+    import numpy as _np
+    _rng_snapshot = (torch.get_rng_state(),
+                     torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                     _np.random.get_state(), _py_random.getstate())
+    model_mib_by = {}
+    for cond in conditions:
+        mode, flags = _split_cond(cond)
+        torch.set_rng_state(_rng_snapshot[0])
+        if _rng_snapshot[1] is not None:
+            torch.cuda.set_rng_state_all(_rng_snapshot[1])
+        _np.random.set_state(_rng_snapshot[2]); _py_random.setstate(_rng_snapshot[3])
+        c_hi_wbit = tuple(dict.fromkeys(hi_wbit_convs + sum((cond_lists[f] for f in "PRH" if f in flags), ())))
+        c_mig_alphas = mig_alphas if mig_alphas else ((0.0, 0.25, 0.5, 0.75, 1.0) if "M" in flags else ())
+        c_mig_tied = args.mig_tied or ("M" in flags)
+        print(f"[build] {cond}" + (f"  (W8 보호 {len(c_hi_wbit)}개, 이전={'공유' if c_mig_tied else '독립'}"
+                                   f"{' 켬' if c_mig_alphas else ' 끔'})" if flags else ""))
         t0 = time.perf_counter()
-        models[mode] = build(YOLOWorld, args.model, coco, device, calib, mode, fp=fp,
+        models[cond] = build(YOLOWorld, args.model, coco, device, calib, mode, fp=fp,
                              iters=args.iters, pidx=S, lr=args.lr, k=args.k,
                              neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
                              scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
@@ -1187,12 +1255,13 @@ def main():
                              combined_local_recon_weight=args.combined_local_recon_weight,
                              combined_block_recon_weight=args.combined_block_recon_weight,
                              first_last_bits=args.first_last_bits, vocab_metric=vocab_metric,
-                             hi_wbit_blocks=hi_wbit_blocks, mig_alphas=mig_alphas,
+                             hi_wbit_blocks=hi_wbit_blocks, mig_alphas=c_mig_alphas,
                              mig_images=args.mig_images, hi_col_frac=args.hi_col_frac,
-                             mig_tied=args.mig_tied, hi_wbit_convs=hi_wbit_convs,
+                             mig_tied=c_mig_tied, hi_wbit_convs=c_hi_wbit,
                              hi_abit_convs=hi_abit_convs)
-        calib_time[mode] = time.perf_counter() - t0
-        print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
+        calib_time[cond] = time.perf_counter() - t0
+        model_mib_by[cond] = quantized_weight_mib(models[cond].model)
+        print(f"  {cond} 빌드 {calib_time[cond]:.1f}s  (이론적 크기 {model_mib_by[cond]:.2f} MiB)")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
     # 모드(adaround/qdrop/brecq/combined)는 전부 같은 conv/양자화 구조라 이론적
     # 모델 크기가 동일하므로, 돌아간 것 중 아무거나 골라도 된다(naive만 돈 경우는 naive로).
@@ -1366,6 +1435,8 @@ def main():
         print(f"{mode:>10} | {lrg['S']:>10.2f}% | {lrg['H_cal']:>14.2f}% | {lrg['H_eval']:>15.2f}%")
 
     print(f"\n이론적 모델 크기: {model_mib:.2f} MiB")
+    if len(set(round(v, 4) for v in model_mib_by.values())) > 1:
+        print("조건별 이론적 크기: " + ", ".join(f"{k} {v:.2f} MiB" for k, v in model_mib_by.items()))
 
 
 if __name__ == "__main__":
