@@ -61,7 +61,7 @@ if not hasattr(np, "float"):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import SimilarityHarness
-from quant.quant_model import wrap_convs, calibrate, set_first_last_bits, set_block_wbits
+from quant.quant_model import wrap_convs, calibrate, set_first_last_bits, set_block_wbits, set_conv_wbits
 from quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d, free_cpu_mem
 from quant.fake_quant import QuantConv2d
 from quant.brecq import optimize_brecq
@@ -491,7 +491,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_region_dir_weight=0.0, margin_one_sided=False,
           combined_random_sample=False, combined_per_group_anchors=False,
           combined_local_recon_weight=0.0, combined_block_recon_weight=0.0,
-          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False):
+          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False, hi_wbit_convs=()):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -510,6 +510,9 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
     if hi_wbit_blocks:
         # 09-29: 혼합 정밀도(weight만 8bit로 되돌릴 블록). 모든 조건에 동일 적용, calibrate 전.
         set_block_wbits(m.model, hi_wbit_blocks, 8)
+    if hi_wbit_convs:
+        # 09-29: conv 단위 혼합 정밀도(채널 단위 W8과 같은 크기 비교용). 모든 조건 동일, calibrate 전.
+        set_conv_wbits(m.model, hi_wbit_convs, 8)
     m.model.to(device).eval()
     if mig_alphas:
         # 09-29: 입력 채널별 scale 이전(quant/migrate.py). 양자화기 변경이라 모든 조건에 동일 적용,
@@ -961,6 +964,9 @@ def main():
                     help="09-29: 입력 채널별 scale 이전(quant/migrate.py)의 a 후보(쉼표 구분, 예: "
                          "0,0.25,0.5,0.75,1). conv마다 출력 재구성 오차로 a를 고르고 '이전 없음'도 항상 후보. "
                          "모든 조건에 동일 적용. 기본 빈 값=꺼짐(기존 동작)")
+    ap.add_argument("--hi-wbit-convs", default="",
+                    help="09-29: weight를 8bit로 유지할 conv(model.model 기준 경로, 쉼표 구분, 예: 12.cv2,4.cv1). "
+                         "모든 조건에 동일 적용. 기본 빈 값=꺼짐")
     ap.add_argument("--hi-col-frac", type=float, default=0.0,
                     help="09-29: 채널 단위 혼합 정밀도 -- W4 conv마다 입력 채널 점수 max|W_:j|*max|x_j| 상위 "
                          "이 비율(최소 1개)의 weight 열을 8bit로. 모든 조건에 동일 적용. 기본 0=꺼짐(기존 동작)")
@@ -985,6 +991,7 @@ def main():
     args = ap.parse_args()
     hi_wbit_blocks = tuple(int(x) for x in args.hi_wbit_blocks.split(",") if x.strip())
     mig_alphas = tuple(float(x) for x in args.mig_alphas.split(",") if x.strip())
+    hi_wbit_convs = tuple(x.strip() for x in args.hi_wbit_convs.split(",") if x.strip())
     device = f"cuda:{args.device}" if args.device != "cpu" else "cpu"
     gt_ann = args.gt_ann or os.path.join(args.coco_root, "annotations", "instances_val2017.json")
     print(f"[args] {vars(args)}")
@@ -1142,7 +1149,7 @@ def main():
                              first_last_bits=args.first_last_bits, vocab_metric=vocab_metric,
                              hi_wbit_blocks=hi_wbit_blocks, mig_alphas=mig_alphas,
                              mig_images=args.mig_images, hi_col_frac=args.hi_col_frac,
-                             mig_tied=args.mig_tied)
+                             mig_tied=args.mig_tied, hi_wbit_convs=hi_wbit_convs)
         calib_time[mode] = time.perf_counter() - t0
         print(f"  {mode} 빌드 {calib_time[mode]:.1f}s")
     # --conditions로 일부만 돌릴 때 "adaround"가 없을 수 있음 -- AdaRound 기반
@@ -1266,6 +1273,8 @@ def main():
         lsq_bits.append(f"첫/마지막 레이어 {args.first_last_bits}bit")
     if hi_wbit_blocks:
         lsq_bits.append(f"W8 유지 블록 {list(hi_wbit_blocks)}")
+    if hi_wbit_convs:
+        lsq_bits.append(f"W8 유지 conv {list(hi_wbit_convs)}")
     if args.hi_col_frac > 0:
         lsq_bits.append(f"W8 입력 채널 상위 {args.hi_col_frac:.1%}")
     if mig_alphas:

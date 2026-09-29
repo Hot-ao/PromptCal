@@ -91,6 +91,23 @@ def set_block_wbits(det_model: nn.Module, block_ids, bits: int = 8):
     return changed
 
 
+def set_conv_wbits(det_model: nn.Module, conv_names, bits: int = 8):
+    """09-29: conv 단위 혼합 정밀도 -- "12.cv2"처럼 model.model 기준 경로로 지정한 conv의 weight만 `bits`로.
+    경로가 ultralytics Conv(conv+act)를 가리키면 그 안의 QuantConv2d를 쓴다. calibrate() 전 호출.
+    채널 단위 W8(--hi-col-frac)과 같은 크기에서 비교하기 위한 baseline(12.cv2 하나 = +1% 크기)."""
+    seq = det_model.model
+    changed = []
+    for name in conv_names:
+        idx, _, rest = name.partition(".")
+        mod = seq[int(idx)].get_submodule(rest) if rest else seq[int(idx)]
+        if not isinstance(mod, QuantConv2d):
+            mod = mod.conv
+        assert isinstance(mod, QuantConv2d), f"{name}은 QuantConv2d가 아님"
+        mod.w_bits = bits
+        changed.append(name)
+    return changed
+
+
 def set_mode(module: nn.Module, calibrating: bool = False, quantized: bool = False):
     for m in module.modules():
         if isinstance(m, QuantConv2d):
