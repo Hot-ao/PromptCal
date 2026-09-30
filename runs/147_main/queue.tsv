@@ -1,0 +1,55 @@
+A-W4A8-s2	--w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM,brecq+R --seed 2
+A-W4A8-s3	--w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM,brecq+R --seed 3
+A-W4A8-s4	--w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM,brecq+R --seed 4
+A-W4A8-s5	--w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM,brecq+R --seed 5
+A-W8A8-s2	--w-bits 8 --a-bits 8 --conditions naive,brecq,brecq+M --seed 2
+A-W8A8-s3	--w-bits 8 --a-bits 8 --conditions naive,brecq,brecq+M --seed 3
+A-W8A8-s4	--w-bits 8 --a-bits 8 --conditions naive,brecq,brecq+M --seed 4
+A-W8A8-s5	--w-bits 8 --a-bits 8 --conditions naive,brecq,brecq+M --seed 5
+A-W4A6-s0	--w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM --seed 0
+A-W4A6-s1	--w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM --seed 1
+A-W4A6-s2	--w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM --seed 2
+A-W4A6-s3	--w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM --seed 3
+A-W4A6-s4	--w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM --seed 4
+A-W4A6-s5	--w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM --seed 5
+A-W4A5-s0	--w-bits 4 --a-bits 5 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM --seed 0
+A-W4A5-s1	--w-bits 4 --a-bits 5 --conditions naive,brecq,brecq+M,brecq+P,brecq+PM --seed 1
+A-W4A5-s2	--w-bits 4 --a-bits 5 --conditions naive,brecq,brecq+PM --seed 2
+A-W4A5-s3	--w-bits 4 --a-bits 5 --conditions naive,brecq,brecq+PM --seed 3
+A-W4A5-s4	--w-bits 4 --a-bits 5 --conditions naive,brecq,brecq+PM --seed 4
+A-W4A5-s5	--w-bits 4 --a-bits 5 --conditions naive,brecq,brecq+PM --seed 5
+B-W4A8-s0	--w-bits 4 --a-bits 8 --conditions adaround,qdrop,qdrop+PM,combined,brecq+H --seed 0
+B-W4A8-s1	--w-bits 4 --a-bits 8 --conditions adaround,qdrop,qdrop+PM,combined,brecq+H --seed 1
+B-W4A8-s2	--w-bits 4 --a-bits 8 --conditions adaround,qdrop,qdrop+PM,combined,brecq+H --seed 2
+B-W4A8-s3	--w-bits 4 --a-bits 8 --conditions adaround,qdrop,qdrop+PM,combined,brecq+H --seed 3
+B-W4A8-s4	--w-bits 4 --a-bits 8 --conditions adaround,qdrop,qdrop+PM,combined,brecq+H --seed 4
+B-W4A8-s5	--w-bits 4 --a-bits 8 --conditions adaround,qdrop,qdrop+PM,combined,brecq+H --seed 5
+B-W4A6-s0	--w-bits 4 --a-bits 6 --conditions adaround,qdrop,qdrop+PM,combined --seed 0
+B-W4A6-s1	--w-bits 4 --a-bits 6 --conditions adaround,qdrop,qdrop+PM,combined --seed 1
+B-W4A6-s2	--w-bits 4 --a-bits 6 --conditions adaround,qdrop,qdrop+PM,combined --seed 2 --adaround-act-observer mse
+B-W4A6-s3	--w-bits 4 --a-bits 6 --conditions qdrop,qdrop+PM --seed 3
+B-W4A6-s4	--w-bits 4 --a-bits 6 --conditions qdrop,qdrop+PM --seed 4
+B-W4A6-s5	--w-bits 4 --a-bits 6 --conditions qdrop,qdrop+PM --seed 5
+G-W4A8-s0	--w-bits 4 --a-bits 8 --conditions brecq+G,brecq+GM,brecq+GPM --seed 0
+G-W4A6-s0	--w-bits 4 --a-bits 6 --conditions brecq+G,brecq+GM,brecq+GPM --seed 0
+G-W4A5-s0	--w-bits 4 --a-bits 5 --conditions brecq+G,brecq+GM,brecq+GPM --seed 0
+G-W4A8-s1	--w-bits 4 --a-bits 8 --conditions brecq+G,brecq+GM,brecq+GPM --seed 1
+G-W4A6-s1	--w-bits 4 --a-bits 6 --conditions brecq+G,brecq+GM,brecq+GPM --seed 1
+G-W4A5-s1	--w-bits 4 --a-bits 5 --conditions brecq+G,brecq+GM,brecq+GPM --seed 1
+B-W4A5-s0	--w-bits 4 --a-bits 5 --conditions qdrop,qdrop+PM --seed 0
+B-W4A5-s1	--w-bits 4 --a-bits 5 --conditions qdrop,qdrop+PM --seed 1
+R-W4A8-s0	--w-bits 4 --a-bits 8 --conditions adaround --adaround-act-observer mse --seed 0
+R-W4A8-s1	--w-bits 4 --a-bits 8 --conditions adaround --adaround-act-observer mse --seed 1
+R-W4A8-s2	--w-bits 4 --a-bits 8 --conditions adaround --adaround-act-observer mse --seed 2
+G-W4A6-s2	--w-bits 4 --a-bits 6 --conditions brecq+G,brecq+GM,brecq+GPM --seed 2
+G-W4A6-s3	--w-bits 4 --a-bits 6 --conditions brecq+G,brecq+GM,brecq+GPM --seed 3
+G-W4A6-s4	--w-bits 4 --a-bits 6 --conditions brecq+G,brecq+GM,brecq+GPM --seed 4
+G-W4A6-s5	--w-bits 4 --a-bits 6 --conditions brecq+G,brecq+GM,brecq+GPM --seed 5
+G-W4A5-s2	--w-bits 4 --a-bits 5 --conditions brecq+G,brecq+GM,brecq+GPM --seed 2
+G-W4A5-s3	--w-bits 4 --a-bits 5 --conditions brecq+G,brecq+GM,brecq+GPM --seed 3
+G-W4A5-s4	--w-bits 4 --a-bits 5 --conditions brecq+G,brecq+GM,brecq+GPM --seed 4
+G-W4A5-s5	--w-bits 4 --a-bits 5 --conditions brecq+G,brecq+GM,brecq+GPM --seed 5
+G-W4A8-s2	--w-bits 4 --a-bits 8 --conditions brecq+G,brecq+GM,brecq+GPM --seed 2
+G-W4A8-s3	--w-bits 4 --a-bits 8 --conditions brecq+G,brecq+GM,brecq+GPM --seed 3
+G-W4A8-s4	--w-bits 4 --a-bits 8 --conditions brecq+G,brecq+GM,brecq+GPM --seed 4
+G-W4A8-s5	--w-bits 4 --a-bits 8 --conditions brecq+G,brecq+GM,brecq+GPM --seed 5

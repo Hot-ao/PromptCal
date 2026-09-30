@@ -1,11 +1,12 @@
-# 저비트 PTQ 방법 — 구조와 작동 원리 (2026-09-29)
+# 저비트 PTQ 방법 — 구조와 작동 원리 (2026-09-29, 09-30 갱신)
 
 **대상 독자:** 이 방법을 이어서 구현·실험하거나 논문을 쓰는 공저자.
 
 **목적:** "무엇을 하는 방법인가, 모델의 어디를 어떻게 바꾸는가, 왜 그게 통하는가"를 한 문서에서 설명한다.
 
 **관련 문서**
-- 실험 수치와 경위는 [`docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md`](docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md)에 있다(run 번호로 추적).
+- 실험 수치와 경위는 [`docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-30.md`](docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-30.md)(6-seed 확정, 게이트 교환)와 [`docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md`](docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md)(원인 분석)에 있다(run 번호로 추적).
+- **09-30 변경:** 텍스트 게이트 교환(⓪, §4.4)을 방법에 추가했다. 저비트(A6·A5)에서는 GPM이 최종 구성이다.
 - 이전 설계(Combined = BRECQ + s_mult margin 학습)는 [`PROMPTCAL_PAPER_DESIGN_2026-09-28.md`](PROMPTCAL_PAPER_DESIGN_2026-09-28.md)에 있다. 이 문서의 방법은 그 설계를 대체한다. 이유는 §7에 있다.
 
 ---
@@ -23,22 +24,31 @@
 **방법.** 같은 절차를 모든 비트 설정에 적용한다.
 
 ```
+ ⓪ 게이트 교환(Gate commute) : C2fAttn의 텍스트 게이트를 1×1 conv 뒤로 옮기는 FP 등가 재배치 (비트 비용 0)   [09-30 추가]
  ① 보호(Protect)   : 누수 없는 진단으로 고른 소수 conv의 weight를 8bit로 유지 (예산 = weight 파라미터의 1.5%)
+                     ⓪을 쓰면 C2fAttn cv2(12.cv2 등)는 목록에서 빠진다 -> 실제 보호는 1, 2.cv2, 4.cv1 (+0.3%)
  ② 이전(Migrate)   : 입력 채널별 scale s를 생산 conv → 소비 conv weight로 옮김 (배포 제약을 지키는 공유 s)
- ③ 재구성(BRECQ)   : 표준 블록 재구성 PTQ (rounding + activation step 학습)
+ ③ 재구성(BRECQ)   : 표준 블록 재구성 PTQ (rounding + activation step 학습). QDrop으로 바꿔도 된다
 ```
 
-- W8A8에서는 모든 weight가 이미 8bit라서 ①이 규칙상 아무것도 하지 않는다(비용 0). ②가 주로 기여한다.
-- W4A8에서는 ①이 주로 기여한다(크기 +1.3%). ②가 소폭 더한다.
+- 이름: ①+② = **PM**, ⓪+①+② = **GPM** (조건 접미사, §5).
+- W8A8에서는 모든 weight가 이미 8bit라 ①이 규칙상 아무것도 하지 않는다(비용 0). ②가 주로 기여한다.
+- W4A8에서는 ①이 주로 기여한다. 현재 PM이 GPM보다 약간 낫다(2 seed, 확인 중).
+- **W4A6·W4A5에서는 GPM이 최선이다:** PM보다 작은 모델로 held-out 판정 지표가 6/6 더 좋다.
 
-**결과 요약 (head 포함, 2 seed)**
+**결과 요약 (head 포함, 6 seed, BRECQ → 우리)**
 
-| 설정 | 방법 | 크기 | LVIS AP (BRECQ → 우리) | LVIS_flip (BRECQ → 우리) |
-|---|---|---|---|---|
-| W8A8 | ② + ③ | +0% | 0.2524 → 0.2577 / 0.2547 | 3.99 / 3.87% → 2.67 / 2.69% |
-| W4A8 | ① + ② + ③ | +1.3% | 0.2250 / 0.2243 → 0.2398 / 0.2386 | 18.38 / 18.01% → 11.92 / 12.18% |
+| 설정 | 방법 | 크기 | COCO AP | LVIS AP | LVIS_flip |
+|---|---|---|---|---|---|
+| W8A8 | ② + ③ | +0% | 36.26 → 36.80 | 0.2533 → 0.2565 | 3.91 → 2.63% |
+| W4A8 | PM | +1.3% | 33.19 → 34.80 | 0.2239 → 0.2375 | 18.30 → 11.99% |
+| W4A6 | **GPM** | **+0.3%** | 32.11 → 34.12 | 0.2147 → 0.2306 | 21.31 → 14.66% |
+| W4A5 | **GPM** | **+0.3%** | 29.90 → 32.84 | 0.1958 → 0.2228 | 28.47 → 19.69% |
 
-FP32는 LVIS AP 0.2589다. 같은 크기에서 무작위로 conv를 골라 보호하면 효과가 없다.
+- FP32는 COCO AP 36.80, LVIS AP 0.2589다.
+- 모든 행이 6/6 seed 개선이다.
+- 같은 크기에서 무작위로 conv를 골라 보호하면 효과가 없다.
+- QDrop 위에서도 같은 크기로 개선된다.
 
 ---
 
@@ -141,13 +151,14 @@ FP32는 LVIS AP 0.2589다. 같은 크기에서 무작위로 conv를 골라 보�
 ### 4.0 빌드 순서 (`pipeline/run_comparison.py::build`)
 
 ```
+ ⓪ gate_commute_all(m.model)                  (+G) C2fAttn cv2를 cv2_main + head별 cv2_side로 분리, 게이트를 뒤로
  wrap_convs(W,A 비트)                         모든 conv → QuantConv2d
  set_first_last_bits(8)                       stem·head 마지막 = 8bit
  ① set_conv_wbits(보호 목록, 8)               보호 conv의 weight 비트만 8로   ← calibrate 전이어야 scale이 8bit 기준
  model.to(device)
  ② search_and_apply_tied(...)                 채널 계보 추적 → 공유 s 탐색 → W←W·diag(s), x←x/s
  calibrate(...)                               activation 범위·weight scale 확정 (이미 이전된 값 기준)
- ③ convert_to_adaround + optimize_brecq       rounding·LSQ 재구성
+ ③ convert_to_adaround + optimize_brecq       rounding·LSQ 재구성 (+G면 FP 기준 모델도 같은 구조로 변환해 넘김)
 ```
 
 - 보호 목록은 `main()`에서 한 번 정해 모든 조건에 똑같이 넘긴다(`--protect-budget`).
@@ -262,8 +273,42 @@ conv의 입력 채널 c마다 양수 s_c를 두면 FP 함수는 변하지 않는
 
 | | 주 병목 | 주로 기여하는 단계 | 근거 (run) |
 |---|---|---|---|
-| W8A8 | activation (채널 편차, cv3 경로) | ② 이전 | 135 |
-| W4A8 | weight (텍스트 융합 conv, 초반 backbone) | ① 보호 | 132 vs 134, 141 |
+| W8A8 | activation (채널 편차, cv3 경로) | ② 이전 | 135, 147 |
+| W4A8 | weight (텍스트 융합 conv, 초반 backbone) | ① 보호 | 132 vs 134, 141, 147 |
+| W4A6·W4A5 | weight + activation (텍스트 융합 conv가 이전의 부담까지 받음) | ⓪ 게이트 교환 + ① + ② | 147 (G-*) |
+
+**이전의 부작용과 그 해소:** A6·A5에서 이전(②) 단독은 BRECQ보다 나쁘다(W4A6 0/6).
+- 이전은 취약성을 없애지 않고 옮긴다. `runs/148`에서 12.cv2의 민감도는 줄고, 1.conv의 민감도는 3.5~4배 는다.
+- 보호(①)나 게이트 교환(⓪)이 취약한 conv를 받쳐 줄 때만 이전이 이득이 된다. W4A6 G → GM은 LVIS AP +0.31점, W4A5는 +0.65점이다.
+
+### 4.4 ⓪ 텍스트 게이트 교환 (09-30)
+
+**무엇을 바꾸나.** C2fAttn(§2.2)의 마지막 1×1 conv `cv2`는 네 분기 concat을 받는다. 그중 텍스트 attention 분기는 `a_h = p_h ⊙ aw_h`다.
+- `p = attn.proj_conv(y2)`
+- `aw_h`: head h의 위치별 텍스트 게이트, `sigmoid(max_j⟨embed, guide_j⟩/√d + b)·scale`
+- 1×1 conv는 선형이고 게이트는 위치별 스칼라라서, 다음이 FP로 정확히 같다.
+
+```
+ cv2(cat(y0, y1, y2, a)) = W_main · cat(y0, y1, y2) + b + Σ_h aw_h ⊙ (W_h · p_h)
+```
+
+- **구현 (`pipeline/quant/fusion_quant.py::gate_commute`):**
+  - `cv2.conv`의 weight 열을 앞 세 분기(`cv2_main`, bias 포함)와 head별 텍스트 열(`cv2_side[h]`, bias 없음)로 쪼갠다.
+  - forward를 교체한다: 게이트 aw는 원래 식 그대로 계산하고, p는 게이트 없이 `cv2_side`에 넣은 뒤 그 출력에 aw를 곱해 더한다. 마지막에 SiLU를 적용한다.
+  - YOLOv8s-World는 C2fAttn 4곳(12, 15, 19, 22), head 4개다.
+- **양자화에서 달라지는 점:**
+  1. 텍스트 분기가 자기 전용 conv를 가진다. 다른 세 분기와 **weight scale(출력 채널별)과 activation scale을 공유하지 않는다.** 09-29 분석의 원인 "공유 scale 오염"을 구조적으로 없앤다.
+  2. 양자화되는 입력이 게이트가 곱해지기 **전**의 p다. 게이트가 만드는 위치별 크기 편차(0~scale)가 양자화 범위에서 빠진다.
+  3. 게이트가 작은 위치(텍스트와 무관한 영역)에서는 텍스트 분기의 양자화 오차도 게이트 배율만큼 줄어든다.
+- **효과 (naive, 12번 블록만 W4):** LVIS flip이 68.8%에서 **9.7%**로 줄었다. 분기별 scale 분리만 하면 18.5%다. 게이트를 뒤로 옮긴 것 자체가 핵심이다.
+- **BRECQ와의 연동:**
+  - neck/head는 conv 단위로 FP conv 출력을 목표로 재구성하므로, FP 기준 모델도 같은 구조로 변환해 넘긴다(FP 등가라 목표는 같다).
+  - 새 conv(`cv2_main`, `cv2_side`)는 일반 conv처럼 AdaRound/LSQ를 받는다.
+- **이전(②)과의 연동:**
+  - 채널 계보 추적은 새 conv를 그대로 소비자로 인식한다.
+  - C2fAttn 출력은 사용자 정의 forward에서 나와 계보가 끊긴다. 그래서 그 출력을 받는 채널에는 이전을 적용하지 않는다(s=1, 안전).
+- **보호(①)와의 연동:** 게이트 교환이 C2fAttn cv2를 대신 다루므로, 보호 목록에서 해당 conv를 뺀다(`+G` 규칙). 남는 보호 대상은 초반 backbone 3개이고, 크기는 +0.3%다.
+- **배포:** 1×1 conv 두 개(main, side), 위치별 곱, 덧셈, SiLU. 모두 표준 연산이고 FP 연산량은 같다. 추가 비트는 없다. 실제 엔진에서 fusion되는지는 미확인이다.
 
 ---
 
@@ -278,7 +323,18 @@ COMMON="--model yolov8s-world.pt --deterministic --calib 256 --no-skip-head --co
 .venv/bin/python pipeline/run_comparison.py $COMMON --w-bits 4 --a-bits 8 --first-last-bits 8 --seed 0 --device 4
 # W8A8 (보호는 자동 no-op, 이전 + BRECQ)
 .venv/bin/python pipeline/run_comparison.py $COMMON --w-bits 8 --a-bits 8 --seed 0 --device 4
+
+# 조건 접미사로 한 run에서 짝비교 (09-30 권장 방식; 조건마다 RNG를 복원하므로 순서 무관)
+.venv/bin/python pipeline/run_comparison.py --model yolov8s-world.pt --deterministic --calib 256 --no-skip-head \
+    --first-last-bits 8 --w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+PM,brecq+GPM,qdrop,qdrop+PM --seed 0 --device 4
 ```
+
+| 조건 접미사 | 의미 |
+|---|---|
+| `+P` | 보호 (누수 없는 진단, `--protect-criterion`, 예산 `--protect-budget` 또는 기본 1.5%) |
+| `+M` | 공유 제약 scale 이전 (`--mig-alphas`가 없으면 0,0.25,0.5,0.75,1) |
+| `+G` | 텍스트 게이트 교환. P/R/H와 함께 쓰면 C2fAttn cv2는 보호 목록에서 빠짐 |
+| `+R` / `+H` | 같은 예산의 무작위 보호 / HAWQ식(출력 MSE) 보호 (대조군) |
 
 | 옵션 | 의미 | 기본 |
 |---|---|---|
@@ -300,6 +356,7 @@ COMMON="--model yolov8s-world.pt --deterministic --calib 256 --no-skip-head --co
 | `pipeline/quant/channel_graph.py` | ② 채널 계보 추적, 공유 그룹, s 탐색, 배포형 등가성 검사 |
 | `pipeline/quant/migrate.py` | ② 독립 s 버전(상한, ablation), 채널 단위 W8(ablation) |
 | `pipeline/quant/fake_quant.py` | `QuantConv2d` (`mig`, `hi_cols`, 비트별 scale) |
+| `pipeline/quant/fusion_quant.py` | ⓪ 게이트 교환(`gate_commute`), 분기 인식 concat 양자화 프로토타입(기각) |
 | `pipeline/quant/adaround.py`, `brecq.py` | ③ BRECQ |
 
 `src/quant/`는 `pipeline/quant/`의 사본으로 동기화해 둔다.
@@ -312,10 +369,11 @@ COMMON="--model yolov8s-world.pt --deterministic --calib 256 --no-skip-head --co
 |---|---|---|---|
 | ① 보호 | 해당 conv만 INT8 weight (레이어별 정밀도) | 크기 +1.3% (W4A8), 연산 형태 동일 | 시뮬레이션만 |
 | ② 이전 | 생산 conv의 SiLU 뒤 채널별 곱셈(1/s), 소비 conv는 W·s를 표준 커널로 | 채널별 곱셈 1회. conv에 fusion되면 거의 0 | 배포형 FP 등가성은 확인. 실제 엔진 fusion은 미확인 |
+| ⓪ 게이트 교환 | C2fAttn cv2를 1×1 conv 두 개 + 위치별 곱 + 덧셈으로 | 없음 (FP 연산량 동일) | FP 등가성 확인. 엔진 fusion 미확인 |
 | ③ BRECQ | 학습된 rounding이 반영된 정적 weight | 없음 | – |
 
 - **PTQ 제작 비용:** 서버에서 1회 수행한다. GPU 메모리 약 15GB, run당 약 20분이다. 기기는 완성된 모델만 받는다.
-- **추론 모델 크기 (s):** W4A8 6.22 MiB, W8A8 12.08 MiB. FP32는 약 49 MiB다.
+- **추론 모델 크기 (s):** W4 PM 6.22 MiB, W4 GPM 6.16 MiB, W8A8 12.08 MiB. FP32는 약 49 MiB다.
 - **FP로 남는 연산:** attention의 Linear/matmul, DFL. 어휘가 고정되면 텍스트 임베딩은 미리 계산해 두므로 기기에서 CLIP을 돌릴 필요는 없다.
 - **W4 conv의 실제 가속:** 하드웨어 지원이 제한적이다. 모든 W4 방법에 공통인 조건이다. 목표 기기 검증이 필요하다(결과 문서 §12 P7).
 
@@ -333,6 +391,8 @@ COMMON="--model yolov8s-world.pt --deterministic --calib 256 --no-skip-head --co
 | **독립 s 이전** | conv마다 s를 따로 | COCO +0.8~1.0, 하지만 배포 불가 | 공유 제약 버전(②)으로 대체 |
 | **새로운 선택 기준** | 임베딩 방향 오차 등 "순위 전용" 기준 | 출력 MSE와 순위 상관 0.99. 데이터 기반 기준은 모두 같은 conv를 고른다 | 기준은 기여가 아니다. 가장 단순한 COCO flip으로 고정 |
 | **W4A4** | 소수 conv만 A8 | conv의 76%를 A8로 되돌려도 붕괴. A5부터 풀림 | per-tensor A4는 이 모델의 절벽. 한계로 명시 |
+| **분기 인식 concat 양자화** (09-30) | concat 입력을 생산자별 구간으로 나눠 구간마다 activation·weight scale | A4 붕괴 해결 실패(LVIS flip 95% 이상). 효과는 weight 쪽(그룹 양자화)뿐 | A4 손상은 concat을 넘어 전체에 퍼져 있다. 기존 기법과 같아 기각 |
+| **이전 고려 보호 배분** (A안, 09-30) | 이전 적용 뒤의 모델로 보호 대상 진단 | 보호 목록의 마지막 한 자리만 바뀜 | 기대 이득이 작아 보류. 대신 "이전은 취약성을 옮긴다"는 메커니즘을 얻음 |
 
 **정리:** 순위는 **학습(손실)으로 맞추는 게 아니라, 순위가 무너지는 구조적 지점을 양자화기 수준에서 지켜서** 보존한다.
 
@@ -344,21 +404,25 @@ COMMON="--model yolov8s-world.pt --deterministic --calib 256 --no-skip-head --co
 - open-vocab 검출기의 저비트 손상은 held-out 어휘 순위에서 가장 크게 드러난다(LVIS가 COCO보다 2~3배 민감).
 - 손상은 텍스트 attention이 합쳐지는 concat conv와 초반 backbone에 집중된다. 원인은 attention 분기의 outlier와 공유 scale이다. s-v1, s-v2, m-v1에서 재현된다.
 - 누수 없는 진단으로 그 지점을 찾아 지키고 공유 제약 scale 이전을 더하면 순위 지표가 30% 이상 개선된다. 비용은 W8A8 0%, W4A8 +1.3%다. 같은 크기의 무작위 보호는 효과가 없다.
-- calibration 어휘 기반 학습(PromptCal)은 held-out 순위를 해친다(음성 결과).
+- calibration 어휘 기반 학습(PromptCal)은 held-out 순위를 해친다(음성 결과, W4A8·W4A6 6-seed에서 0/6).
+- **텍스트 게이트 교환은 open-vocab 검출기의 텍스트 게이팅 구조를 이용한 양자화 전용 재배치다.** FP 등가이고 비트 비용이 0이며, 저비트(A6·A5)에서 BRECQ 대비 6/6 개선한다. 보호와 결합(GPM)하면 PM보다 작은 모델로 held-out 판정을 6/6 더 잘 지킨다.
+- 학습 없는 PTQ로 W4A5까지 동작한다. 기존 PTQ(QDrop, AdaRound, PromptCal)는 같은 조건에서 크게 무너진다.
 
 **주장하면 안 되는 것**
-- "순위 보존을 위해 새로 설계한 선택 기준/손실": 선택 기준은 출력 MSE와 같은 결과를 내고, 이전은 범용 기법이다.
+- "순위 보존을 위해 새로 설계한 선택 기준/손실": 선택 기준은 출력 MSE와 같은 결과를 내고, 이전은 범용 기법이다. 새로움은 게이트 교환(구조)과 분석에 있다.
+- "GPM이 모든 비트에서 PM보다 낫다": W4A8에서는 PM이 낫다(2 seed, 확인 중).
+- "W4A4를 PTQ로 열었다": 열지 못했다.
 - "held-out 어휘에만 특화된 개선": COCO도 비슷한 비율로 좋아진다.
 - "실제 엣지 기기에서의 가속": 아직 시뮬레이션뿐이다.
 
 ---
 
-## 9. 남은 검증 (상세는 결과 문서 §12)
-1. **6-seed 확장:** W8A8(BRECQ vs 우리), W4A8(BRECQ, ②만, ①만, ①+②, 무작위 보호 3조합). 약 36 run.
-2. **W4A8 같은 프로토콜 baseline:** naive, AdaRound, QDrop, Combined. QDrop 위 우리 방법(plug-in 일반성).
-3. **같은 예산의 HAWQ식 혼합 정밀도 baseline.**
-4. **v2와 m에서 BRECQ 위 성능.** 지금은 진단만 했다.
-5. **W4A6** (runs/144 진행 중): 붕괴하지 않으면 가장 어려운 설정으로 추가한다.
-6. **SmoothQuant/AWQ 정식 구현, Reg-PTQ와 비교.**
-7. **목표 엣지 기기에서 실제 INT8/INT4 배포 검증.**
-8. **TF32 conv가 FP 기준과 flip 지표에 주는 영향 확인.**
+## 9. 남은 검증 (상세는 결과 문서 09-30 §9)
+1. **W4A8 게이트 교환 seed 2~5** (진행 중). GPM vs PM을 6 seed로 확정한다.
+2. **일반화:** YOLOv8m-World, YOLOv8s-WorldV2에서 BRECQ vs PM vs GPM.
+3. **W4A8에서 G + 12.cv2 보호 조합.**
+4. **QATMA와 같은 조건 비교:** attention 8bit, 첫/마지막 FP, YOLO-World-L.
+5. **SmoothQuant/AWQ 정식 구현, Reg-PTQ와 비교.**
+6. **목표 엣지 기기에서 실제 배포 검증:** 게이트 교환 fusion 포함.
+7. **TF32 conv가 FP 기준과 flip 지표에 주는 영향 확인.**
+8. **나중에:** 이전 고려 보호 배분(A안), 임베딩 방향 편향 보정(방향 3).
