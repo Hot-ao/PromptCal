@@ -81,7 +81,7 @@ FP32는 COCO AP 36.80, LVIS AP 0.2589다.
 W8A8의 다른 baseline은 이번 대기열에서 돌리지 않았다. 아래는 BASELINE_STATUS §1.1의 head 포함 6-seed 결과(`runs/115`·`117`·`121`)다.
 - 그 run들은 **조건별 RNG 복원 이전**에 여러 조건을 한 run에 묶어 돌린 것이다. 그래서 같은 BRECQ도 이번 결과와 값이 조금 다르다(COCO AP 36.29 vs 36.26, LVIS AP 0.2514 vs 0.2533).
 - **seed별 짝비교에 섞어 쓰지 말 것.**
-- 짝비교용 재실행(AdaRound(MSE), QDrop, QDrop+M, Combined, seed 0~5)은 `runs/151_gen` 대기열 끝(`B-W8A8-s*`)에 들어가 있다.
+- 짝비교용 재실행(AdaRound(MSE), QDrop, QDrop+M, seed 0~5; Combined는 제외)은 `runs/151_gen` 대기열 끝(`B-W8A8-s*`)에 들어가 있다.
 
 | W8A8, head 포함 (6-seed 평균) | COCO AP | LVIS AP | APr | LVIS_flip | LVIS_lost | Heval_flip | Top1_flip | lost | 출처 |
 |---|---|---|---|---|---|---|---|---|---|
