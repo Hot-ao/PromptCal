@@ -491,13 +491,19 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_region_dir_weight=0.0, margin_one_sided=False,
           combined_random_sample=False, combined_per_group_anchors=False,
           combined_local_recon_weight=0.0, combined_block_recon_weight=0.0,
-          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False, hi_wbit_convs=(), hi_abit_convs=()):
+          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False, hi_wbit_convs=(), hi_abit_convs=(), gate_commute=False):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
         m.fuse(); m.model.to(device).eval()
         return m
     m.fuse()
+    if gate_commute:
+        # 09-30 설계 방향 1: C2fAttn의 텍스트 게이트를 cv2 뒤로 옮기는 FP 등가 재배치(quant/fusion_quant.py).
+        # 양자화 전(wrap_convs 전)에 구조를 바꾼다. 재구성의 FP 기준도 같은 구조여야 하므로 아래 _fpref 참고.
+        assert mode in ("naive", "brecq", "qdrop"), f"게이트 교환 미지원 조건: {mode}"
+        from quant.fusion_quant import gate_commute_all
+        gate_commute_all(m.model)
     # 09-23: CLIP 인코더(clip_model) 제외는 quant_model.ALWAYS_SKIP_NAMES가 담당한다
     # -- set_classes()가 캐싱하는 CLIP vision tower의 patch-embed conv가 양자화 대상에
     # 섞여 모델 크기를 22.8% 과대계상하던 버그(경위는 wrap_convs 주석 참고).
@@ -541,6 +547,13 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         select_hi_cols(m.model, calib[:mig_images], device, hi_col_frac)
     # 09-24: combined만 activation 초기 범위를 MSE 최적(0.0)과 클리핑 없는
     # min-max(1.0) 사이에서 보간할 수 있게 한다. 다른 조건은 0.0 고정이라 영향 없음.
+    _fpref = fp
+    if gate_commute and mode in ("brecq", "qdrop"):
+        # BRECQ neck/head는 conv 단위(layer-wise)로 quant/FP conv를 트리 순서로 짝짓고(_hpairs) FP conv 출력을
+        # 목표로 쓴다 -> FP 기준 모델도 같은 게이트 교환 구조여야 cv2_main/cv2_side가 올바른 짝을 갖는다(FP 등가).
+        from quant.fusion_quant import gate_commute_all as _gca
+        _fpref = model_cls(w); _fpref.set_classes(names); _fpref.fuse(); _gca(_fpref.model)
+        _fpref.model.to(device).eval()
     calibrate(m.model, calib, device=device, act_observer=act_observer,
               range_blend=(combined_range_blend if mode in ("combined", "combined_m") else 0.0))
     if mode == "naive":
@@ -570,13 +583,13 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         # optimize_brecq에 qdrop_prob를 넘겨 brecq와 재구성 단위/iters를 완전히 맞추고
         # drop 유무만 단일 변수로 비교한다(09-18 claim13, layer-wise에서 이전됨).
         convert_to_adaround(m.model, channelwise_smult=not qdrop_brecq_learn_act_scale)
-        optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong,
+        optimize_brecq(m.model, _fpref.model, calib, device, iters=recon_iters_strong,
                        qdrop_prob=qdrop_prob, verbose=False,
                        learn_act_scale=qdrop_brecq_learn_act_scale, batch=brecq_batch,
                        neck_layerwise=neck_layerwise)   # two_stage 기본 False 유지(QDrop 공식=공동 최적화)
     elif mode == "brecq":
         convert_to_adaround(m.model, channelwise_smult=not qdrop_brecq_learn_act_scale)
-        optimize_brecq(m.model, fp.model, calib, device, iters=recon_iters_strong,
+        optimize_brecq(m.model, _fpref.model, calib, device, iters=recon_iters_strong,
                        verbose=False, learn_act_scale=qdrop_brecq_learn_act_scale,
                        two_stage=brecq_two_stage, act_iters=brecq_act_iters,
                        batch=brecq_batch, neck_layerwise=neck_layerwise)
@@ -1115,8 +1128,10 @@ def main():
     #   R = 같은 예산 무작위 보호(random.Random(1000), runs/134 rand0과 같은 목록)
     #   H = 같은 예산 HAWQ식 보호(출력 MSE = 'cls' 기준)
     #   M = 공유 제약 scale 이전(--mig-alphas가 없으면 0,0.25,0.5,0.75,1)
+    #   G = 텍스트 게이트 교환(09-30 설계 방향 1). G와 P/R/H를 함께 쓰면 C2fAttn cv2(교환으로 사라지는 conv)는
+    #       보호 목록에서 빠진다(교환이 그 conv를 대신 다룸 -> 모델이 그만큼 작아짐).
     # 전역 옵션(--protect-budget, --mig-alphas 등)은 기존대로 모든 조건에 적용된다.
-    _flag_ok = set("PRHM")
+    _flag_ok = set("PRHMG")
 
     def _split_cond(c):
         base, _, suf = c.partition("+")
@@ -1203,10 +1218,14 @@ def main():
             torch.cuda.set_rng_state_all(_rng_snapshot[1])
         _np.random.set_state(_rng_snapshot[2]); _py_random.setstate(_rng_snapshot[3])
         c_hi_wbit = tuple(dict.fromkeys(hi_wbit_convs + sum((cond_lists[f] for f in "PRH" if f in flags), ())))
+        if "G" in flags:
+            _attn_idx = {str(i) for i, b in enumerate(fp.model.model) if type(b).__name__ == "C2fAttn"}
+            c_hi_wbit = tuple(n for n in c_hi_wbit
+                              if not (n.split(".")[0] in _attn_idx and n.split(".")[1:2] == ["cv2"]))
         c_mig_alphas = mig_alphas if mig_alphas else ((0.0, 0.25, 0.5, 0.75, 1.0) if "M" in flags else ())
         c_mig_tied = args.mig_tied or ("M" in flags)
-        print(f"[build] {cond}" + (f"  (W8 보호 {len(c_hi_wbit)}개, 이전={'공유' if c_mig_tied else '독립'}"
-                                   f"{' 켬' if c_mig_alphas else ' 끔'})" if flags else ""))
+        print(f"[build] {cond}" + (f"  (W8 보호 {len(c_hi_wbit)}개 {list(c_hi_wbit)}, 이전={'공유' if c_mig_tied else '독립'}"
+                                   f"{' 켬' if c_mig_alphas else ' 끔'}, 게이트 교환={'G' in flags})" if flags else ""))
         t0 = time.perf_counter()
         models[cond] = build(YOLOWorld, args.model, coco, device, calib, mode, fp=fp,
                              iters=args.iters, pidx=S, lr=args.lr, k=args.k,
@@ -1258,7 +1277,7 @@ def main():
                              hi_wbit_blocks=hi_wbit_blocks, mig_alphas=c_mig_alphas,
                              mig_images=args.mig_images, hi_col_frac=args.hi_col_frac,
                              mig_tied=c_mig_tied, hi_wbit_convs=c_hi_wbit,
-                             hi_abit_convs=hi_abit_convs)
+                             hi_abit_convs=hi_abit_convs, gate_commute=("G" in flags))
         calib_time[cond] = time.perf_counter() - t0
         model_mib_by[cond] = quantized_weight_mib(models[cond].model)
         print(f"  {cond} 빌드 {calib_time[cond]:.1f}s  (이론적 크기 {model_mib_by[cond]:.2f} MiB)")
