@@ -64,6 +64,8 @@ FP32는 COCO AP 36.80, LVIS AP 0.2589다.
 
 ## 3. 비교 baseline (같은 프로토콜: head 포함, 첫/마지막 8bit)
 
+### 3.0 W4 설정 (짝비교)
+
 | 설정 | QDrop (vs BRECQ) | Combined / PromptCal (vs BRECQ) | AdaRound(MSE) | **QDrop + PM (vs QDrop)** |
 |---|---|---|---|---|
 | W4A8 (6 seed) | LVIS AP 0.2241 (3/6), LVIS_flip 19.09% (0/6) | 0.2173 (0/6), 20.29% (0/6) | COCO 9.49, LVIS 0.0860 (붕괴, 3 seed) | **0.2381 (6/6), 12.22% (6/6)** |
@@ -73,6 +75,25 @@ FP32는 COCO AP 36.80, LVIS AP 0.2589다.
 - **우리 방법은 PTQ 기법과 무관하게 통한다.** QDrop 위에서 BRECQ 위와 거의 같은 수준까지 올린다.
 - **기존 방법은 activation 비트가 낮을수록 BRECQ보다 크게 무너진다.** W4A5에서 QDrop은 LVIS AP 0.137이다.
 - **Combined(calibration 어휘 margin 학습)는 모든 저비트에서 held-out 지표를 해친다.** 09-29의 음성 결과가 6 seed로 확정됐다.
+
+### 3.1 W8A8 baseline (참고용, 짝비교 아님)
+
+W8A8의 다른 baseline은 이번 대기열에서 돌리지 않았다. 아래는 BASELINE_STATUS §1.1의 head 포함 6-seed 결과(`runs/115`·`117`·`121`)다.
+- 그 run들은 **조건별 RNG 복원 이전**에 여러 조건을 한 run에 묶어 돌린 것이다. 그래서 같은 BRECQ도 이번 결과와 값이 조금 다르다(COCO AP 36.29 vs 36.26, LVIS AP 0.2514 vs 0.2533).
+- **seed별 짝비교에 섞어 쓰지 말 것.**
+- 짝비교용 재실행(AdaRound(MSE), QDrop, QDrop+M, Combined, seed 0~5)은 `runs/151_gen` 대기열 끝(`B-W8A8-s*`)에 들어가 있다.
+
+| W8A8, head 포함 (6-seed 평균) | COCO AP | LVIS AP | APr | LVIS_flip | LVIS_lost | Heval_flip | Top1_flip | lost | 출처 |
+|---|---|---|---|---|---|---|---|---|---|
+| naive | 36.36 | 0.2540 | 0.1771 | 5.39% | 1197 | 7.94% | 0.74% | 332 | §1.1 |
+| AdaRound (MSE) | 36.50 | 0.2521 | 0.1751 | 4.64% | 1049 | 7.01% | 0.55% | 261 | §1.1 |
+| QDrop | 36.54 | 0.2538 | 0.1805 | 3.88% | 840 | 6.35% | 0.49% | 220 | §1.1 |
+| BRECQ | 36.29 | 0.2514 | 0.1784 | 3.97% | 861 | 6.52% | 0.48% | 231 | §1.1 |
+| Combined (PromptCal) | 36.58 | 0.2555 | 0.1781 | 3.87% | 717 | 7.56% | 0.51% | 256 | §1.1 |
+| **BRECQ + 이전 (우리, 이번 대기열)** | **36.80** | **0.2565** | 0.1774 | **2.63%** | **576** | **4.09%** | **0.32%** | **146** | §2 (6 seed) |
+
+평균만 놓고 보면 우리 방법이 LVIS_flip, LVIS_lost, Heval_flip, Top1_flip, lost에서 모든 W8A8 baseline보다 좋다. 다만 run이 달라 짝비교가 아니므로, 논문 표에는 재실행 결과를 쓴다.
+
 
 ---
 

@@ -1,0 +1,22 @@
+Ma-W4A8-s0	--model yolov8m-world.pt --w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+PM --seed 0
+Mb-W4A8-s0	--model yolov8m-world.pt --w-bits 4 --a-bits 8 --conditions brecq+G,brecq+GPM --seed 0
+Ma-W4A6-s0	--model yolov8m-world.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+PM --seed 0
+Mb-W4A6-s0	--model yolov8m-world.pt --w-bits 4 --a-bits 6 --conditions brecq+G,brecq+GPM --seed 0
+M-W8A8-s0	--model yolov8m-world.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,brecq+M --seed 0
+Ma-W4A8-s1	--model yolov8m-world.pt --w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+PM --seed 1
+Mb-W4A8-s1	--model yolov8m-world.pt --w-bits 4 --a-bits 8 --conditions brecq+G,brecq+GPM --seed 1
+Ma-W4A6-s1	--model yolov8m-world.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+PM --seed 1
+Mb-W4A6-s1	--model yolov8m-world.pt --w-bits 4 --a-bits 6 --conditions brecq+G,brecq+GPM --seed 1
+M-W8A8-s1	--model yolov8m-world.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,brecq+M --seed 1
+V-W4A8-s0	--model yolov8s-worldv2.pt --w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+PM,brecq+G,brecq+GPM --seed 0
+V-W4A6-s0	--model yolov8s-worldv2.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+PM,brecq+G,brecq+GPM --seed 0
+V-W8A8-s0	--model yolov8s-worldv2.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,brecq+M --seed 0
+V-W4A8-s1	--model yolov8s-worldv2.pt --w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+PM,brecq+G,brecq+GPM --seed 1
+V-W4A6-s1	--model yolov8s-worldv2.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,brecq+PM,brecq+G,brecq+GPM --seed 1
+V-W8A8-s1	--model yolov8s-worldv2.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,brecq+M --seed 1
+B-W8A8-s0	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --adaround-act-observer mse --conditions adaround,qdrop,qdrop+M,combined --seed 0
+B-W8A8-s1	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --adaround-act-observer mse --conditions adaround,qdrop,qdrop+M,combined --seed 1
+B-W8A8-s2	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --adaround-act-observer mse --conditions adaround,qdrop,qdrop+M,combined --seed 2
+B-W8A8-s3	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --adaround-act-observer mse --conditions adaround,qdrop,qdrop+M,combined --seed 3
+B-W8A8-s4	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --adaround-act-observer mse --conditions adaround,qdrop,qdrop+M,combined --seed 4
+B-W8A8-s5	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --adaround-act-observer mse --conditions adaround,qdrop,qdrop+M,combined --seed 5
