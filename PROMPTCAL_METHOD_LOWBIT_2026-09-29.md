@@ -33,7 +33,7 @@
 
 - 이름: ①+② = **PM**, ⓪+①+② = **GPM** (조건 접미사, §5).
 - W8A8에서는 모든 weight가 이미 8bit라 ①이 규칙상 아무것도 하지 않는다(비용 0). ②가 주로 기여한다.
-- W4A8에서는 ①이 주로 기여한다. 현재 PM이 GPM보다 약간 낫다(2 seed, 확인 중).
+- W4A8에서는 ①이 주로 기여한다. PM이 GPM보다 낫다(6 seed: GPM의 LVIS AP 0/6).
 - **W4A6·W4A5에서는 GPM이 최선이다:** PM보다 작은 모델로 held-out 판정 지표가 6/6 더 좋다.
 
 **결과 요약 (head 포함, 6 seed, BRECQ → 우리)**
@@ -410,7 +410,7 @@ COMMON="--model yolov8s-world.pt --deterministic --calib 256 --no-skip-head --co
 
 **주장하면 안 되는 것**
 - "순위 보존을 위해 새로 설계한 선택 기준/손실": 선택 기준은 출력 MSE와 같은 결과를 내고, 이전은 범용 기법이다. 새로움은 게이트 교환(구조)과 분석에 있다.
-- "GPM이 모든 비트에서 PM보다 낫다": W4A8에서는 PM이 낫다(2 seed, 확인 중).
+- "GPM이 모든 비트에서 PM보다 낫다": W4A8에서는 PM이 낫다(6 seed).
 - "W4A4를 PTQ로 열었다": 열지 못했다.
 - "held-out 어휘에만 특화된 개선": COCO도 비슷한 비율로 좋아진다.
 - "실제 엣지 기기에서의 가속": 아직 시뮬레이션뿐이다.
@@ -418,7 +418,7 @@ COMMON="--model yolov8s-world.pt --deterministic --calib 256 --no-skip-head --co
 ---
 
 ## 9. 남은 검증 (상세는 결과 문서 09-30 §9)
-1. **W4A8 게이트 교환 seed 2~5** (진행 중). GPM vs PM을 6 seed로 확정한다.
+1. ~~W4A8 게이트 교환 6 seed~~ 완료: W4A8은 PM, 저비트는 GPM.
 2. **일반화:** YOLOv8m-World, YOLOv8s-WorldV2에서 BRECQ vs PM vs GPM.
 3. **W4A8에서 G + 12.cv2 보호 조합.**
 4. **QATMA와 같은 조건 비교:** attention 8bit, 첫/마지막 FP, YOLO-World-L.
