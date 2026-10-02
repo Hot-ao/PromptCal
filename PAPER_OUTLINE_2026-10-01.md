@@ -10,7 +10,7 @@
 
 **10-02 확정 사항**
 - **프로토콜:** head 포함, 첫·마지막 8bit, attention·contrastive matmul 8bit, head 마지막 conv 입력 A16. 모든 모델에 같게 적용한다.
-- **방법:** G + P + M + BRECQ. M은 모델별 누수 없는 사전 검사로 채택한다(m에서는 꺼짐).
+- **방법:** G + P + M + BRECQ(= GPM). 모든 비트·모델에 같은 구성을 쓴다(10-03 결정). M은 모델별 누수 없는 사전 검사로 채택한다(m에서는 꺼짐). PM은 변형으로 함께 싣는다.
 - **일반화 (2 seed):** s, v2, m 모두 BRECQ보다 좋아졌다. 최종 표는 확정 프로토콜로 다시 만든다.
 
 **상태 표시:** ✅ 근거 있음(6 seed) · 🟡 일부 있음(2 seed 또는 일부 설정) · ⏳ 진행 중 · ❌ 아직 없음
@@ -35,7 +35,7 @@ open-vocabulary 검출기를 저비트로 PTQ하면 **calibration 때 보지 않
 
 ## 2. 초록 (초안)
 
-> Open-vocabulary detectors such as YOLO-World are attractive for edge deployment, where vocabularies change after deployment. We show that standard post-training quantization (PTQ) damages them in a way that AP on the calibration vocabulary hides: at W4A8, BRECQ flips the top-1 class of 18% of confident LVIS predictions while COCO AP drops by only 3.6 points. Using leak-free, layer-wise diagnosis, we find that the damage concentrates in a handful of layers. Most of it comes from the 1×1 convolution that fuses the text-gated attention branch, where a few outlier channels of the gated branch corrupt the shared quantization scale. The rest comes from early backbone split/concat boundaries. We propose three training-free, deployment-compatible fixes: (i) **gate commutation**, an FP-equivalent restructuring that moves the text gate behind its own 1×1 convolution, at zero bit cost; (ii) **leak-free protection** of the few remaining sensitive convolutions at 8 bit (+0.3% model size); and (iii) **tied scale migration** that respects producer–consumer constraints so it can be folded at deployment. Migration is enabled per model only when a leak-free check on held-out calibration-domain images does not increase decision flips. With all convolutions, attention and region–text matmuls quantized, on top of BRECQ, the method improves LVIS AP of YOLO-World-S by +1.2 to +2.5 points from W4A8 to W4A5 and reduces LVIS decision flips by about 30% relative, while QDrop, AdaRound and calibration-vocabulary fine-tuning fall below BRECQ. It transfers to YOLO-World-S v2 (up to +7.9 points) and YOLO-World-M (up to +3.2 points).
+> Open-vocabulary detectors such as YOLO-World are attractive for edge deployment, where vocabularies change after deployment. We show that standard post-training quantization (PTQ) damages them in a way that AP on the calibration vocabulary hides: at W4A8, BRECQ flips the top-1 class of 18% of confident LVIS predictions while COCO AP drops by only 3.6 points. Using leak-free, layer-wise diagnosis, we find that the damage concentrates in a handful of layers. Most of it comes from the 1×1 convolution that fuses the text-gated attention branch, where a few outlier channels of the gated branch corrupt the shared quantization scale. The rest comes from early backbone split/concat boundaries. We propose three training-free, deployment-compatible fixes: (i) **gate commutation**, an FP-equivalent restructuring that moves the text gate behind its own 1×1 convolution, at zero bit cost; (ii) **leak-free protection** of the few remaining sensitive convolutions at 8 bit (+0.3% model size); and (iii) **tied scale migration** that respects producer–consumer constraints so it can be folded at deployment. Migration is enabled per model only when a leak-free check on held-out calibration-domain images does not increase decision flips. With all convolutions, attention and region–text matmuls quantized, on top of BRECQ, the method improves LVIS AP of YOLO-World-S by +0.8 to +2.5 points from W4A8 to W4A5 and reduces LVIS decision flips by about 30% relative, while QDrop, AdaRound and calibration-vocabulary fine-tuning fall below BRECQ. It transfers to YOLO-World-S v2 (up to +7.9 points) and YOLO-World-M (up to +3.2 points).
 
 s의 숫자는 확정 프로토콜 6 seed(표 1, runs/158)다. W4A5는 seed 0(기준선 붕괴)을 뺀 값이다. 일반화 숫자는 확정 프로토콜 2 seed다.
 
@@ -138,7 +138,7 @@ s의 숫자는 확정 프로토콜 6 seed(표 1, runs/158)다. W4A5는 seed 0(�
 | held-out 판정이 AP보다 먼저 무너진다 | 모든 설정, 6 seed | ✅ | – |
 | 손상이 몇 conv에 몰려 있다 | 층별 진단, 무작위 보호 대조 | ✅ s · 🟡 v2·m | – |
 | G는 비트 비용 0으로 저비트를 개선한다 | W4A6·W4A5 6/6 | ✅ | – |
-| GPM이 모든 비트에서 최선이다 | W4A8에서는 PM이 LVIS AP로 약간 앞섬. v2는 AP는 PM, flip은 GPM | ❌ | "G는 저비트에서 판정 보존에 기여, 최종 구성은 설정·모델별"로 서술 |
+| GPM이 모든 비트에서 최선이다 | W4A8에서는 PM 변형이 크기 +1%로 LVIS AP +0.34 앞섬. v2는 AP는 PM, flip은 GPM | ❌ | 방법은 GPM 하나로 고정하고, PM과의 크기·정확도 트레이드오프를 그대로 보고 |
 | 기존 PTQ 위에 plug-in으로 동작한다 | QDrop + PM 6 seed | ✅ | – |
 | YOLO-World 계열에서 일반화된다 | 확정 프로토콜 2 seed: s, v2(+6~8), m(G +0.8~3.2) 모두 개선 | 🟡 (3 seed 확장 예정) | – |
 | 다른 OVOD 구조로 일반화된다 | YOLOE 미실행 | ❌ | 주장 범위를 YOLO-World 계열로 축소 |

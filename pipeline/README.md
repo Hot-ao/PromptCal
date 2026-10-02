@@ -64,13 +64,13 @@
 | `A` | M을 사전 검사로 켤지 정한다. M 끔/켬 두 후보를 빌드하고 calibration 밖 COCO flip을 비교해, M 쪽이 1.5배를 넘으면 끈다. 빌드 시간은 약 2.2배 |
 | `R` / `H` | 같은 예산의 무작위 보호 / HAWQ식(출력 MSE) 보호 (대조군) |
 
-**모델별 최종 구성 (M 채택은 모델당 검사 1회로 결정, runs/154·156)**
+**우리 방법 = `brecq+GPM`**을 모든 비트 설정과 모델에 같게 쓴다. M 채택만 모델당 검사 1회로 정한다(runs/154·156). PM(`brecq+PM`)은 변형으로 함께 잰다.
 
-| 모델 | 최종 구성 | M 결정 근거 |
+| 모델 | 실제 구성 | M 결정 근거 |
 |---|---|---|
-| YOLOv8s-World | W4A8 `brecq+PM`, W4A6·W4A5 `brecq+GPM`, W8A8 `brecq+M` | 검사 통과(M 켬) |
-| YOLOv8s-WorldV2 | `brecq+PM` / `brecq+GPM` | 검사 통과(M 켬) |
-| YOLOv8m-World | `brecq+GP`. m은 보호 대상이 C2fAttn cv2뿐이라 `brecq+G`와 같다 | 검사 탈락(M을 켜면 flip 2~7배) |
+| YOLOv8s-World | `brecq+GPM` (W8A8에서는 P가 효과 없어 G+M) | 검사 통과(M 켬) |
+| YOLOv8s-WorldV2 | `brecq+GPM` | 검사 통과(M 켬) |
+| YOLOv8m-World | `brecq+GP`. 보호 대상이 C2fAttn cv2뿐이라 `brecq+G`와 같다 | 검사 탈락(M을 켜면 flip 2~7배) |
 
 조건마다 빌드 직전에 RNG를 복원한다. 그래서 한 run에 여러 조건을 묶어도, 따로 돌려도 결과가 bit 단위로 같다.
 
