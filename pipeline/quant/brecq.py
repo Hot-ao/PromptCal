@@ -39,6 +39,12 @@ def _backbone_end_idx(blocks):
     return None
 
 
+# 10-02: activation이 이 비트 이상인 conv(head 마지막 conv 입력 A16 등)는 LSQ로 step을 학습하지 않고 observer step을
+# 고정해 쓴다. 16bit step(~1e-4)은 Adam의 스텝(≈lr)보다 작거나 비슷해서 학습하면 step이 자기 크기만큼씩 흔들린다.
+# runs/155: A16 + 이전(M)에서 step이 수십 배로 커져 head cv3 마지막 conv 출력이 파괴됨(FP 대비 상대오차 1.1).
+LSQ_MAX_BITS = 16
+
+
 def _hpairs(qm, fm):
     """quant/fp 트리 나란히 순회 → (AdaRoundConv, fp Conv2d) 짝."""
     for (qn, qc), (fn, fc) in zip(qm.named_children(), fm.named_children()):
@@ -134,8 +140,10 @@ def _brecq_act_stage(targets, quant_module, fp_module, calib_list, device,
             continue
         for c in convs:
             c.soft = False
-            c.use_lsq = True
-        opt_a = torch.optim.Adam([c.lsq_act.delta for c in convs], lr=act_lr)
+            c.use_lsq = c.a_obs.bits < LSQ_MAX_BITS
+        if not any(c.use_lsq for c in convs):
+            continue
+        opt_a = torch.optim.Adam([c.lsq_act.delta for c in convs if c.use_lsq], lr=act_lr)
         sched_a = torch.optim.lr_scheduler.CosineAnnealingLR(opt_a, T_max=iters, eta_min=0.0)
         for it in range(iters):
             js = torch.randint(0, n, (batch,)).tolist()
@@ -402,13 +410,15 @@ def optimize_brecq(quant_module, fp_module, calib_tensors, device,
             c.ste = True                       # block 내부로 grad 흐르게
             c.qdrop_prob = qdrop_prob          # QDrop (a): block 내부 quantizer drop
             if learn_act_scale:
-                c.use_lsq = True               # forward()가 이 분기를 ste보다 우선함
+                c.use_lsq = c.a_obs.bits < LSQ_MAX_BITS   # forward()가 이 분기를 ste보다 우선함(16bit 이상은 고정 step)
         params = [c.alpha for c in convs]
         opt = torch.optim.Adam(params, lr=lr)
         opt_a = sched_a = None
         if learn_act_scale:
-            opt_a = torch.optim.Adam([c.lsq_act.delta for c in convs], lr=act_lr)
-            sched_a = torch.optim.lr_scheduler.CosineAnnealingLR(opt_a, T_max=iters, eta_min=0.0)
+            _lsq = [c.lsq_act.delta for c in convs if c.use_lsq]
+            if _lsq:
+                opt_a = torch.optim.Adam(_lsq, lr=act_lr)
+                sched_a = torch.optim.lr_scheduler.CosineAnnealingLR(opt_a, T_max=iters, eta_min=0.0)
         for it in range(iters):
             js = torch.randint(0, n, (batch,)).tolist()
             # 입력 복원: 텐서는 device로, 비텐서(있으면)는 그대로

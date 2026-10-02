@@ -230,7 +230,7 @@ def fmt(name, mp, m, base=None):
 
 
 def rank_convs_leakfree(model_path, coco_root, device, n_eval=200, n_calib=256, imgsz=640, conf=0.25,
-                        low_bits=4, first_last_bits=8, seed=0):
+                        low_bits=4, first_last_bits=8, seed=0, last_abits=0, attn_quant="none"):
     """09-29 (P0): 보호할 conv를 고르기 위한 누수 없는 conv 단위 drop 진단.
     - 이미지: train2017 앞 n_eval장(calibration 부분집합). 평가셋(val2017) 미사용.
     - 어휘: COCO(= calibration vocabulary)만 로드. LVIS는 로드조차 하지 않는다(내부 LVIS 슬롯에도 COCO를 넣음).
@@ -253,7 +253,8 @@ def rank_convs_leakfree(model_path, coco_root, device, n_eval=200, n_calib=256, 
         vm_coco = VocabMetric(encode_text_bank(YOLOWorld, model_path, coco, device))
         refs = reference(fp, evals, device, vm_coco, vm_coco, conf, "coco")
         q = rc.build(YOLOWorld, model_path, coco, device, calib, "naive", fp=fp, w_bits=8, a_bits=8,
-                     skip_head=False, first_last_bits=first_last_bits)
+                     skip_head=False, first_last_bits=first_last_bits, last_abits=last_abits,
+                     attn_quant=attn_quant)
         groups = groups_of(q.model, set(range(len(q.model.model))))
         base = measure(q, evals, refs, device, vm_coco, vm_coco)
         rows = []
@@ -271,6 +272,21 @@ def rank_convs_leakfree(model_path, coco_root, device, n_eval=200, n_calib=256, 
         torch.set_rng_state(cpu_state)
         if cuda_state is not None:
             torch.cuda.set_rng_state_all(cuda_state)
+
+
+@torch.no_grad()
+def mcheck_flip(qmodels, fp, model_path, coco, coco_root, n_calib, imgsz, device, n_eval=200, conf=0.25):
+    """10-02 (+A): 이전(M) 채택 사전 검사. calibration에 쓰지 않은 train2017 이미지(정렬 순서로 앞 n_calib장 다음
+    n_eval장)와 COCO(= calibration) 어휘만 써서, 각 양자화 모델의 FP 대비 top-1 flip(%)을 돌려준다.
+    val2017/LVIS는 쓰지 않는다(누수 없음). runs/155: m에서 M의 해(flip 2~5배)를 잡고 s 저비트에서는 M을 유지한다."""
+    global HS
+    from ultralytics import YOLOWorld
+    paths = sorted(glob.glob(os.path.join(coco_root, "train2017", "*.jpg")))[n_calib:n_calib + n_eval]
+    evals = [rc.preprocess(p, imgsz, "cpu") for p in paths]
+    HS = HeadSim(_find_head(fp.model))
+    vm = VocabMetric(encode_text_bank(YOLOWorld, model_path, coco, device))
+    refs = reference(fp, evals, device, vm, vm, conf, "coco")
+    return [measure(q, evals, refs, device, vm, vm)["coco"] for q in qmodels]
 
 
 def select_protected(rows, budget_frac, criterion="coco"):

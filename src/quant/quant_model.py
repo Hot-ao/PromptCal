@@ -76,6 +76,23 @@ def set_first_last_bits(det_model: nn.Module, bits: int = 8):
     return changed
 
 
+def set_last_abits(det_model: nn.Module, bits: int = 16):
+    """10-01: head(WorldDetect)의 cv2/cv3 마지막 1x1 conv **입력 activation**만 `bits`로(weight는 그대로).
+    set_first_last_bits 뒤, calibrate() 전에 호출. 근거: runs/152 -- YOLOv8m-World에서 cv3 마지막 conv 입력의
+    per-tensor 범위가 MSE observer 무작위 부분추출에 따라 크게 달라져(0~115 vs 0~144) naive W8A8 COCO AP가
+    seed에 따라 40.4/24.3으로 갈린다. 모든 모델에 같은 프로토콜로 적용한다(모델별 예외를 두지 않는다).
+    반환: 바뀐 conv 이름 목록."""
+    head = det_model.model[-1]
+    changed = []
+    for branch in ("cv2", "cv3"):
+        for li, lvl in enumerate(getattr(head, branch, [])):
+            last = lvl[-1]
+            if isinstance(last, QuantConv2d):
+                last.a_obs.bits = bits
+                changed.append(f"head.{branch}.{li}.-1")
+    return changed
+
+
 def set_block_wbits(det_model: nn.Module, block_ids, bits: int = 8):
     """09-29: 혼합 정밀도 -- DetectionModel.model[i] (i in block_ids) 안의 모든 QuantConv2d의
     **weight** 비트만 `bits`로 바꾼다(activation 비트는 그대로). set_first_last_bits와 같이
@@ -126,7 +143,7 @@ def set_conv_abits(det_model: nn.Module, conv_names, bits: int = 8):
 
 def set_mode(module: nn.Module, calibrating: bool = False, quantized: bool = False):
     for m in module.modules():
-        if isinstance(m, QuantConv2d):
+        if isinstance(m, QuantConv2d) or getattr(m, "_is_qpoint", False):   # 10-01: attention 양자화 지점 포함
             m.calibrating = calibrating
             m.quantized = quantized
 
@@ -138,7 +155,7 @@ def calibrate(model_module: nn.Module, calib_tensors, device: str = "cuda:0", ac
     range_blend: activation 범위를 MSE 최적(0.0, 기존 동작)과 클리핑 없는
     min-max(1.0) 사이에서 보간 -- ActObserver.freeze 참고."""
     for m in model_module.modules():
-        if isinstance(m, QuantConv2d):
+        if isinstance(m, QuantConv2d) or getattr(m, "a_obs", None) is not None and getattr(m, "_is_qpoint", False):
             m.a_obs.method = act_observer
     set_mode(model_module, calibrating=True, quantized=False)
     n = 0
@@ -149,5 +166,7 @@ def calibrate(model_module: nn.Module, calib_tensors, device: str = "cuda:0", ac
         if isinstance(m, QuantConv2d):
             m.a_obs.freeze(range_blend=range_blend)
             m.freeze_weight_quant()
+        elif getattr(m, "_is_qpoint", False) and getattr(m, "a_obs", None) is not None:
+            m.a_obs.freeze(range_blend=range_blend)
     set_mode(model_module, calibrating=False, quantized=True)
     return n

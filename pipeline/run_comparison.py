@@ -61,7 +61,7 @@ if not hasattr(np, "float"):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import SimilarityHarness
-from quant.quant_model import wrap_convs, calibrate, set_first_last_bits, set_block_wbits, set_conv_wbits, set_conv_abits
+from quant.quant_model import wrap_convs, calibrate, set_first_last_bits, set_last_abits, set_block_wbits, set_conv_wbits, set_conv_abits
 from quant.adaround import convert_to_adaround, optimize_adaround, AdaRoundQuantConv2d, free_cpu_mem
 from quant.fake_quant import QuantConv2d
 from quant.brecq import optimize_brecq
@@ -473,6 +473,9 @@ def quantized_weight_mib(model_module):
     return total_bits / 8 / (1024 * 1024)
 
 
+MCHECK_RATIO = 1.5   # 10-02 +A: M을 켠 쪽 calib-밖 COCO flip이 이 배수를 넘으면 M을 끈다
+
+
 def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=None,
           lr=1e-2, k=5, neighbor_k=5, neighbor_weight=1.0, scale_reg_weight=1.0,
           h_eval=None, cal_idx=None, cal_weight=1.0,
@@ -491,7 +494,7 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
           combined_region_dir_weight=0.0, margin_one_sided=False,
           combined_random_sample=False, combined_per_group_anchors=False,
           combined_local_recon_weight=0.0, combined_block_recon_weight=0.0,
-          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False, hi_wbit_convs=(), hi_abit_convs=(), gate_commute=False):
+          first_last_bits=0, vocab_metric=None, hi_wbit_blocks=(), mig_alphas=(), mig_images=8, hi_col_frac=0.0, mig_tied=False, hi_wbit_convs=(), hi_abit_convs=(), gate_commute=False, attn_quant="none", last_abits=0):
     m = model_cls(w)
     m.set_classes(names)
     if mode == "fp":
@@ -513,6 +516,9 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
         # 09-28: 저비트 표준 프로토콜 -- stem과 (head 양자화 시) cv2/cv3 마지막 conv를 고정 비트로.
         # 모든 조건에 똑같이 적용된다(calibrate 전이어야 observer/weight scale이 이 비트로 잡힘).
         set_first_last_bits(m.model, first_last_bits)
+    if last_abits > 0:
+        # 10-01: head cv2/cv3 마지막 1x1 입력 activation만 last_abits(16)로. 모든 조건 동일, calibrate 전.
+        set_last_abits(m.model, last_abits)
     if hi_wbit_blocks:
         # 09-29: 혼합 정밀도(weight만 8bit로 되돌릴 블록). 모든 조건에 동일 적용, calibrate 전.
         set_block_wbits(m.model, hi_wbit_blocks, 8)
@@ -522,6 +528,11 @@ def build(model_cls, w, names, device, calib, mode, fp=None, iters=1500, pidx=No
     if hi_abit_convs:
         # 09-29: conv 단위로 입력 activation만 8bit(W4A4 상한 확인용). 모든 조건 동일, calibrate 전.
         set_conv_abits(m.model, hi_abit_convs, 8)
+    if attn_quant != "none":
+        # 10-01 보강 실험: attention(Linear/matmul)과 (attn_cls면) head contrastive matmul도 8bit로(quant/attn_quant.py).
+        # 모든 조건에 동일 적용, gate_commute 뒤·calibrate 전.
+        from quant.attn_quant import quantize_attention
+        quantize_attention(m.model, attn_quant, 8)
     m.model.to(device).eval()
     if mig_alphas:
         # 09-29: 입력 채널별 scale 이전(quant/migrate.py). 양자화기 변경이라 모든 조건에 동일 적용,
@@ -973,6 +984,13 @@ def main():
                          "(S_AP/H_eval_AP/Heval_flip)만 seed 효과를 받고 있었다. 이제 명시하지 "
                          "않으면 --seed를 그대로 따라간다(아래 args.torch_seed 처리) -- 명시하면 "
                          "분할과 학습 무작위성을 분리하는 ablation도 가능")
+    ap.add_argument("--attn-quant", choices=["none", "attn", "attn_cls"], default="none",
+                    help="10-01: attention Linear/matmul(attn), + head contrastive matmul(attn_cls)을 8bit로 양자화")
+    ap.add_argument("--post-build", default="",
+                    help="10-02: 진단 스크립트 경로. 빌드 직후(평가 전) 실행하고 평가 없이 종료(PTQ_POST_BUILD와 같음)")
+    ap.add_argument("--last-abits", type=int, default=0,
+                    help="10-01: >0이면 head cv2/cv3 마지막 1x1 conv의 입력 activation만 이 비트로(16 권장). "
+                         "보호 진단에도 같은 값이 쓰이고 진단 캐시 이름에 _la<비트>가 붙는다. 기본 0=꺼짐")
     ap.add_argument("--first-last-bits", type=int, default=0,
                     help="09-28: >0이면 stem 첫 conv와 (head 양자화 시) cv2/cv3 마지막 1x1 conv를 이 "
                          "비트로 고정(W4A4 표준 프로토콜은 8). 모든 조건에 동일 적용. 기본 0=꺼짐(기존 동작)")
@@ -1029,7 +1047,9 @@ def main():
         from diag_w4_sensitivity import rank_convs_leakfree, select_protected
         os.makedirs(args.protect_cache, exist_ok=True)
         cache = os.path.join(args.protect_cache, f"{os.path.splitext(os.path.basename(args.model))[0]}"
-                                                 f"_n{args.protect_images}_c{args.calib}_img{args.imgsz}.json")
+                                                 f"_n{args.protect_images}_c{args.calib}_img{args.imgsz}"
+                                                 f"{f'_la{args.last_abits}' if args.last_abits else ''}"
+                                                 f"{f'_aq{args.attn_quant}' if args.attn_quant != 'none' else ''}.json")
         if os.path.exists(cache):
             rows = _json.load(open(cache))
             print(f"[protect] 진단 캐시 사용: {cache}")
@@ -1037,7 +1057,8 @@ def main():
             print(f"[protect] 누수 없는 conv 단위 진단 실행(train2017 {args.protect_images}장, COCO 어휘) -> {cache}")
             rows = rank_convs_leakfree(args.model, args.coco_root, f"cuda:{args.device}" if args.device != "cpu" else "cpu",
                                        n_eval=args.protect_images, n_calib=args.calib, imgsz=args.imgsz,
-                                       first_last_bits=args.first_last_bits or 8)
+                                       first_last_bits=args.first_last_bits or 8, last_abits=args.last_abits,
+                                       attn_quant=args.attn_quant)
             _json.dump(rows, open(cache, "w"), indent=1)
         protected, used, total = select_protected(rows, args.protect_budget, args.protect_criterion)
         print(f"[protect] 기준={args.protect_criterion} 예산={args.protect_budget:.1%} -> {used:.4f}/{total:.3f}M param: "
@@ -1131,7 +1152,7 @@ def main():
     #   G = 텍스트 게이트 교환(09-30 설계 방향 1). G와 P/R/H를 함께 쓰면 C2fAttn cv2(교환으로 사라지는 conv)는
     #       보호 목록에서 빠진다(교환이 그 conv를 대신 다룸 -> 모델이 그만큼 작아짐).
     # 전역 옵션(--protect-budget, --mig-alphas 등)은 기존대로 모든 조건에 적용된다.
-    _flag_ok = set("PRHMG")
+    _flag_ok = set("PRHMGA")
 
     def _split_cond(c):
         base, _, suf = c.partition("+")
@@ -1148,13 +1169,16 @@ def main():
         _budget = args.protect_budget if args.protect_budget > 0 else 0.015
         os.makedirs(args.protect_cache, exist_ok=True)
         _cache = os.path.join(args.protect_cache, f"{os.path.splitext(os.path.basename(args.model))[0]}"
-                                                  f"_n{args.protect_images}_c{args.calib}_img{args.imgsz}.json")
+                                                  f"_n{args.protect_images}_c{args.calib}_img{args.imgsz}"
+                                                 f"{f'_la{args.last_abits}' if args.last_abits else ''}"
+                                                 f"{f'_aq{args.attn_quant}' if args.attn_quant != 'none' else ''}.json")
         if os.path.exists(_cache):
             _rows = _json.load(open(_cache))
         else:
             print(f"[protect] 누수 없는 conv 단위 진단 실행 -> {_cache}")
             _rows = rank_convs_leakfree(args.model, args.coco_root, device, n_eval=args.protect_images,
-                                        n_calib=args.calib, imgsz=args.imgsz, first_last_bits=args.first_last_bits or 8)
+                                        n_calib=args.calib, imgsz=args.imgsz, first_last_bits=args.first_last_bits or 8,
+                                        last_abits=args.last_abits, attn_quant=args.attn_quant)
             _json.dump(_rows, open(_cache, "w"), indent=1)
         cond_lists["P"] = tuple(select_protected(_rows, _budget, args.protect_criterion)[0])
         cond_lists["H"] = tuple(select_protected(_rows, _budget, "cls")[0])
@@ -1212,72 +1236,96 @@ def main():
                      _np.random.get_state(), _py_random.getstate())
     model_mib_by = {}
     for cond in conditions:
-        mode, flags = _split_cond(cond)
-        torch.set_rng_state(_rng_snapshot[0])
-        if _rng_snapshot[1] is not None:
-            torch.cuda.set_rng_state_all(_rng_snapshot[1])
-        _np.random.set_state(_rng_snapshot[2]); _py_random.setstate(_rng_snapshot[3])
-        c_hi_wbit = tuple(dict.fromkeys(hi_wbit_convs + sum((cond_lists[f] for f in "PRH" if f in flags), ())))
-        if "G" in flags:
-            _attn_idx = {str(i) for i, b in enumerate(fp.model.model) if type(b).__name__ == "C2fAttn"}
-            c_hi_wbit = tuple(n for n in c_hi_wbit
-                              if not (n.split(".")[0] in _attn_idx and n.split(".")[1:2] == ["cv2"]))
-        c_mig_alphas = mig_alphas if mig_alphas else ((0.0, 0.25, 0.5, 0.75, 1.0) if "M" in flags else ())
-        c_mig_tied = args.mig_tied or ("M" in flags)
-        print(f"[build] {cond}" + (f"  (W8 보호 {len(c_hi_wbit)}개 {list(c_hi_wbit)}, 이전={'공유' if c_mig_tied else '독립'}"
-                                   f"{' 켬' if c_mig_alphas else ' 끔'}, 게이트 교환={'G' in flags})" if flags else ""))
-        t0 = time.perf_counter()
-        models[cond] = build(YOLOWorld, args.model, coco, device, calib, mode, fp=fp,
-                             iters=args.iters, pidx=S, lr=args.lr, k=args.k,
-                             neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
-                             scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
-                             # 09-16 버그 수정(claim a): cal_weight==0일 때 cal_idx까지 None으로
-                             # 넘기면, promptcal.py의 confident-anchor 선정 기준인 train_cols가
-                             # S∪H_cal(60) 대신 S(40)로 줄어들어 anchor 풀 자체가 바뀐다. 그러면
-                             # cal_weight 0 vs 1 비교가 "H_cal margin_loss 유무"와 "anchor 풀
-                             # 크기" 두 변수를 동시에 바꾸게 돼서 단일 변수 ablation이 깨진다.
-                             # cal_idx는 항상 넘기고, ml_cal 추가 여부는 promptcal.py 내부의
-                             # `cal_weight > 0` 게이트에만 맡긴다.
-                             cal_idx=H_cal,
-                             cal_weight=args.cal_weight,
-                             recon_iters_ada=args.recon_iters_ada,
-                             recon_iters_strong=args.recon_iters_strong,
-                             qdrop_prob=args.qdrop_prob,
-                             channelwise_smult=not args.smult_per_tensor,
-                             identity_aware_margin=args.identity_aware_margin,
-                             control_mse=args.control_mse,
-                             adaround_learn_act_scale=args.adaround_learn_act_scale,
-                             qdrop_brecq_learn_act_scale=args.qdrop_brecq_learn_act_scale,
-                             combined_recon_iters=args.combined_recon_iters,
-                             combined_stage1=args.combined_stage1,
-                             w_bits=args.w_bits, a_bits=args.a_bits, act_observer=args.act_observer,
-                             brecq_two_stage=args.brecq_two_stage, brecq_act_iters=args.brecq_act_iters,
-                             brecq_batch=args.brecq_batch, skip_head=args.skip_head, neck_layerwise=args.neck_layerwise,
-                             neighbor_of_cal=args.neighbor_of_cal,
-                             aux_mse_weight=args.aux_mse_weight,
-                             adaround_act_observer=args.adaround_act_observer,
-                             combined_learn_alpha=args.combined_learn_alpha,
-                             combined_alpha_lr=args.combined_alpha_lr,
-                             combined_alpha_reg_weight=args.combined_alpha_reg_weight,
-                             combined_learn_alpha_bias=args.combined_learn_alpha_bias,
-                             combined_alpha_bias_lr=args.combined_alpha_bias_lr,
-                             combined_alpha_bias_reg_weight=args.combined_alpha_bias_reg_weight,
-                             combined_alpha_bias_limit=args.combined_alpha_bias_limit,
-                             combined_range_blend=args.combined_range_blend,
-                             combined_utility_frac=args.combined_utility_frac,
-                             combined_thresh_w=args.combined_thresh_w,
-                             combined_box_w=args.combined_box_w,
-                             combined_region_dir_weight=args.combined_region_dir_weight,
-                             margin_one_sided=args.margin_one_sided,
-                             combined_random_sample=args.combined_random_sample,
-                             combined_per_group_anchors=args.combined_per_group_anchors,
-                             combined_local_recon_weight=args.combined_local_recon_weight,
-                             combined_block_recon_weight=args.combined_block_recon_weight,
-                             first_last_bits=args.first_last_bits, vocab_metric=vocab_metric,
-                             hi_wbit_blocks=hi_wbit_blocks, mig_alphas=c_mig_alphas,
-                             mig_images=args.mig_images, hi_col_frac=args.hi_col_frac,
-                             mig_tied=c_mig_tied, hi_wbit_convs=c_hi_wbit,
-                             hi_abit_convs=hi_abit_convs, gate_commute=("G" in flags))
+        mode, _flags0 = _split_cond(cond)
+        # 10-02 +A: 이전(M)을 누수 없는 사전 검사로 켤지 정한다. M 끔/켬 두 후보를 모두 빌드(각각 같은 RNG 상태에서
+        # 출발 -- 단독 조건과 bit-identical)하고, calibration에 쓰지 않은 train2017 이미지 + COCO 어휘에서 FP 대비
+        # top-1 flip을 잰다. M을 켠 쪽 flip이 MCHECK_RATIO배를 넘으면 M을 끈 모델을 쓴다(runs/155 검증).
+        _variants = [_flags0] if "A" not in _flags0 else [(_flags0 - {"A", "M"}), (_flags0 - {"A"}) | {"M"}]
+        _built = []
+        t_cond = time.perf_counter()
+        for flags in _variants:
+            torch.set_rng_state(_rng_snapshot[0])
+            if _rng_snapshot[1] is not None:
+                torch.cuda.set_rng_state_all(_rng_snapshot[1])
+            _np.random.set_state(_rng_snapshot[2]); _py_random.setstate(_rng_snapshot[3])
+            c_hi_wbit = tuple(dict.fromkeys(hi_wbit_convs + sum((cond_lists[f] for f in "PRH" if f in flags), ())))
+            if "G" in flags:
+                _attn_idx = {str(i) for i, b in enumerate(fp.model.model) if type(b).__name__ == "C2fAttn"}
+                c_hi_wbit = tuple(n for n in c_hi_wbit
+                                  if not (n.split(".")[0] in _attn_idx and n.split(".")[1:2] == ["cv2"]))
+            c_mig_alphas = mig_alphas if mig_alphas else ((0.0, 0.25, 0.5, 0.75, 1.0) if "M" in flags else ())
+            c_mig_tied = args.mig_tied or ("M" in flags)
+            print(f"[build] {cond}" + (f" -> 후보 {'+'.join(sorted(flags))}" if len(_variants) > 1 else "") + (f"  (W8 보호 {len(c_hi_wbit)}개 {list(c_hi_wbit)}, 이전={'공유' if c_mig_tied else '독립'}"
+                                       f"{' 켬' if c_mig_alphas else ' 끔'}, 게이트 교환={'G' in flags})" if flags else ""))
+            t0 = time.perf_counter()
+            _m = build(YOLOWorld, args.model, coco, device, calib, mode, fp=fp,
+                                 iters=args.iters, pidx=S, lr=args.lr, k=args.k,
+                                 neighbor_k=args.neighbor_k, neighbor_weight=args.neighbor_weight,
+                                 scale_reg_weight=args.scale_reg_weight, h_eval=H_eval,
+                                 # 09-16 버그 수정(claim a): cal_weight==0일 때 cal_idx까지 None으로
+                                 # 넘기면, promptcal.py의 confident-anchor 선정 기준인 train_cols가
+                                 # S∪H_cal(60) 대신 S(40)로 줄어들어 anchor 풀 자체가 바뀐다. 그러면
+                                 # cal_weight 0 vs 1 비교가 "H_cal margin_loss 유무"와 "anchor 풀
+                                 # 크기" 두 변수를 동시에 바꾸게 돼서 단일 변수 ablation이 깨진다.
+                                 # cal_idx는 항상 넘기고, ml_cal 추가 여부는 promptcal.py 내부의
+                                 # `cal_weight > 0` 게이트에만 맡긴다.
+                                 cal_idx=H_cal,
+                                 cal_weight=args.cal_weight,
+                                 recon_iters_ada=args.recon_iters_ada,
+                                 recon_iters_strong=args.recon_iters_strong,
+                                 qdrop_prob=args.qdrop_prob,
+                                 channelwise_smult=not args.smult_per_tensor,
+                                 identity_aware_margin=args.identity_aware_margin,
+                                 control_mse=args.control_mse,
+                                 adaround_learn_act_scale=args.adaround_learn_act_scale,
+                                 qdrop_brecq_learn_act_scale=args.qdrop_brecq_learn_act_scale,
+                                 combined_recon_iters=args.combined_recon_iters,
+                                 combined_stage1=args.combined_stage1,
+                                 w_bits=args.w_bits, a_bits=args.a_bits, act_observer=args.act_observer,
+                                 brecq_two_stage=args.brecq_two_stage, brecq_act_iters=args.brecq_act_iters,
+                                 brecq_batch=args.brecq_batch, skip_head=args.skip_head, neck_layerwise=args.neck_layerwise,
+                                 neighbor_of_cal=args.neighbor_of_cal,
+                                 aux_mse_weight=args.aux_mse_weight,
+                                 adaround_act_observer=args.adaround_act_observer,
+                                 combined_learn_alpha=args.combined_learn_alpha,
+                                 combined_alpha_lr=args.combined_alpha_lr,
+                                 combined_alpha_reg_weight=args.combined_alpha_reg_weight,
+                                 combined_learn_alpha_bias=args.combined_learn_alpha_bias,
+                                 combined_alpha_bias_lr=args.combined_alpha_bias_lr,
+                                 combined_alpha_bias_reg_weight=args.combined_alpha_bias_reg_weight,
+                                 combined_alpha_bias_limit=args.combined_alpha_bias_limit,
+                                 combined_range_blend=args.combined_range_blend,
+                                 combined_utility_frac=args.combined_utility_frac,
+                                 combined_thresh_w=args.combined_thresh_w,
+                                 combined_box_w=args.combined_box_w,
+                                 combined_region_dir_weight=args.combined_region_dir_weight,
+                                 margin_one_sided=args.margin_one_sided,
+                                 combined_random_sample=args.combined_random_sample,
+                                 combined_per_group_anchors=args.combined_per_group_anchors,
+                                 combined_local_recon_weight=args.combined_local_recon_weight,
+                                 combined_block_recon_weight=args.combined_block_recon_weight,
+                                 first_last_bits=args.first_last_bits, vocab_metric=vocab_metric,
+                                 hi_wbit_blocks=hi_wbit_blocks, mig_alphas=c_mig_alphas,
+                                 mig_images=args.mig_images, hi_col_frac=args.hi_col_frac,
+                                 mig_tied=c_mig_tied, hi_wbit_convs=c_hi_wbit,
+                                 hi_abit_convs=hi_abit_convs, gate_commute=("G" in flags),
+                                 attn_quant=args.attn_quant, last_abits=args.last_abits)
+            _built.append((flags, _m))
+        if len(_built) == 1:
+            models[cond] = _built[0][1]
+        else:
+            from diag_w4_sensitivity import mcheck_flip
+            t_chk = time.perf_counter()
+            (_f_off, _m_off), (_f_on, _m_on) = _built
+            _fl_off, _fl_on = mcheck_flip([_m_off, _m_on], fp, args.model, coco, args.coco_root, args.calib,
+                                          args.imgsz, device)
+            _use_m = _fl_on <= MCHECK_RATIO * _fl_off
+            models[cond] = _m_on if _use_m else _m_off
+            print(f"  [+A] calib 밖 COCO flip: M 끔 {_fl_off:.2f}% / M 켬 {_fl_on:.2f}% -> "
+                  f"M {'켬' if _use_m else '끔'} (기준 {MCHECK_RATIO}배, 검사 {time.perf_counter() - t_chk:.1f}s)", flush=True)
+            del _m_off, _m_on, _built
+            torch.cuda.empty_cache()
+        t0 = t_cond
         calib_time[cond] = time.perf_counter() - t0
         model_mib_by[cond] = quantized_weight_mib(models[cond].model)
         print(f"  {cond} 빌드 {calib_time[cond]:.1f}s  (이론적 크기 {model_mib_by[cond]:.2f} MiB)")
@@ -1287,6 +1335,11 @@ def main():
     _mib_mode = next((m for m in ["adaround", "qdrop", "brecq", "combined", "brecq_vm", "qdrop_vm"]
                       if m in models), conditions[0])
     model_mib = quantized_weight_mib(models[_mib_mode].model)
+    _post = args.post_build or os.environ.get("PTQ_POST_BUILD")
+    if _post:
+        # 10-01: 진단용 훅 -- 빌드 직후(평가 전) 모델을 그대로 넘겨 스크립트를 실행하고 종료(주 실험 경로 영향 없음).
+        exec(open(_post).read(), {**globals(), **locals()})   # 한 이름 공간: 스크립트 안 함수끼리 서로 보이게
+        return
 
     # ---------------- COCO-80: FP sim 1회 계산 + GT 매칭 ----------------
     print(f"\n[gt] COCO-80 FP sim 계산 + anchor 매칭 ({len(probe_paths)}장)")
@@ -1400,6 +1453,8 @@ def main():
         lsq_bits.append(f"aux_mse_weight={args.aux_mse_weight}(claim16 방향3, 진단 실험)")
     if args.first_last_bits > 0:
         lsq_bits.append(f"첫/마지막 레이어 {args.first_last_bits}bit")
+    if args.last_abits > 0:
+        lsq_bits.append(f"head 마지막 conv 입력 A{args.last_abits}")
     if hi_wbit_blocks:
         lsq_bits.append(f"W8 유지 블록 {list(hi_wbit_blocks)}")
     if protected:
