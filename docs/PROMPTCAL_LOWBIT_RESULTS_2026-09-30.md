@@ -1,3 +1,5 @@
+> **2026-10-03 안내:** 이 문서는 **이전 프로토콜**(attention·contrastive FP, head 마지막 conv 입력 A8)의 결과다. 논문에 쓰는 숫자는 확정 프로토콜 결과 [`PROMPTCAL_RESULTS_2026-10-03.md`](PROMPTCAL_RESULTS_2026-10-03.md)를 기준으로 한다.
+
 # PromptCal 저비트 실험 결과 (2026-09-30)
 
 > 09-29 문서([`PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md`](PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md))의 후속이다.

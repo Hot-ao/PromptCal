@@ -35,9 +35,9 @@ open-vocabulary 검출기를 저비트로 PTQ하면 **calibration 때 보지 않
 
 ## 2. 초록 (초안)
 
-> Open-vocabulary detectors such as YOLO-World are attractive for edge deployment, where vocabularies change after deployment. We show that standard post-training quantization (PTQ) damages them in a way that AP on the calibration vocabulary hides: at W4A8, BRECQ flips the top-1 class of 18% of confident LVIS predictions while COCO AP drops by only 3.6 points. Using leak-free, layer-wise diagnosis, we find that the damage concentrates in a handful of layers. Most of it comes from the 1×1 convolution that fuses the text-gated attention branch, where a few outlier channels of the gated branch corrupt the shared quantization scale. The rest comes from early backbone split/concat boundaries. We propose three training-free, deployment-compatible fixes: (i) **gate commutation**, an FP-equivalent restructuring that moves the text gate behind its own 1×1 convolution, at zero bit cost; (ii) **leak-free protection** of the few remaining sensitive convolutions at 8 bit (+0.3% model size); and (iii) **tied scale migration** that respects producer–consumer constraints so it can be folded at deployment. Migration is enabled per model only when a leak-free check on held-out calibration-domain images does not increase decision flips. With all convolutions, attention and region–text matmuls quantized, on top of BRECQ, the method improves LVIS AP by +1.4 to +2.7 points and reduces LVIS decision flips by about one third (31–35% relative) from W4A8 to W4A5 on YOLO-World-S, consistently across seeds and on top of QDrop. It transfers to YOLO-World-S v2 (up to +7.9 points) and YOLO-World-M (up to +3.2 points). [최종 숫자는 확정 프로토콜 6 seed 일괄 후 교체]
+> Open-vocabulary detectors such as YOLO-World are attractive for edge deployment, where vocabularies change after deployment. We show that standard post-training quantization (PTQ) damages them in a way that AP on the calibration vocabulary hides: at W4A8, BRECQ flips the top-1 class of 18% of confident LVIS predictions while COCO AP drops by only 3.6 points. Using leak-free, layer-wise diagnosis, we find that the damage concentrates in a handful of layers. Most of it comes from the 1×1 convolution that fuses the text-gated attention branch, where a few outlier channels of the gated branch corrupt the shared quantization scale. The rest comes from early backbone split/concat boundaries. We propose three training-free, deployment-compatible fixes: (i) **gate commutation**, an FP-equivalent restructuring that moves the text gate behind its own 1×1 convolution, at zero bit cost; (ii) **leak-free protection** of the few remaining sensitive convolutions at 8 bit (+0.3% model size); and (iii) **tied scale migration** that respects producer–consumer constraints so it can be folded at deployment. Migration is enabled per model only when a leak-free check on held-out calibration-domain images does not increase decision flips. With all convolutions, attention and region–text matmuls quantized, on top of BRECQ, the method improves LVIS AP of YOLO-World-S by +1.2 to +2.5 points from W4A8 to W4A5 and reduces LVIS decision flips by about 30% relative, while QDrop, AdaRound and calibration-vocabulary fine-tuning fall below BRECQ. It transfers to YOLO-World-S v2 (up to +7.9 points) and YOLO-World-M (up to +3.2 points).
 
-s의 숫자는 10-01까지 프로토콜의 6 seed다. 확정 프로토콜에서 짝 차이가 유지됨은 확인했지만, 최종 숫자는 일괄 실행 후 바꾼다. 일반화 숫자는 확정 프로토콜 2 seed다.
+s의 숫자는 확정 프로토콜 6 seed(표 1, runs/158)다. W4A5는 seed 0(기준선 붕괴)을 뺀 값이다. 일반화 숫자는 확정 프로토콜 2 seed다.
 
 ---
 
@@ -123,7 +123,7 @@ s의 숫자는 10-01까지 프로토콜의 6 seed다. 확정 프로토콜에서 
 | 그림 3 | C2fAttn 분기별 activation과 weight 통계, 공유 scale 오염 | 데이터 ✅ (runs/139), 그림 ❌ |
 | 그림 4 | 게이트 교환 구조도 | ❌ |
 | 그림 5 | 이전이 취약성을 옮기는 모습 (이전 전후 민감도) | 데이터 ✅ (runs/148), 그림 ❌ |
-| 표 1 | 주 결과 4개 설정 × 기준선 | ✅ (최종 프로토콜로 재실행 예정) |
+| 표 1 | 주 결과 4개 설정 × 기준선 | ✅ 확정 프로토콜 6 seed (`docs/PROMPTCAL_RESULTS_2026-10-03.md` §1) |
 | 표 2 | ablation | ✅ |
 | 표 3 | QDrop plug-in | ✅ |
 | 표 4 | 일반화 | 🟡 |
@@ -152,7 +152,7 @@ s의 숫자는 10-01까지 프로토콜의 6 seed다. 확정 프로토콜에서 
 
 1. ~~프로토콜 확정~~ (10-02): A16 + `attn_cls`, M은 모델별 사전 검사.
 2. ~~일반화 1단계~~ (10-02): 확정 프로토콜로 s / v2 / m 2 seed. 세 모델 모두 개선.
-3. **최종 6 seed 일괄 (s):** 확정 프로토콜로 표 1~3을 다시 만든다. W8A8 GM도 포함한다.
+3. **최종 6 seed 일괄 (s):** ~~표 1~~ 완료(10-03). 표 2(W4A5 ablation)·표 3(선택 기준 대조, QDrop plug-in) 진행 중.
 4. **일반화 3 seed:** v2(PM/GPM), m(GP).
 5. **YOLOE-v8s:** 구조가 다른 OVOD. 코드 지원부터.
 6. **보강:** SmoothQuant·AWQ 기준선, Reg-PTQ, QATMA 조건(첫·마지막 FP, YOLO-World-L).

@@ -1,0 +1,58 @@
+T1-W8A8-s0	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,qdrop,adaround,brecq+M --adaround-act-observer mse --seed 0
+T1-W4A8b-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions qdrop,adaround,combined --adaround-act-observer mse --seed 0
+T1-W4A6-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 0
+T1-W4A5q-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions qdrop --seed 0
+T1-W8A8-s1	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,qdrop,adaround,brecq+M --adaround-act-observer mse --seed 1
+T1-W4A8b-s1	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions qdrop,adaround,combined --adaround-act-observer mse --seed 1
+T1-W4A6-s1	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 1
+T1-W4A5q-s1	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions qdrop --seed 1
+T1-W8A8-s2	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,qdrop,adaround,brecq+M --adaround-act-observer mse --seed 2
+T1-W4A8a-s2	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+PM,brecq+GPM --seed 2
+T1-W4A8b-s2	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions qdrop,adaround,combined --adaround-act-observer mse --seed 2
+T1-W4A6-s2	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 2
+T1-W4A5-s2	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 2
+T1-W8A8-s3	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,qdrop,adaround,brecq+M --adaround-act-observer mse --seed 3
+T1-W4A8a-s3	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+PM,brecq+GPM --seed 3
+T1-W4A8b-s3	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions qdrop,adaround,combined --adaround-act-observer mse --seed 3
+T1-W4A6-s3	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 3
+T1-W4A5-s3	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 3
+T1-W8A8-s4	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,qdrop,adaround,brecq+M --adaround-act-observer mse --seed 4
+T1-W4A8a-s4	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+PM,brecq+GPM --seed 4
+T1-W4A8b-s4	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions qdrop,adaround,combined --adaround-act-observer mse --seed 4
+T1-W4A6-s4	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 4
+T1-W4A5-s4	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 4
+T1-W8A8-s5	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions naive,brecq,qdrop,adaround,brecq+M --adaround-act-observer mse --seed 5
+T1-W4A8a-s5	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions naive,brecq,brecq+PM,brecq+GPM --seed 5
+T1-W4A8b-s5	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions qdrop,adaround,combined --adaround-act-observer mse --seed 5
+T1-W4A6-s5	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 5
+T1-W4A5-s5	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions naive,brecq,qdrop,brecq+PM,brecq+GPM --seed 5
+T2-W4A5abl-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions brecq+G,brecq+P,brecq+M,brecq+GP,brecq+GM --seed 0
+T2-W4A8sel-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions brecq+P,brecq+R,brecq+H,qdrop+PM --seed 0
+T2-W4A5q-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions qdrop+PM --seed 0
+T2-W4A6q-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions qdrop+PM --seed 0
+T2-W8A8q-s0	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions qdrop+M --seed 0
+T2-W4A5abl-s1	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions brecq+G,brecq+P,brecq+M,brecq+GP,brecq+GM --seed 1
+T2-W4A8sel-s1	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions brecq+P,brecq+R,brecq+H,qdrop+PM --seed 1
+T2-W4A5q-s1	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions qdrop+PM --seed 1
+T2-W4A6q-s1	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions qdrop+PM --seed 1
+T2-W8A8q-s1	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions qdrop+M --seed 1
+T2-W4A5abl-s2	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions brecq+G,brecq+P,brecq+M,brecq+GP,brecq+GM --seed 2
+T2-W4A8sel-s2	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions brecq+P,brecq+R,brecq+H,qdrop+PM --seed 2
+T2-W4A5q-s2	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions qdrop+PM --seed 2
+T2-W4A6q-s2	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions qdrop+PM --seed 2
+T2-W8A8q-s2	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions qdrop+M --seed 2
+T2-W4A5abl-s3	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions brecq+G,brecq+P,brecq+M,brecq+GP,brecq+GM --seed 3
+T2-W4A8sel-s3	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions brecq+P,brecq+R,brecq+H,qdrop+PM --seed 3
+T2-W4A5q-s3	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions qdrop+PM --seed 3
+T2-W4A6q-s3	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions qdrop+PM --seed 3
+T2-W8A8q-s3	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions qdrop+M --seed 3
+T2-W4A5abl-s4	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions brecq+G,brecq+P,brecq+M,brecq+GP,brecq+GM --seed 4
+T2-W4A8sel-s4	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions brecq+P,brecq+R,brecq+H,qdrop+PM --seed 4
+T2-W4A5q-s4	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions qdrop+PM --seed 4
+T2-W4A6q-s4	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions qdrop+PM --seed 4
+T2-W8A8q-s4	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions qdrop+M --seed 4
+T2-W4A5abl-s5	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions brecq+G,brecq+P,brecq+M,brecq+GP,brecq+GM --seed 5
+T2-W4A8sel-s5	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions brecq+P,brecq+R,brecq+H,qdrop+PM --seed 5
+T2-W4A5q-s5	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions qdrop+PM --seed 5
+T2-W4A6q-s5	--model yolov8s-world.pt --w-bits 4 --a-bits 6 --conditions qdrop+PM --seed 5
+T2-W8A8q-s5	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions qdrop+M --seed 5
