@@ -1,11 +1,13 @@
-# 저비트 PTQ 방법 — 구조와 작동 원리 (2026-09-29, 09-30·10-01·10-02 갱신)
+# 저비트 PTQ 방법 — 구조와 작동 원리 (2026-09-29, 09-30·10-01·10-02·10-03 갱신)
 
 **대상 독자:** 이 방법을 이어서 구현·실험하거나 논문을 쓰는 공저자.
 
 **목적:** "무엇을 하는 방법인가, 모델의 어디를 어떻게 바꾸는가, 왜 그게 통하는가"를 한 문서에서 설명한다.
 
 **관련 문서**
-- 실험 수치와 경위는 [`docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-30.md`](docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-30.md)(6-seed 확정, 게이트 교환)와 [`docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md`](docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md)(원인 분석)에 있다(run 번호로 추적).
+- **논문에 쓰는 수치는 확정 프로토콜 결과 [`docs/PROMPTCAL_RESULTS_2026-10-03.md`](docs/PROMPTCAL_RESULTS_2026-10-03.md)가 기준이다.**
+- 이전 프로토콜의 수치와 원인 분석 경위는 [`docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-30.md`](docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-30.md)(6-seed, 게이트 교환)와 [`docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md`](docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-29.md)(원인 분석)에 있다(run 번호로 추적).
+- 코드 구성과 실행은 [`pipeline/README.md`](pipeline/README.md)에 있다.
 - **09-30 변경:** 텍스트 게이트 교환(⓪, §4.4)을 방법에 추가했다. 저비트(A6·A5)에서는 GPM이 최종 구성이다.
 - **10-01 변경:**
   - attention(Linear/matmul)과 head contrastive matmul도 8bit로 양자화하는 옵션을 추가했다(`--attn-quant`, §3.3). 2 seed에서 결론(GPM − BRECQ)이 그대로 유지된다.
@@ -15,6 +17,10 @@
   - A16 도입으로 생긴 BRECQ 버그(16bit activation에 LSQ를 걸면 step이 발산)를 고쳤다(§3.4).
   - **이전(M)은 모델별 누수 없는 사전 검사로 채택 여부를 정한다**(`+A`, §4.5). m에서는 꺼지고(최종 GP), s·v2에서는 켜진다.
   - 새 프로토콜에서 s, v2, m 세 모델 모두 BRECQ보다 좋아졌다(2 seed, §9).
+- **10-03 변경 (표 1 확정):**
+  - 확정 프로토콜로 s의 주 결과를 6 seed로 다시 냈다(§1, runs/158).
+  - W4에서는 결론이 그대로다. W4A8은 PM, W4A6·W4A5는 GPM이 최선이다.
+  - W8A8의 M 효과는 이전 프로토콜보다 작아졌다(LVIS AP +0.32 → +0.20, flip −1.28 → −0.37%p).
 - 이전 설계(Combined = BRECQ + s_mult margin 학습)는 [`PROMPTCAL_PAPER_DESIGN_2026-09-28.md`](PROMPTCAL_PAPER_DESIGN_2026-09-28.md)에 있다. 이 문서의 방법은 그 설계를 대체한다. 이유는 §7에 있다.
 
 ---
@@ -40,9 +46,10 @@
  ③ 재구성(BRECQ)   : 표준 블록 재구성 PTQ (rounding + activation step 학습). QDrop으로 바꿔도 된다
 ```
 
-- 이름: ①+② = **PM**, ⓪+①+② = **GPM** (조건 접미사, §5).
-- W8A8에서는 모든 weight가 이미 8bit라 ①이 규칙상 아무것도 하지 않는다(비용 0). ②가 주로 기여한다.
-- W4A8에서는 ①이 주로 기여한다. PM과 GPM은 사실상 동급이다(짝 Δ LVIS AP −0.27 ± 0.23점, Holm 보정 후 유의하지 않음).
+- 이름: ①+② = **PM**, ⓪+①+② = **GPM**, ⓪+① = **GP** (조건 접미사, §5). `+A`는 ②를 사전 검사로 켤지 정한다.
+- **모델별 최종 구성:** s는 W8A8 M, W4A8 PM, W4A6·W4A5 GPM이다. v2는 PM / GPM이다. m은 GP다(② 꺼짐. m의 보호 대상은 C2fAttn cv2뿐이라 ⓪이 대신하므로 실제로는 G와 같다).
+- W8A8에서는 모든 weight가 이미 8bit라 ①이 규칙상 아무것도 하지 않는다(비용 0). ②만 남고, 효과는 작다(+0.20점).
+- W4A8에서는 ①이 주로 기여한다. **PM이 최선이다.** GPM보다 LVIS AP가 약 0.3점 높고, flip은 같은 수준이다(확정 프로토콜 표 1: +1.15 vs +0.81).
 - **W4A6·W4A5에서는 GPM이 최선이다:** PM보다 작은 모델로 LVIS AP와 LVIS_flip이 모두 더 좋다(확정 프로토콜 표 1: W4A6 +1.66 vs +1.22, W4A5 +2.53 vs +2.15).
 
 **결과 요약 (확정 프로토콜, s-World, 6 seed, BRECQ → 우리) — 표 1, runs/158**
@@ -64,7 +71,7 @@
 
 | 모델 | W4A8 | W4A5 | 최종 구성 |
 |---|---|---|---|
-| YOLOv8s-World | PM +1.32 / +1.22 | GPM +2.34 (seed 1. seed 0은 BRECQ 붕괴로 +11.1) | PM / GPM |
+| YOLOv8s-World | 6 seed 표 1 참고: PM +1.15 | 6 seed 표 1 참고: GPM +2.53 (seed 0 제외) | PM / GPM |
 | YOLOv8s-WorldV2 | PM +6.54 / +6.39 | PM +7.32 / +7.86, GPM +5.66 / +6.13 | PM (flip은 GPM이 더 낮음) |
 | YOLOv8m-World | G +0.77 / +1.50 | **G +3.17 / +2.26** | GP (= G. M은 검사에서 꺼짐) |
 
@@ -147,7 +154,7 @@
 
 - **activation 범위(Δ, z):** calibration 이미지 256장을 흘려 모은 표본에서 L2.4 오차가 최소인 범위를 고른다(MSE observer, 한 번만 탐색).
 - **weight 범위:** 출력 채널마다 [min, max]를 1%씩 줄여 가며 L2.4 오차가 최소인 값을 고른다(80개 후보).
-- **첫/마지막 레이어:** stem 첫 conv와 head cv2/cv3 마지막 1×1은 8bit로 둔다(`set_first_last_bits`, 저비트 표준 관례).
+- **첫/마지막 레이어:** stem 첫 conv와 head cv2/cv3 마지막 1×1은 W8A8로 둔다(`set_first_last_bits`, 저비트 표준 관례). 확정 프로토콜에서는 head 마지막 1×1의 입력 activation을 A16으로 올린다(`set_last_abits`, §3.4).
 - **범위 밖:** 확정 프로토콜(§3.4)에서 FP로 남는 것은 LayerNorm, softmax, sigmoid, max, residual add, DFL, CLIP(오프라인 텍스트 임베딩), NMS뿐이다. 10-01까지의 결과는 attention Linear/matmul과 head contrastive matmul도 FP였다(`--attn-quant none`).
 - 실제 정수 커널이 아니라 "양자화 → 곧바로 역양자화"로 정밀도 손실만 재현한다.
 
@@ -158,18 +165,20 @@
 - **재구성 단위:** 블록 출력 오차 `‖f_block(q) − f_block(fp)‖²`를 줄이도록 α와 activation step(LSQ)을 함께 2000 iter 학습한다.
   - 입력 q는 앞 블록들이 이미 양자화된 상태의 실제 입력이다. 그래서 누적 오차가 보상된다.
 - **이 저장소의 설정:** batch 1, α와 LSQ 공동 최적화, neck도 블록 단위. 공식 설정과 다른 점은 BASELINE_STATUS에 기록돼 있다.
+- **16bit activation은 LSQ에서 뺀다**(`LSQ_MAX_BITS = 16`). observer step을 그대로 쓴다. 이유는 §3.4에 있다.
+- **QDrop**은 같은 함수에 activation drop 확률 0.5를 준 것이다. LSQ 규칙도 같다.
 - **다른 단계와의 관계:** BRECQ는 ①과 ②가 바꾼 모델을 그대로 받는다.
   - AdaRoundQuantConv2d는 QuantConv2d의 `w_bits`, 이미 계산된 weight scale, `mig` 버퍼를 물려받는다.
   - ①·②와 BRECQ는 코드상 서로 간섭하지 않는다.
 
-### 3.3 attention·contrastive 8bit 양자화 (10-01, `--attn-quant`)
-기본 프로토콜은 conv만 양자화한다. 이 옵션은 남은 행렬 연산까지 8bit로 내려 "FP로 둔 것이 결론에 영향을 주는가"를 확인한다. QATMA와 조건을 맞추는 데도 쓴다. 구현은 `pipeline/quant/attn_quant.py`에 있다.
+### 3.3 attention·contrastive 8bit 양자화 (10-01, `--attn-quant`, 확정 프로토콜은 `attn_cls`)
+10-01까지의 프로토콜은 conv만 양자화했다. 이 옵션은 남은 행렬 연산까지 8bit로 내린다. "FP로 둔 것이 결론에 영향을 주는가"를 확인하고, QATMA와 조건을 맞추는 데 쓴다. **10-02부터는 `attn_cls`가 확정 프로토콜이다.** 구현은 `pipeline/quant/attn_quant.py`에 있다.
 
 | 수준 | 양자화하는 연산 |
 |---|---|
-| `none` (기본) | 없음 (conv만) |
+| `none` (CLI 기본값, 10-01까지의 프로토콜) | 없음 (conv만) |
 | `attn` | C2fAttn 게이트 경로(guide projection, 이미지 임베딩, max-sigmoid 게이트 aw), ImagePoolingAttn(key·value·proj Linear, query, softmax 출력) |
-| `attn_cls` | `attn` + head contrastive matmul(정규화된 영역 임베딩 × 텍스트) |
+| `attn_cls` (**확정 프로토콜**) | `attn` + head contrastive matmul(정규화된 영역 임베딩 × 텍스트) |
 
 **양자화 규칙 (배포 관점)**
 - **이미지에서 오는 실행 중 값**(matmul 피연산자, Linear 입력, softmax/sigmoid 출력): per-tensor 비대칭 8bit `ActObserver`를 쓴다. conv와 같은 calibrate()에서 관측하고 freeze한다(`QPoint`).
@@ -282,7 +291,7 @@
 
 **진단** (`pipeline/diag_w4_sensitivity.py::rank_convs_leakfree`)
 1. calibration 이미지(train2017 앞 200장)에서 FP 모델의 region 임베딩과 COCO 점수를 저장한다.
-2. naive W8A8 모델에서 **conv 하나만** weight를 4bit로 내리고, 나머지는 8bit로 둔 채 다시 흘린다.
+2. naive W8A8 모델에서 **conv 하나만** weight를 4bit로 내리고, 나머지는 8bit로 둔 채 다시 흘린다. 기준 모델은 실험과 같은 프로토콜을 쓴다(확정 프로토콜이면 `attn_cls` + A16).
 3. **기준값 = COCO flip 증가량:** FP가 확신(sigmoid > 0.25)하는 anchor에서 COCO top-1 클래스가 바뀐 비율이 얼마나 늘었는지.
 4. conv 63개 전부에 대해 반복한다. 첫/마지막 8bit conv 7개는 제외한다.
 
@@ -300,7 +309,18 @@
 **누수 방지**
 - 평가 이미지(val2017)를 쓰지 않는다. **LVIS 어휘는 로드조차 하지 않는다.**
 - 진단은 전역 RNG를 저장·복원한다. 진단 유무가 뒤따르는 BRECQ의 무작위성을 바꾸지 않는다.
-- 결과는 `configs/protect_cache/`에 모델별로 캐시한다.
+- 결과는 `configs/protect_cache/`에 모델·프로토콜별로 캐시한다. 확정 프로토콜 캐시는 `<모델>_n200_c256_img640_la16_aqattn_cls.json`이다.
+
+**모델별 보호 목록 (확정 프로토콜과 이전 프로토콜에서 같다)**
+
+| 모델 | 보호 목록 (예산 1.5%) | `+G`일 때 남는 것 |
+|---|---|---|
+| YOLOv8s-World | 12.cv2, 1, 2.cv2, 4.cv1 | 1, 2.cv2, 4.cv1 (+0.3%) |
+| YOLOv8s-WorldV2 | 12.cv2, 15.cv2, 1 | 1 |
+| YOLOv8m-World | 12.cv2, 15.cv2 | 없음 (GP = G) |
+
+- 세 모델 모두 텍스트 융합 지점(C2fAttn cv2)이 가장 먼저 뽑힌다.
+- 프로토콜이 바뀌어도 목록이 같다는 것은 진단이 안정적이라는 근거다.
 
 **왜 이 conv들인가 (작동 원리)**
 - `12.cv2` 입력에서 y3의 outlier 채널이 출력 채널별 weight 범위 [min, max]를 지배한다. 그래서 4bit(16단계) 격자가 너무 성겨진다.
@@ -380,20 +400,22 @@ conv의 입력 채널 c마다 양수 s_c를 두면 FP 함수는 변하지 않는
 
 **왜 W8A8에서 특히 잘 듣는가**
 - W8A8의 남은 손상은 weight가 아니라 activation 쪽이다. 예전 진단에서도 cv3 activation만 A11로 올리면 held-out flip이 −41%였다(`docs/PROMPTCAL_V3_MIXED_PRECISION.md`).
-- ②는 activation의 채널 편차를 여유가 있는 8bit weight로 옮긴다. 그래서 비트를 늘리지 않고 같은 효과의 상당 부분을 얻는다(LVIS_flip −30~33%).
+- ②는 activation의 채널 편차를 여유가 있는 8bit weight로 옮긴다. 그래서 비트를 늘리지 않고 같은 효과의 상당 부분을 얻는다(이전 프로토콜에서 LVIS_flip −30~33%).
+- **확정 프로토콜에서는 효과가 작아졌다.** LVIS AP +0.20, flip 3.83 → 3.47%(−9%)다. attention·contrastive 8bit와 A16이 W8A8에 남아 있던 activation 손상의 분포를 바꾼 것으로 보인다(원인은 미확인).
 - W4A8에서는 weight에도 여유가 없어 이득이 작다. ①이 큰 손상을 막은 뒤에 소폭 더한다(LVIS AP +0.23~0.25점).
 
 ### 4.3 두 단계의 역할 분담 (비트별)
 
 | | 주 병목 | 주로 기여하는 단계 | 근거 (run) |
 |---|---|---|---|
-| W8A8 | activation (채널 편차, cv3 경로) | ② 이전 | 135, 147 |
+| W8A8 | activation (채널 편차, cv3 경로) | ② 이전 (확정 프로토콜에서는 효과가 작음) | 135, 147, 158 |
 | W4A8 | weight (텍스트 융합 conv, 초반 backbone) | ① 보호 | 132 vs 134, 141, 147 |
 | W4A6·W4A5 | weight + activation (텍스트 융합 conv가 이전의 부담까지 받음) | ⓪ 게이트 교환 + ① + ② | 147 (G-*) |
 
 **이전의 부작용과 그 해소:** A6·A5에서 이전(②) 단독은 BRECQ보다 나쁘다(W4A6 0/6).
 - 이전은 취약성을 없애지 않고 옮긴다. `runs/148`에서 12.cv2의 민감도는 줄고, 1.conv의 민감도는 3.5~4배 는다.
-- 보호(①)나 게이트 교환(⓪)이 취약한 conv를 받쳐 줄 때만 이전이 이득이 된다. W4A6 G → GM은 LVIS AP +0.31점, W4A5는 +0.65점이다.
+- 보호(①)나 게이트 교환(⓪)이 취약한 conv를 받쳐 줄 때만 이전이 이득이 된다. W4A6 G → GM은 LVIS AP +0.31점, W4A5는 +0.65점이다(이전 프로토콜).
+- **모델에 따라 이전 자체가 해로울 수 있다.** YOLOv8m-World에서는 ①·⓪이 있어도 ②를 더하면 BRECQ보다 나빠진다(PM −1.5 ~ −3.5점). 그래서 ②는 사전 검사(§4.5)로 켤지 정한다.
 
 ### 4.4 ⓪ 텍스트 게이트 교환 (09-30)
 
@@ -414,7 +436,9 @@ conv의 입력 채널 c마다 양수 s_c를 두면 FP 함수는 변하지 않는
   1. 텍스트 분기가 자기 전용 conv를 가진다. 다른 세 분기와 **weight scale(출력 채널별)과 activation scale을 공유하지 않는다.** 09-29 분석의 원인 "공유 scale 오염"을 구조적으로 없앤다.
   2. 양자화되는 입력이 게이트가 곱해지기 **전**의 p다. 게이트가 만드는 위치별 크기 편차(0~scale)가 양자화 범위에서 빠진다.
   3. 게이트가 작은 위치(텍스트와 무관한 영역)에서는 텍스트 분기의 양자화 오차도 게이트 배율만큼 줄어든다.
-- **효과 (naive, 12번 블록만 W4):** LVIS flip이 68.8%에서 **9.7%**로 줄었다. 분기별 scale 분리만 하면 18.5%다. 게이트를 뒤로 옮긴 것 자체가 핵심이다.
+- **효과 (naive, 12번 블록만 W4, 이전 프로토콜):** LVIS flip이 68.8%에서 **9.7%**로 줄었다. 분기별 scale 분리만 하면 18.5%다. 게이트를 뒤로 옮긴 것 자체가 핵심이다.
+- **확정 프로토콜에서의 게이트:** 게이트 aw도 8bit로 양자화된다(`attn_gate`의 `QPoint`). 그래도 G의 패턴은 그대로다(W4A5 GPM − PM LVIS_flip −1.4%p, 6 seed, §3.3).
+- **다른 모델:** m에서는 G 하나로 W4A5 LVIS AP +2.3~3.2점이다(2 seed). P(+1.5~2.4)보다 낫다.
 - **BRECQ와의 연동:**
   - neck/head는 conv 단위로 FP conv 출력을 목표로 재구성하므로, FP 기준 모델도 같은 구조로 변환해 넘긴다(FP 등가라 목표는 같다).
   - 새 conv(`cv2_main`, `cv2_side`)는 일반 conv처럼 AdaRound/LSQ를 받는다.
@@ -525,9 +549,12 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 | ⓪ 게이트 교환 | C2fAttn cv2를 1×1 conv 두 개 + 위치별 곱 + 덧셈으로 | 없음 (FP 연산량 동일) | FP 등가성 확인. 엔진 fusion 미확인 |
 | ③ BRECQ | 학습된 rounding이 반영된 정적 weight | 없음 | – |
 | attention·contrastive 8bit (`attn_cls`) | INT8 GEMM. 텍스트 상수는 클래스별 INT8로 미리 저장 | 텍스트 상수 저장 약 1 MB (LVIS) | 시뮬레이션만 |
+| head 마지막 conv 입력 A16 | 해당 6개 1×1 conv만 INT16 activation × INT8 weight | 연산량의 2~4%가 16bit. 모델 크기 변화 없음 | 시뮬레이션만 |
+| M 사전 검사 (`+A`) | PTQ 시점에만 쓰이고 배포 모델에는 없다 | 모델당 1회. 검사 22~24초 + 빌드 1회 추가 | 검증 완료 |
 
-- **PTQ 제작 비용:** 서버에서 1회 수행한다. GPU 메모리 약 15GB, run당 약 20분이다. 기기는 완성된 모델만 받는다.
-- **추론 모델 크기 (s):** W4 PM 6.22 MiB, W4 GPM 6.16 MiB, W8A8 12.08 MiB. FP32는 약 49 MiB다.
+- **PTQ 제작 비용:** 서버에서 1회 수행한다. GPU 메모리 약 15GB(s), 조건 하나에 빌드 17~22분이다(RTX 4000 Ada). 평가까지 넣으면 약 30분이다. 기기는 완성된 모델만 받는다.
+- **추론 모델 크기 (s, conv weight만):** W4 BRECQ 6.14 MiB, PM 6.22 MiB(+1.3%), GPM 6.16 MiB(+0.3%), W8A8 12.08 MiB. FP32는 약 49 MiB다.
+  - 확정 프로토콜에서 8bit로 양자화되는 attention Linear weight는 아직 크기 계산에 들어가 있지 않다. 매우 작지만 계산 코드를 고쳐 다시 내야 한다.
 - **FP로 남는 연산:** 확정 프로토콜(`attn_cls`)에서는 원소별 연산(LayerNorm, softmax, sigmoid, add)과 DFL뿐이고, head 마지막 conv 입력은 16bit다. 10-01까지의 결과는 attention의 Linear/matmul과 contrastive matmul도 FP였다. 어휘가 고정되면 텍스트 임베딩은 미리 계산해 두므로 기기에서 CLIP을 돌릴 필요는 없다.
 - **W4 conv의 실제 가속:** 하드웨어 지원이 제한적이다. 모든 W4 방법에 공통인 조건이다. 목표 기기 검증이 필요하다(결과 문서 §12 P7).
 
@@ -547,6 +574,11 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 | **W4A4** | 소수 conv만 A8 | conv의 76%를 A8로 되돌려도 붕괴. A5부터 풀림 | per-tensor A4는 이 모델의 절벽. 한계로 명시 |
 | **분기 인식 concat 양자화** (09-30) | concat 입력을 생산자별 구간으로 나눠 구간마다 activation·weight scale | A4 붕괴 해결 실패(LVIS flip 95% 이상). 효과는 weight 쪽(그룹 양자화)뿐 | A4 손상은 concat을 넘어 전체에 퍼져 있다. 기존 기법과 같아 기각 |
 | **이전 고려 보호 배분** (A안, 09-30) | 이전 적용 뒤의 모델로 보호 대상 진단 | 보호 목록의 마지막 한 자리만 바뀜 | 기대 이득이 작아 보류. 대신 "이전은 취약성을 옮긴다"는 메커니즘을 얻음 |
+| **모델별로 프로토콜·구성을 수동으로 바꾸기** (10-01~02) | m에만 A16을 쓰거나, m에서만 M을 빼기 | 평가 결과(val, LVIS)를 보고 정하는 셈이라 기각 | A16은 모든 모델에 적용하고, M은 누수 없는 검사로 정한다 |
+| **마지막 conv에 이전(M)으로 A8 유지** (10-01) | A16 대신 head 마지막 conv에 이전을 적용 | 국소 기준은 이전을 고르지 않고, 방향 오차 기준은 AP를 약 14로 무너뜨림 | 범위 불안정은 비트로만 풀린다 |
+| **임베딩·logit 오차 기준의 M 검사** (10-02) | M 켬/끔을 평균 임베딩 오차로 비교 | m에서도 M이 오차를 줄여(0.34 → 0.24) 해를 못 잡음 | 판정(flip) 기준이어야 한다 |
+| **짧은 BRECQ(200 iter) M 검사** (10-02) | 짧게 재구성한 뒤 검사하고 본 BRECQ는 한 번만 | 후보당 6~10분(절약이 작음). m W4A5에서 결정이 틀림 | 모델당 한 번 전체 BRECQ로 검사하는 방식으로 대체 |
+| **calibration 이미지로 M 검사** (10-02) | BRECQ calibration 256장에서 flip 비교 | 시험하지 않고 설계 단계에서 배제 | BRECQ가 이미 맞춘 이미지라 해가 가려질 수 있다. calibration 밖 이미지를 쓴다 |
 
 **정리:** 순위는 **학습(손실)으로 맞추는 게 아니라, 순위가 무너지는 구조적 지점을 양자화기 수준에서 지켜서** 보존한다.
 
@@ -557,7 +589,7 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 **주장할 수 있는 것**
 - open-vocab 검출기의 저비트 손상은 held-out 어휘 순위에서 가장 크게 드러난다(LVIS가 COCO보다 2~3배 민감).
 - 손상은 텍스트 attention이 합쳐지는 concat conv와 초반 backbone에 집중된다. 원인은 attention 분기의 outlier와 공유 scale이다. s-v1, s-v2, m-v1에서 재현된다.
-- 누수 없는 진단으로 그 지점을 찾아 지키고 공유 제약 scale 이전을 더하면 순위 지표가 30% 이상 개선된다. 비용은 W8A8 0%, W4A8 +1.3%다. 같은 크기의 무작위 보호는 효과가 없다.
+- 누수 없는 진단으로 그 지점을 찾아 지키고(①), 게이트 교환(⓪)과 공유 제약 이전(②)을 더하면 W4에서 LVIS 판정 flip이 약 30% 줄고 LVIS AP가 +1.2~2.5점 오른다(확정 프로토콜 6 seed). 비용은 W4A8 +1.3%, W4A6·W4A5 +0.3%다. 같은 크기의 무작위 보호는 효과가 없다.
 - calibration 어휘 기반 학습(PromptCal)은 held-out 순위를 해친다(음성 결과, W4A8·W4A6 6-seed에서 0/6).
 - **텍스트 게이트 교환은 open-vocab 검출기의 텍스트 게이팅 구조를 이용한 양자화 전용 재배치다.** FP 등가이고 비트 비용이 0이며, 저비트(A6·A5)에서 BRECQ 대비 6/6 개선한다. 보호와 결합(GPM)하면 PM보다 작은 모델로 held-out 판정을 6/6 더 잘 지킨다.
 - 학습 없는 PTQ로 W4A5까지 동작한다. 기존 PTQ(QDrop, AdaRound, PromptCal)는 같은 조건에서 크게 무너진다.
@@ -567,7 +599,9 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 
 **주장하면 안 되는 것**
 - "순위 보존을 위해 새로 설계한 선택 기준/손실": 선택 기준은 출력 MSE와 같은 결과를 내고, 이전은 범용 기법이다. 새로움은 게이트 교환(구조)과 분석에 있다.
-- "GPM이 모든 비트에서 PM보다 낫다": W4A8에서는 차이가 유의하지 않다. W4A5의 LVIS AP 차이도 유의하지 않다.
+- "GPM이 모든 비트에서 PM보다 낫다": W4A8에서는 PM이 LVIS AP로 약 0.3점 앞선다. GPM은 W4A6·W4A5에서 최선이다.
+- "W8A8에서도 크게 개선한다": 확정 프로토콜에서 W8A8 개선은 LVIS AP +0.20, flip −0.37%p로 작다. "손해 없이 소폭 개선"으로 쓴다.
+- "6 seed 모두에서 BRECQ를 이긴다"(W4A5): seed 0에서는 기준선이 붕괴해서 차이가 부풀려진다. 붕괴 seed를 밝히고 seed 0 제외 값을 함께 쓴다.
 - "W4A4를 PTQ로 열었다": 열지 못했다.
 - "held-out 어휘에만 특화된 개선": COCO도 비슷한 비율로 좋아진다.
 - "실제 엣지 기기에서의 가속": 아직 시뮬레이션뿐이다.
@@ -576,25 +610,27 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 
 ---
 
-## 9. 남은 검증 (10-02 기준)
+## 9. 남은 검증 (10-03 기준)
 
 **끝난 것**
 - ~~W4A8 게이트 교환 6 seed~~: W4A8은 PM, 저비트는 GPM.
 - ~~attention·contrastive 8bit 6 seed~~ (§3.3): 결론 유지. s W4A5 seed 0에서 BRECQ 붕괴(1/6).
 - ~~m 불안정 원인과 A16~~ (§3.4).
 - ~~확정 프로토콜 2 seed 점검~~ (runs/154, LSQ 버그 수정 후 재실행):
-  - s: W4A8 PM +1.32 / +1.22, GPM +0.72 / +0.80. W4A5 PM +1.81, GPM +2.34(seed 1). **seed 0은 BRECQ가 다시 붕괴**(COCO 19.30)했고, 프로토콜과 무관하게 같은 seed에서 재현된다.
   - v2: W4A8 PM +6.54 / +6.39, GPM +5.71 / +5.95. W4A5 PM +7.32 / +7.86, GPM +5.66 / +6.13. LVIS AP는 PM이, LVIS_flip은 GPM이 낫다.
   - m: P +1.00 / +1.74(A8), +2.35 / +1.49(A5). G = GP +0.77 / +1.50(A8), **+3.17 / +2.26(A5)**. PM·GPM은 BRECQ보다 나쁘다(M이 원인).
   - v2 W8A8 M: LVIS AP +0.71 / +0.47, LVIS_flip 5.0 → 8.1 / 8.7%. 새 프로토콜에서도 같다.
 - ~~M 채택 규칙~~ (§4.5): 모델당 검사 1회.
+- ~~표 1 (s, 확정 프로토콜, 6 seed)~~ (runs/158, 10-03): §1과 결과 문서 §1.
 
 **남은 것**
-1. **s 최종 6 seed 일괄 (확정 프로토콜):** W8A8 / W4A8 / W4A6 / W4A5 × 기준선(naive, BRECQ, QDrop, AdaRound, Combined) + PM, GPM, ablation(G, GM, P, M, R, H). 약 20~24시간(GPU 5장).
-2. **v2·m 3 seed 확장:** 최종 구성(v2 PM/GPM, m GP)만.
-3. **YOLOE-v8s:** 구조가 다른 OVOD로의 일반화. G를 적용할 수 없으므로 P(+M 검사)만 본다. 코드 지원이 먼저 필요하다.
-4. **YOLO-World-L / QATMA 조건(첫·마지막 FP):** L40S 필요.
-5. **SmoothQuant/AWQ 정식 구현, Reg-PTQ와 비교.**
-6. **목표 엣지 기기에서 실제 배포 검증:** 게이트 교환 fusion 포함.
-7. **s W4A5 seed 0의 BRECQ 붕괴:** 원인 conv를 특정하지 못했다(§3.3 진단). 붕괴한 seed를 밝혀 보고한다.
-8. **나중에:** 이전 고려 보호 배분(A안), 임베딩 방향 편향 보정(방향 3), TF32 영향 확인.
+1. **표 2·3 (진행 중, runs/158 2단계):** W4A5 ablation(G, P, M, GP, GM), W4A8 선택 기준 대조(P, R, H), QDrop plug-in.
+2. **모델 크기 계산:** attention Linear weight를 포함해 다시 낸다.
+3. **v2·m 3 seed 확장:** 최종 구성(v2 PM/GPM, m GP)만.
+4. **YOLOE-v8s:** 구조가 다른 OVOD로의 일반화. G를 적용할 수 없으므로 P(+M 검사)만 본다. 코드 지원이 먼저 필요하다.
+5. **YOLO-World-L / QATMA 조건(첫·마지막 FP):** L40S 필요.
+6. **SmoothQuant/AWQ 정식 구현, Reg-PTQ와 비교.**
+7. **목표 엣지 기기에서 실제 배포 검증:** 게이트 교환 fusion 포함.
+8. **s W4A5 seed 0의 기준선 붕괴:** 확정 프로토콜에서도 같은 seed에서 BRECQ(COCO 19.3)와 QDrop(9.8)이 함께 무너진다. 원인 conv는 특정하지 못했다(§3.3 진단). 붕괴 seed를 밝혀 보고한다.
+9. **W8A8에서 M 효과가 줄어든 원인:** 확정 프로토콜의 어느 변경(attention 8bit / A16)이 영향을 주는지 확인하면 좋다(선택).
+10. **나중에:** 이전 고려 보호 배분(A안), 임베딩 방향 편향 보정(방향 3), TF32 영향 확인.
