@@ -73,7 +73,7 @@ observer·weight scale도 그 비트로 잡힌다. 기본 0 = 꺼짐.
 | # | 실험 | 판정 |
 |---|---|---|
 | E0 | W4A4·W8A4 baseline: `--conditions naive,qdrop,brecq`, 1-seed `--eval-cap 500` | QDrop W4A4가 수십 AP로 살아나면 A4 축이 열린다. 여전히 0 근처면 activation 스킴 문제(per-channel 재파라미터화 필요) |
-| E1 | `pipeline/diag_vocab_subspace.py` W4A8 head 포함, naive·brecq | C 유효 차원 ≪ 512이고 BRECQ의 rho ≲ 1이면 metric 교체로 옮길 용량이 있다. rho가 이미 크면 이득이 작을 것 |
+| E1 | `pipeline/legacy/diag_vocab_subspace.py` W4A8 head 포함, naive·brecq | C 유효 차원 ≪ 512이고 BRECQ의 rho ≲ 1이면 metric 교체로 옮길 용량이 있다. rho가 이미 크면 이득이 작을 것 |
 | E2 | W4A8 `--conditions brecq,brecq_vm`, 2-seed full probe | LVIS_AP·LVIS_flip이 2/2 개선이면 6-seed로 |
 | E3 | `--vm-vocab` ablation: `identity` / `coco` / 기본(generic) / `lvis`(oracle 상한) | "generic ≈ lvis > coco > identity"면 논문 핵심 표. identity만으로 같은 이득이면 기여는 "방향 보존 재구성"으로 축소 |
 | E4 | `--vm-mix` {0.25, 0.5, 1.0}, `--vm-lam-mean` {0, 1} | box 경로 손실(COCO_AP) vs LVIS 트레이드오프 확인 |
@@ -81,7 +81,7 @@ observer·weight scale도 그 비트로 잡힌다. 기본 0 = 꺼짐.
 
 ```bash
 # E1
-.venv/bin/python pipeline/diag_vocab_subspace.py --model yolov8s-world.pt --coco-root <coco> \
+.venv/bin/python pipeline/legacy/diag_vocab_subspace.py --model yolov8s-world.pt --coco-root <coco> \
   --w-bits 4 --a-bits 8 --no-skip-head --first-last-bits 8 --modes naive,brecq \
   --calib 256 --n-eval 200 --device <gpu> --deterministic
 
@@ -98,5 +98,5 @@ observer·weight scale도 그 비트로 잡힌다. 기본 0 = 꺼짐.
 - neck의 C2fAttn·ImagePoolingAttn은 calibration 중 COCO-80 텍스트로 guide된다. 모든 조건이 같으므로
   비교는 공정하지만, "vocabulary-agnostic" 주장에는 이 점을 각주로 밝혀야 한다.
 - `configs/vocab_generic.txt`는 ultralytics yaml의 COCO/LVIS **이름**만으로 제외했다. 서버에서
-  `pipeline/build_generic_vocab.py --lvis-ann <json>`으로 LVIS synonyms·synset까지 뺀 엄격판을 만들 수 있다
+  `pipeline/legacy/build_generic_vocab.py --lvis-ann <json>`으로 LVIS synonyms·synset까지 뺀 엄격판을 만들 수 있다
   (별도 파일로 두고 결과가 같은지 확인할 것).

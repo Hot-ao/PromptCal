@@ -1,3 +1,7 @@
+> **2026-10-02 안내:** 이 문서는 09-28 시점의 Combined(PromptCal) 설계다. 현재 방법과 논문 구성은
+> [`PROMPTCAL_METHOD_LOWBIT_2026-09-29.md`](PROMPTCAL_METHOD_LOWBIT_2026-09-29.md)(방법)와
+> [`PAPER_OUTLINE_2026-10-01.md`](PAPER_OUTLINE_2026-10-01.md)(논문 개요)가 대체한다. Combined는 기준선으로만 남는다.
+
 # PromptCal 논문 설계 — 방법·근거·결과·한계 (2026-09-28)
 
 **대상 독자**: `논문.txt`(논문 아웃라인)를 쓰고 있는 공저자. 아웃라인의 각 절이 **지금 코드에서

@@ -1,0 +1,6 @@
+K-m-W4A8-s0	--model yolov8m-world.pt --w-bits 4 --a-bits 8 --conditions brecq+P,brecq+PM --seed 0 --post-build runs/155_mcheck/calib_check.py
+K-m-W4A5-s0	--model yolov8m-world.pt --w-bits 4 --a-bits 5 --conditions brecq+P,brecq+PM --seed 0 --post-build runs/155_mcheck/calib_check.py
+K-s-W4A8-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 8 --conditions brecq+P,brecq+PM --seed 0 --post-build runs/155_mcheck/calib_check.py
+K-s-W4A5-s0	--model yolov8s-world.pt --w-bits 4 --a-bits 5 --conditions brecq+P,brecq+PM --seed 0 --post-build runs/155_mcheck/calib_check.py
+K-v2-W8A8-s0	--model yolov8s-worldv2.pt --w-bits 8 --a-bits 8 --conditions brecq,brecq+M --seed 0 --post-build runs/155_mcheck/calib_check.py
+K-s-W8A8-s0	--model yolov8s-world.pt --w-bits 8 --a-bits 8 --conditions brecq,brecq+M --seed 0 --post-build runs/155_mcheck/calib_check.py

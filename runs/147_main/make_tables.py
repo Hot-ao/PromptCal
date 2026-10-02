@@ -16,6 +16,11 @@ for f in glob.glob('147_main/R-*-s[0-9].log'):
     if 'adaround' in p:
         data.setdefault((setting, 'adaround(MSE)'), {})[s] = p['adaround']
 
+# W4A5 QDrop seed 2~5(runs/151_gen/Q-*)
+for f in glob.glob('151_gen/Q-W4A5-s[0-9].log'):
+    s_ = int(os.path.basename(f)[:-4].split('-s')[1])
+    for c_, m_ in parse(f).items():
+        data.setdefault(('W4A5', c_), {}).setdefault(s_, m_)
 # W8A8 짝비교 baseline 재실행(runs/151_gen, --adaround-act-observer mse)
 for f in glob.glob('151_gen/B-W8A8-s[0-9].log'):
     s_ = int(os.path.basename(f)[:-4].split('-s')[1]); p_ = parse(f)
