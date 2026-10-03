@@ -283,7 +283,7 @@
 
 **정리 (10-02):** 확정 프로토콜 인자는 `pipeline/scripts/protocol.sh`에 있다. 기각된 vocab-metric 스크립트는 `pipeline/legacy/`로 옮겼다.
 
-**10-03: 표 1 확정 (runs/158).** 확정 프로토콜로 s 주 결과를 6 seed로 다시 냈다. W4에서는 결론이 그대로였다(W4A8 PM +1.15, W4A6 GPM +1.66, W4A5 GPM +2.53점, seed 0 제외). W8A8의 M 효과는 +0.20점으로 이전보다 작아졌다. W4A5 seed 0에서는 BRECQ와 QDrop이 함께 무너졌다. 같은 날 표 2(W4A5 ablation: G +1.37, P +1.04, M −0.75점, M은 G·P 위에서만 이득)와 표 3(무작위 보호 +0.21 vs 진단 기반 +1.05점, QDrop 위 plug-in W4A5 +5.4점)도 6 seed로 확정했다. 같은 날 방법을 GPM 하나로 고정하고(비트별 선택 안 함), W8A8 GPM과 QDrop + GPM을 추가했다(runs/159). W8A8 GPM은 flip −24%로 M 단독보다 확실히 나았고, QDrop + GPM은 BRECQ + GPM과 같아졌다. 결과의 기준 문서는 `docs/PROMPTCAL_RESULTS_2026-10-03.md`다.
+**10-03: 표 1 확정 (runs/158).** 확정 프로토콜로 s 주 결과를 6 seed로 다시 냈다. W4에서는 결론이 그대로였다(W4A8 PM +1.15, W4A6 GPM +1.66, W4A5 GPM +2.53점, seed 0 제외). W8A8의 M 효과는 +0.20점으로 이전보다 작아졌다. W4A5 seed 0에서는 BRECQ와 QDrop이 함께 무너졌다. 같은 날 표 2(W4A5 ablation: G +1.37, P +1.04, M −0.75점, M은 G·P 위에서만 이득)와 표 3(무작위 보호 +0.21 vs 진단 기반 +1.05점, QDrop 위 plug-in W4A5 +5.4점)도 6 seed로 확정했다. 같은 날 방법을 GPM 하나로 고정하고(비트별 선택 안 함), W8A8 GPM과 QDrop + GPM을 추가했다(runs/159). W8A8 GPM은 flip −24%로 M 단독보다 확실히 나았고, QDrop + GPM은 BRECQ + GPM과 같아졌다. 일반화 6 seed(표 4)에서는 W4에서 세 모델 모두 개선됐지만(v2 +5.6~5.8, m +1.1~2.2점), W8A8은 s에서만 개선됐다. v2 W8A8에서는 M이 판정을 해치고, m W8A8에서는 BRECQ 자체가 naive보다 판정이 나빴다. 결과의 기준 문서는 `docs/PROMPTCAL_RESULTS_2026-10-03.md`다.
 
 ---
 

@@ -84,10 +84,19 @@
 - W4A5 seed 0에서는 BRECQ와 P 단독이 무너지고, G나 M이 들어간 조합은 모두 정상이다.
 - 이전 프로토콜의 6 seed 결과(W8A8 +0.32, W4A8 +1.36, W4A6 +1.59, W4A5 +2.70)는 `docs/PROMPTCAL_LOWBIT_RESULTS_2026-09-30.md`에 남아 있다. W8A8을 빼면 확정 프로토콜과 같은 크기다.
 
-**일반화 (확정 프로토콜, 2 seed, runs/154): LVIS AP, BRECQ 대비 차이(점)**
+**일반화 (확정 프로토콜, 6 seed, 표 4): LVIS AP의 BRECQ 대비 짝 Δ(점), 괄호는 LVIS_flip 변화(%p)**
 
-| 모델 | W4A8 | W4A5 | 최종 구성 |
-|---|---|---|---|
+| 모델 | W8A8 | W4A8 | W4A5 | 실제 구성 |
+|---|---|---|---|---|
+| YOLOv8s-World | +0.31 (−0.93) | +0.81 (−5.3) | +2.53 (−8.4) † | GPM |
+| YOLOv8s-WorldV2 | +0.39 (**+2.05, 악화**) | **+5.82 (−26.8)** | **+5.64 (−19.4)** | GPM (PM 변형은 AP +6.41 / +7.09) |
+| YOLOv8m-World | −0.02 (−1.15, 비유의) | +1.11 (−6.6) | +2.23 (−10.5) | GP (M 꺼짐) |
+
+- **W4에서는 세 모델 모두 개선된다**(Holm 후 유의).
+- **W8A8은 s에서만 개선된다.** v2는 M이 판정을 해치고(GP로 확인 중, runs/162), m은 차이가 없다.
+- † seed 0(기준선 붕괴) 제외.
+
+---|---|---|---|
 | YOLOv8s-World | 6 seed 표 1 참고: PM +1.15 | 6 seed 표 1 참고: GPM +2.53 (seed 0 제외) | PM / GPM |
 | YOLOv8s-WorldV2 | PM +6.54 / +6.39 | PM +7.32 / +7.86, GPM +5.66 / +6.13 | PM (flip은 GPM이 더 낮음) |
 | YOLOv8m-World | G +0.77 / +1.50 | **G +3.17 / +2.26** | GP (= G. M은 검사에서 꺼짐) |
@@ -490,7 +499,7 @@ conv의 입력 채널 c마다 양수 s_c를 두면 FP 함수는 변하지 않는
 | s W4A8 (P vs PM) | 2.17% | 2.29% | 켬 | PM이 약간 낫다 ✅ |
 | s W8A8 (BRECQ vs M) | 0.20% | 0.21% | 켬 | M이 낫다 ✅ |
 | v2 W4A8 (GP vs GPM, `+A`, runs/161) | 2.15% | 1.90% | 켬 | GPM이 BRECQ 대비 크게 좋다 ✅ |
-| v2 W8A8 (BRECQ vs M) | 0.37% | 0.37% | 켬 | AP +0.5~0.7, **LVIS_flip +3~4%p** ✗ (한계) |
+| v2 W8A8 (BRECQ vs M) | 0.37% | 0.37% | 켬 | AP +0.5~0.7, **LVIS_flip +3~4%p** ✗ (한계). 6 seed GPM도 flip +2.05%p(표 4) |
 
 - 문턱을 1.1~2배 사이 어디에 두어도 결정이 같다. m은 2.1~7배이고 나머지는 1.06배 이하라 간격이 크다.
 - **임베딩·logit 오차는 기준이 될 수 없다.** M은 m에서도 이 오차들을 줄인다(0.34 → 0.24). 평균 오차는 줄이면서 판정을 뒤집는 손상이라, 판정을 직접 보는 기준이 필요하다.
@@ -618,7 +627,7 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 - **텍스트 게이트 교환은 open-vocab 검출기의 텍스트 게이팅 구조를 이용한 양자화 전용 재배치다.** FP 등가이고 비트 비용이 0이며, 저비트(A6·A5)에서 BRECQ 대비 6/6 개선한다. 보호와 결합(GPM)하면 PM보다 작은 모델로 held-out 판정을 6/6 더 잘 지킨다.
 - 학습 없는 PTQ로 W4A5까지 동작한다. 기존 PTQ(QDrop, AdaRound, PromptCal)는 같은 조건에서 크게 무너진다.
 - (6 seed, W4A8·W4A5) attention과 contrastive matmul까지 8bit로 양자화해도 GPM의 이득과 G의 패턴이 유지된다. 즉 FP로 둔 연산이 결론을 만든 것이 아니다.
-- (확정 프로토콜, 2 seed) **세 YOLO-World 모델(s, v2, m) 모두 BRECQ보다 좋아진다.** 손상 위치 진단(P)과 게이트 교환(G)은 크기·버전에 걸쳐 일반화된다. 특히 m에서는 G 하나로 W4A5 +2.3~3.2점이다.
+- (확정 프로토콜, 6 seed) **W4에서 세 YOLO-World 모델(s, v2, m) 모두 BRECQ보다 크게 좋아진다**(v2 +5.6~5.8점, m +1.1~2.2점, flip −6.6 ~ −26.8%p). 손상 위치 진단(P)과 게이트 교환(G)은 크기·버전에 걸쳐 일반화된다.
 - 이전(M)이 해로운 모델(m)은 calibration 밖 COCO flip 검사로 미리 걸러진다. 평균 임베딩 오차가 아니라 판정 기준이어야 걸러진다.
 
 **주장하면 안 되는 것**
@@ -631,6 +640,7 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 - "실제 엣지 기기에서의 가속": 아직 시뮬레이션뿐이다.
 - "이전(M)은 항상 도움이 된다": m에서는 해롭다. 검사로 끄는 규칙이 방법의 일부다.
 - "M 검사가 모든 해를 잡는다": v2 W8A8의 LVIS 전용 악화는 잡지 못한다.
+- "W8A8에서도 모델에 상관없이 개선된다": 6 seed에서 v2는 판정이 나빠지고(flip +2.05%p), m은 차이가 없다. W8A8 개선은 s에서만 확인됐다.
 
 ---
 
@@ -650,7 +660,7 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 **남은 것**
 1. ~~표 2·3~~ (runs/158, 10-03): §1과 결과 문서 §2·§3.
 2. ~~모델 크기 계산~~ (10-03): attention Linear weight를 포함하도록 고쳤다(§6).
-3. **v2·m 3 seed 확장:** 최종 구성(v2 PM/GPM, m GP)만.
+3. ~~v2·m 일반화 6 seed~~ (10-03, 표 4): W4는 세 모델 모두 개선, W8A8은 s에서만 개선. **v2 W8A8에서 M 없이(GP) 확인 중(runs/162).** m W8A8에서 BRECQ가 naive보다 판정이 나쁜 현상은 분석 대상.
 4. **YOLOE-v8s:** 구조가 다른 OVOD로의 일반화. G를 적용할 수 없으므로 P(+M 검사)만 본다. 코드 지원이 먼저 필요하다.
 5. **YOLO-World-L / QATMA 조건(첫·마지막 FP):** L40S 필요.
 6. **SmoothQuant/AWQ 정식 구현, Reg-PTQ와 비교.**
