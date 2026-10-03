@@ -2,9 +2,10 @@
 import glob, os, math, statistics as st, sys
 exec(open('147_main/aggregate.py').read().split("data = {}")[0])
 D = {}
-for f in glob.glob('158_final/T*-s[0-9].log') + glob.glob('154_protocol/s-W4A*-all-s[0-9].log'):
+import re
+for f in glob.glob('158_final/T*-s[0-9].log') + glob.glob('154_protocol/s-W4A*-all-s[0-9].log') + glob.glob('159_gpm_all/W*-s[0-9].log'):
     b = os.path.basename(f)[:-4]; s = int(b.split('-s')[-1])
-    st_ = 'W' + b.split('-W')[1].split('-')[0][:3] if '154_' in f else 'W' + b.split('-W')[1][:3]
+    st_ = re.search(r'W\dA\d', b).group(0)
     for c, m in parse(f).items(): D.setdefault((st_, c), {}).setdefault(s, m)
 K = [('coco','COCO',1),('lvis','LVIS',100),('apr','APr',100),('lvis_flip','LVIS_flip',1),('lvis_lost','lost',1)]
 ORDER = ['naive','brecq','qdrop','adaround','combined','brecq+M','brecq+PM','brecq+GPM','brecq+G','brecq+P','brecq+GP','brecq+GM','brecq+R','brecq+H','qdrop+M','qdrop+PM']

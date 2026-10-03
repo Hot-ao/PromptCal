@@ -46,8 +46,11 @@ d = D[('W4A5','brecq')]; print("_W4A5 seed 0 COCO AP: " + ", ".join(f"{n} {D[('W
 print("\n**표 3a — 보호 대상 선택 기준 (W4A8, 같은 예산 1.5%, M 없음, 6 seed)**\n")
 sel = [('brecq','BRECQ'),('brecq+R','+R (무작위)'),('brecq+H','+H (HAWQ식 출력 MSE)'),('brecq+P','+P (누수 없는 판정 진단)')]
 comps3 = [('W4A8', c, 'brecq', ()) for c, _ in sel[1:]] + [('W4A8','brecq+P','brecq+R',()), ('W4A8','brecq+P','brecq+H',())]
-for st_, b in (('W8A8','qdrop'),('W4A8','qdrop'),('W4A6','qdrop'),('W4A5','qdrop')):
-    comps3.append((st_, 'qdrop+M' if st_ == 'W8A8' else 'qdrop+PM', 'qdrop', (0,) if st_ == 'W4A5' else ()))
+for st_ in ('W8A8','W4A8','W4A6','W4A5'):
+    ex = (0,) if st_ == 'W4A5' else ()
+    comps3.append((st_, 'qdrop+GPM', 'qdrop', ex))
+    comps3.append((st_, 'qdrop+M' if st_ == 'W8A8' else 'qdrop+PM', 'qdrop', ex))
+    comps3.append((st_, 'qdrop+GPM', 'brecq+GPM', ()))
 H3, M3 = holm(comps3)
 print(hdr(" | Δ LVIS AP vs BRECQ (p_Holm) | Δ LVIS_flip vs BRECQ (p_Holm) |")); print("|" + "---|" * (len(K) + 3))
 for c, n in sel:
@@ -58,10 +61,14 @@ for a, b in (('brecq+P','brecq+R'), ('brecq+P','brecq+H')):
 print("\n**표 3b — QDrop 위의 plug-in (6 seed)**\n")
 print("| 설정 | 방법 | COCO AP | LVIS AP | LVIS_flip (%) | Δ LVIS AP vs QDrop (p_Holm) | Δ LVIS_flip vs QDrop (p_Holm) |\n|---|---|---|---|---|---|---|")
 for st_ in ('W8A8','W4A8','W4A6','W4A5'):
-    ours = 'qdrop+M' if st_ == 'W8A8' else 'qdrop+PM'; ex = (0,) if st_ == 'W4A5' else ()
-    for c in ('qdrop', ours):
+    ex = (0,) if st_ == 'W4A5' else ()
+    for c in ('qdrop', 'qdrop+GPM', 'qdrop+M' if st_ == 'W8A8' else 'qdrop+PM'):
         d = D[(st_, c)]; ss = sorted(d)[:6]
         mm = lambda k, sc: st.mean([d[s][k]*sc for s in ss])
         tail = " |  |  |" if c == 'qdrop' else " | " + " | ".join(dcell(st_, c, 'qdrop', H3, ex)) + (" (seed0 제외)" if ex else "") + " |"
-        print(f"| {st_} | {'QDrop' if c == 'qdrop' else '**QDrop + ' + c.split('+')[1] + '**'} | {mm('coco',1):.2f} | {mm('lvis',100):.2f} | {mm('lvis_flip',1):.2f}" + tail)
+        nm = 'QDrop' if c == 'qdrop' else ('**QDrop + GPM**' if c == 'qdrop+GPM' else 'QDrop + ' + c.split('+')[1] + ' (변형)')
+        print(f"| {st_} | {nm} | {mm('coco',1):.2f} | {mm('lvis',100):.2f} | {mm('lvis_flip',1):.2f}" + tail)
+print("\n**QDrop + GPM vs BRECQ + GPM (같은 seed 짝 Δ)**\n\n| 설정 | Δ LVIS AP (p_Holm) | Δ LVIS_flip (p_Holm) |\n|---|---|---|")
+for st_ in ('W8A8','W4A8','W4A6','W4A5'):
+    print(f"| {st_} | " + " | ".join(dcell(st_, 'qdrop+GPM', 'brecq+GPM', H3)) + " |")
 print(f"\n_Holm family(표 3): {M3}개._")

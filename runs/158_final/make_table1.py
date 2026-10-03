@@ -4,12 +4,12 @@
 import math, statistics as st
 from scipy import stats
 exec(open('158_final/agg.py').read().split("K = [")[0])
-ROWS = {'W8A8': ['naive','brecq','qdrop','adaround','brecq+M'],
-        'W4A8': ['naive','brecq','qdrop','adaround','combined','brecq+PM','brecq+GPM'],
-        'W4A6': ['naive','brecq','qdrop','brecq+PM','brecq+GPM'],
-        'W4A5': ['naive','brecq','qdrop','brecq+PM','brecq+GPM']}
+ROWS = {'W8A8': ['naive','brecq','qdrop','adaround','brecq+M','brecq+GPM'],
+        'W4A8': ['naive','brecq','qdrop','adaround','combined','brecq+GPM','brecq+PM'],
+        'W4A6': ['naive','brecq','qdrop','brecq+GPM','brecq+PM'],
+        'W4A5': ['naive','brecq','qdrop','brecq+GPM','brecq+PM']}
 NAME = {'naive':'naive (RTN)','brecq':'BRECQ','qdrop':'QDrop','adaround':'AdaRound','combined':'PromptCal (Combined)',
-        'brecq+M':'**우리 (M)**','brecq+PM':'**우리 (PM)**','brecq+GPM':'**우리 (GPM)**'}
+        'brecq+M':'M 단독','brecq+PM':'PM (변형, +1.3%)','brecq+GPM':'**우리 (GPM)**'}
 K = [('coco','COCO AP',1),('lvis','LVIS AP',100),('apr','APr',100),('lvis_flip','LVIS_flip (%)',1),('lvis_lost','LVIS_lost',1)]
 def paired(st_, c, k, sc, excl=()):
     a, b = D[(st_, c)], D[(st_, 'brecq')]
