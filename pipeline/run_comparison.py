@@ -470,6 +470,10 @@ def quantized_weight_mib(model_module):
                 total_bits += per_col * (n_hi * m.hi_bits + (m.conv.weight.shape[1] - n_hi) * m.w_bits)
             else:
                 total_bits += m.conv.weight.numel() * m.w_bits
+        elif type(m).__name__ == "QuantLinear":
+            # 10-03: --attn-quant로 8bit 양자화되는 attention Linear(실행 중 입력을 받는 것)도 모델 weight다.
+            # 텍스트 상수(ConstQ: guide projection 결과, contrastive 텍스트)는 어휘마다 달라지는 값이라 제외한다.
+            total_bits += m.lin.weight.numel() * m.bits
     return total_bits / 8 / (1024 * 1024)
 
 

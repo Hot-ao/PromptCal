@@ -573,8 +573,9 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 | M 사전 검사 (`+A`) | PTQ 시점에만 쓰이고 배포 모델에는 없다 | 모델당 1회. 검사 22~24초 + 빌드 1회 추가 | 검증 완료 |
 
 - **PTQ 제작 비용:** 서버에서 1회 수행한다. GPU 메모리 약 15GB(s), 조건 하나에 빌드 17~22분이다(RTX 4000 Ada). 평가까지 넣으면 약 30분이다. 기기는 완성된 모델만 받는다.
-- **추론 모델 크기 (s, conv weight만):** W4 BRECQ 6.14 MiB, PM 6.22 MiB(+1.3%), GPM 6.16 MiB(+0.3%), W8A8 12.08 MiB. FP32는 약 49 MiB다.
-  - 확정 프로토콜에서 8bit로 양자화되는 attention Linear weight는 아직 크기 계산에 들어가 있지 않다. 매우 작지만 계산 코드를 고쳐 다시 내야 한다.
+- **추론 모델 크기 (s, 확정 프로토콜, 10-03 수정):** W4 BRECQ 6.58 MiB, GPM 6.60 MiB(+0.3%), PM 6.66 MiB(+1.2%), W8A8 12.52 MiB. FP32는 약 49 MiB다.
+  - 8bit attention Linear weight(0.46M, conv의 3.6%, +0.44 MiB)를 포함한 값이다. 기준선과 우리 방법에 똑같이 더해진다. 그 이전 로그의 크기는 conv weight만 센 값이다.
+  - m은 BRECQ와 GPM 모두 14.10 MiB, v2는 실행 중 Linear가 없어 conv만의 값과 같다.
 - **FP로 남는 연산:** 확정 프로토콜(`attn_cls`)에서는 원소별 연산(LayerNorm, softmax, sigmoid, add)과 DFL뿐이고, head 마지막 conv 입력은 16bit다. 10-01까지의 결과는 attention의 Linear/matmul과 contrastive matmul도 FP였다. 어휘가 고정되면 텍스트 임베딩은 미리 계산해 두므로 기기에서 CLIP을 돌릴 필요는 없다.
 - **W4 conv의 실제 가속:** 하드웨어 지원이 제한적이다. 모든 W4 방법에 공통인 조건이다. 목표 기기 검증이 필요하다(결과 문서 §12 P7).
 
@@ -647,7 +648,7 @@ source pipeline/scripts/protocol.sh      # PROTOCOL 변수 + CUDA_DEVICE_ORDER=P
 
 **남은 것**
 1. ~~표 2·3~~ (runs/158, 10-03): §1과 결과 문서 §2·§3.
-2. **모델 크기 계산:** attention Linear weight를 포함해 다시 낸다.
+2. ~~모델 크기 계산~~ (10-03): attention Linear weight를 포함하도록 고쳤다(§6).
 3. **v2·m 3 seed 확장:** 최종 구성(v2 PM/GPM, m GP)만.
 4. **YOLOE-v8s:** 구조가 다른 OVOD로의 일반화. G를 적용할 수 없으므로 P(+M 검사)만 본다. 코드 지원이 먼저 필요하다.
 5. **YOLO-World-L / QATMA 조건(첫·마지막 FP):** L40S 필요.

@@ -95,8 +95,10 @@ _W4A5 seed별 COCO AP — BRECQ: 19.30, 30.11, 29.76, 29.93, 29.93, 29.79; QDrop
   - 그래서 6 seed 전체 짝 Δ는 CI가 넓고 Holm 후 유의하지 않다(p 0.24). seed 0을 빼면 PM +2.15 ± 0.31, GPM +2.53 ± 0.23으로 분명하다.
   - **논문 표에는 6 seed 값을 싣고, 붕괴 seed와 seed 0 제외 값을 각주로 밝힌다.**
   - W4A5 seed 0을 뺀 평균: BRECQ COCO 29.90 / LVIS 19.76 / flip 28.04%, GPM 32.81 / 22.29 / 19.60%.
-- **모델 크기 (weight만, MiB):** W8A8 12.08, W4 BRECQ 6.14, PM 6.22 (+1.3%), GPM 6.16 (+0.3%), FP32 약 49.
-  - 확정 프로토콜에서 8bit로 양자화되는 attention Linear weight는 아직 크기 계산에 들어가지 않았다. 매우 작지만 계산 코드를 고쳐 다시 내야 한다.
+- **모델 크기 (weight, MiB, 10-03 수정):** W8A8 12.52, W4 BRECQ 6.58, GPM 6.60 (+0.3%), PM 6.66 (+1.2%), FP32 약 49.
+  - 확정 프로토콜에서 8bit로 양자화되는 attention Linear weight(s 0.46M, conv의 3.6%)를 포함한 값이다. 이 weight는 기준선과 우리 방법에 똑같이 더해지므로 방법 간의 상대 차이는 그대로다.
+  - 10-03 이전 로그와 리더보드의 크기 열은 conv weight만 센 값이다(각각 0.44 MiB 작음). v2는 실행 중 입력을 받는 Linear가 없어 차이가 없고, m은 0.48 MiB가 더해진다(BRECQ·GPM 14.10 MiB).
+  - 텍스트 상수(guide projection 결과, contrastive 텍스트)는 어휘마다 달라지는 값이라 크기에서 뺐다. LVIS 기준 약 1 MB다.
 
 ---
 
