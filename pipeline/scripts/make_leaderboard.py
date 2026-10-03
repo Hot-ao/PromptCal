@@ -2,6 +2,7 @@
 
 runs/*/*.log(run_comparison 출력)를 모두 읽어 promptcal-ptq/LEADERBOARD.html과 leaderboard.csv를 만든다.
 사용:  .venv/bin/python pipeline/scripts/make_leaderboard.py
+      (run_comparison.py가 끝날 때 자동으로 부른다. 끄려면 PTQ_NO_LEADERBOARD=1)
 
 - 각 로그의 `[args] {...}` 줄에서 모델, 비트, 프로토콜, seed를 읽고, 결과 표(COCO AP | ..., Heval_flip | ...)를 읽는다.
 - 같은 (모델, 프로토콜, 설정, 조건, seed)가 여러 로그에 있으면 가장 최근 로그를 쓴다.
@@ -211,7 +212,8 @@ def main():
     groups = build_groups(recs)
     data = dict(generated=time.strftime('%Y-%m-%d %H:%M'), n_logs=n_ok, n_files=n_files,
                 n_groups=len(groups), groups=groups, running=running_jobs())
-    with open(os.path.join(ROOT, 'leaderboard.csv'), 'w', newline='') as fh:
+    csv_tmp = os.path.join(ROOT, f'.leaderboard.csv.{os.getpid()}')
+    with open(csv_tmp, 'w', newline='') as fh:
         w = csv.writer(fh)
         w.writerow(['model', 'protocol', 'setting', 'condition', 'n_seeds', 'seeds', 'size_MiB']
                    + [f'{k}_mean' for k in KEYS] + [f'{k}_sd' for k in KEYS]
@@ -223,10 +225,13 @@ def main():
                            + [r['stats'].get(k, [None])[0] for k in KEYS] + [(r['stats'].get(k) or [None, None])[1] for k in KEYS]
                            + [dl and dl['m'], dl and dl['ci'], df and df['m'], df and df['ci'],
                               ' '.join(map(str, r['collapse'])), ' '.join(r['src'])])
+    os.replace(csv_tmp, os.path.join(ROOT, 'leaderboard.csv'))   # 통째로 바꿔 끼움(쓰다 만 파일이 보이지 않게)
     tpl = open(os.path.join(os.path.dirname(__file__), 'leaderboard_template.html')).read()
     html = tpl.replace('/*__DATA__*/null', json.dumps(data, ensure_ascii=False, default=str))
-    with open(os.path.join(ROOT, 'LEADERBOARD.html'), 'w') as fh:
+    html_tmp = os.path.join(ROOT, f'.LEADERBOARD.html.{os.getpid()}')
+    with open(html_tmp, 'w') as fh:
         fh.write(html)
+    os.replace(html_tmp, os.path.join(ROOT, 'LEADERBOARD.html'))
     print(f"로그 {n_ok}/{n_files}개, 그룹 {len(groups)}개 -> LEADERBOARD.html, leaderboard.csv")
 
 

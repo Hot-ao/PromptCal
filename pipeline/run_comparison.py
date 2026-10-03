@@ -1515,6 +1515,28 @@ def main():
     print(f"\n이론적 모델 크기: {model_mib:.2f} MiB")
     if len(set(round(v, 4) for v in model_mib_by.values())) > 1:
         print("조건별 이론적 크기: " + ", ".join(f"{k} {v:.2f} MiB" for k, v in model_mib_by.items()))
+    update_leaderboard()
+
+
+def update_leaderboard():
+    """10-03: 실험이 끝나면 LEADERBOARD.html을 다시 만든다(pipeline/scripts/make_leaderboard.py).
+    여러 실험이 동시에 끝나도 겹치지 않게 파일 잠금을 쓰고, 실패해도 실험 결과에는 영향이 없다.
+    끄려면 환경변수 PTQ_NO_LEADERBOARD=1."""
+    if os.environ.get("PTQ_NO_LEADERBOARD"):
+        return
+    sys.stdout.flush()                                    # 이 실험의 결과 표가 로그에 다 써진 뒤 읽게 한다
+    try:
+        import fcntl, importlib.util
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        with open(os.path.join(root, "runs", ".leaderboard.lock"), "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            spec = importlib.util.spec_from_file_location(
+                "make_leaderboard", os.path.join(root, "pipeline", "scripts", "make_leaderboard.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.main()
+    except Exception as e:                                # 리더보드 실패는 실험 실패가 아니다
+        print(f"[leaderboard] 갱신 실패(무시): {e}")
 
 
 if __name__ == "__main__":

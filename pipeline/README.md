@@ -94,6 +94,7 @@ pipeline/scripts/worker.sh runs/<이름> 5 24-47 &
 - **진단 훅:** `--post-build <스크립트>`를 주면 빌드 직후, 평가 전에 그 스크립트를 실행하고 끝난다. 스크립트에서 `models`, `fp`, `args`, `device`를 쓸 수 있다. 예: `runs/155_mcheck/calib_check.py`.
 - **메모리:** m 모델은 한 run에 조건 2개까지만 묶는다. 20GB GPU에서 조건 3개는 메모리 한계에 걸린다.
 - **실행 위치:** 반드시 저장소 루트에서 실행한다. `pipeline/` 안에서 실행하면 ultralytics가 CLIP 가중치(338MB)를 `pipeline/weights/`에 다시 내려받는다.
+- **리더보드:** `run_comparison.py`가 끝날 때마다 `LEADERBOARD.html`과 `leaderboard.csv`를 자동으로 다시 만든다(잠금 + 원자적 교체, 실패해도 실험에는 영향 없음). 끄려면 `PTQ_NO_LEADERBOARD=1`. 손으로 만들려면 `.venv/bin/python pipeline/scripts/make_leaderboard.py`.
 - **모델 크기:** 로그의 "이론적 크기"는 양자화된 conv와 attention Linear weight의 합이다(10-03부터. 그 이전 로그는 conv만).
 - **소요 시간 (RTX 4000 Ada):** s 조건 하나 빌드에 약 20분, m은 약 23분이다. COCO와 LVIS 평가는 조건당 약 5분이다.
 
