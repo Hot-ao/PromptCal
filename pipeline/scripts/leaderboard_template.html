@@ -127,6 +127,10 @@ function header(){
   }).join('');
 }
 
+const LS_KEY = 'lb-state-v1';
+function saveState(){ try{ localStorage.setItem(LS_KEY, JSON.stringify({model:state.model, proto:state.proto, setting:state.setting,
+  q:state.q, n:state.n, base:state.base, view:state.view, sort:state.sort})); }catch(e){} }
+function loadState(){ try{ return JSON.parse(localStorage.getItem(LS_KEY) || 'null'); }catch(e){ return null; } }
 function fillFilters(){
   const models = [...new Set(DATA.groups.map(g=>g.model))].sort();
   const protos = [...new Set(DATA.groups.map(g=>g.protocol))].sort((a,b)=> (b.startsWith('확정')-a.startsWith('확정')) || a.localeCompare(b));
@@ -134,8 +138,22 @@ function fillFilters(){
   $('#f-proto').innerHTML = ['전체',...protos].map(m=>`<option>${m}</option>`).join('');
   state.model = models.includes('yolov8s-world') ? 'yolov8s-world' : '전체';
   state.proto = protos.find(p=>p.startsWith('확정')) || '전체';
+  // 자동 새로고침(파일 갱신)이 돼도 보던 화면을 유지: 저장된 선택이 지금 데이터에 있으면 복원한다.
+  const sv = loadState();
+  if(sv){
+    if(sv.model==='전체' || models.includes(sv.model)) state.model = sv.model;
+    if(sv.proto==='전체' || protos.includes(sv.proto)) state.proto = sv.proto;
+    if(typeof sv.q==='string') state.q = sv.q;
+    if([1,2,3,4,5,6].includes(sv.n)) state.n = sv.n;
+    if(['brecq','base'].includes(sv.base)) state.base = sv.base;
+    if(['groups','flat'].includes(sv.view)) state.view = sv.view;
+    if(sv.sort && typeof sv.sort==='object') state.sort = sv.sort;
+  }
   $('#f-model').value = state.model; $('#f-proto').value = state.proto;
-  refreshSettings();
+  $('#f-q').value = state.q; $('#f-n').value = String(state.n);
+  document.querySelectorAll('#f-base button').forEach(x=>x.classList.toggle('on', x.dataset.b===state.base));
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on', x.dataset.v===state.view));
+  refreshSettings(sv && sv.setting);
   $('#f-model').onchange = e=>{state.model=e.target.value; refreshSettings(); render()};
   $('#f-proto').onchange = e=>{state.proto=e.target.value; refreshSettings(); render()};
   $('#f-setting').onchange = e=>{state.setting=e.target.value; render()};
@@ -146,10 +164,11 @@ function fillFilters(){
   document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{state.view=b.dataset.v;
     document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b)); render()});
 }
-function refreshSettings(){
+function refreshSettings(wanted){
   const ord = s => { const m = s.match(/W(\d+)A(\d+)/); return m ? -(+m[1]*100 + +m[2]) : 0; };
   const sets = [...new Set(groupsFiltered(false).map(g=>g.setting))].sort((a,b)=>ord(a)-ord(b));
   $('#f-setting').innerHTML = ['전체',...sets].map(s=>`<option>${s}</option>`).join('');
+  if(wanted && (wanted==='전체' || sets.includes(wanted))) state.setting = wanted;
   if(!sets.includes(state.setting)) state.setting='전체';
   $('#f-setting').value = state.setting;
 }
@@ -205,6 +224,7 @@ function bindSort(root, gid){
   });
 }
 function render(){
+  saveState();
   const v = $('#view'); const gs = groupsFiltered();
   const ord = s => { const m = s.match(/W(\d+)A(\d+)/); return m ? -(+m[1]*100 + +m[2]) : 0; };
   gs.sort((a,b)=> a.model.localeCompare(b.model) || ord(a.setting)-ord(b.setting) || a.protocol.localeCompare(b.protocol));
@@ -222,6 +242,8 @@ function render(){
   v.querySelectorAll('section.group').forEach(sec=>bindSort(sec, sec.dataset.gid));
 }
 header(); fillFilters(); render();
+try{ const y = +sessionStorage.getItem('lb-scroll'); if(y) window.scrollTo(0, y); }catch(e){}
+window.addEventListener('scroll', ()=>{ try{ sessionStorage.setItem('lb-scroll', String(window.scrollY)); }catch(e){} }, {passive:true});
 </script>
 </body>
 </html>
